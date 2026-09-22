@@ -489,6 +489,26 @@ def main(argv=None):
                    choices=['json', 'markdown'])
     p.add_argument('--no-cache', action='store_true')
 
+    p = sub.add_parser('memory')
+    p.add_argument('--no-cache', action='store_true',
+                   help='(accepted for symmetry; memory has no cache)')
+    mem = p.add_subparsers(dest='memory_cmd', required=True)
+    m_add = mem.add_parser('add')
+    m_add.add_argument('--category', required=True,
+                       choices=['repository_fact', 'workflow_preference',
+                                'historical_lesson', 'decision_record'])
+    m_add.add_argument('--content', required=True)
+    m_add.add_argument('--source', default='agent')
+    m_add.add_argument('--fact-key')
+    m_add.add_argument('--fact-value')
+    m_add.add_argument('--tree-hash')
+    m_search = mem.add_parser('search')
+    m_search.add_argument('--task', required=True)
+    m_search.add_argument('--limit', type=int, default=8)
+    mem.add_parser('status')
+    m_ctx = mem.add_parser('context')
+    m_ctx.add_argument('--task', default='')
+
     p = sub.add_parser('check')
     p.add_argument('--stage', required=True, choices=['work', 'ship'])
 
@@ -579,6 +599,44 @@ def main(argv=None):
     ctx = locked(root) if not ns.no_lock else contextlib.nullcontext()
 
     with ctx:
+        if ns.command == 'memory':
+            # Ledger-free: delegate to memory.py (Mem0 isolated behind its
+            # adapter; control.py never imports mem0 itself).
+            script = SKILL / '.hermes' / 'tools' / 'memory.py'
+            argv = [sys.executable, str(script), '--root', str(root),
+                    ns.memory_cmd]
+            stdin_text = None
+            if ns.memory_cmd == 'add':
+                argv += ['--category', ns.category,
+                         '--content', ns.content, '--source', ns.source]
+                if ns.fact_key is not None:
+                    argv += ['--fact-key', ns.fact_key]
+                if ns.fact_value is not None:
+                    argv += ['--fact-value', ns.fact_value]
+                if ns.tree_hash is not None:
+                    argv += ['--tree-hash', ns.tree_hash]
+            elif ns.memory_cmd == 'search':
+                argv += ['--task', ns.task, '--limit', str(ns.limit)]
+            elif ns.memory_cmd == 'context':
+                argv += ['--task', ns.task]
+                # current facts come from ORIENT, injected as data:
+                orient_script = SKILL / '.hermes' / 'tools' / 'project_map.py'
+                orient = subprocess.run(
+                    [sys.executable, str(orient_script), '--quick',
+                     '--no-cache', '--root', str(root)],
+                    capture_output=True, text=True, timeout=120)
+                if orient.returncode != 0:
+                    sys.stderr.write(orient.stderr)
+                    sys.exit(orient.returncode or 1)
+                argv += ['--orient-json', '-']
+                stdin_text = orient.stdout
+            proc = subprocess.run(argv, capture_output=True, text=True,
+                                  timeout=300, input=stdin_text)
+            sys.stdout.write(proc.stdout)
+            sys.stderr.write(proc.stderr)
+            if proc.returncode != 0:
+                sys.exit(proc.returncode or 1)
+            return 0
         if ns.command == 'orient':
             # Ledger-free read-only perception: delegates to project_map.py
             # (facts + provenance). Transport still declared; no state write.

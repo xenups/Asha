@@ -68,6 +68,7 @@ Explicit invariants:
 | `.jspace/control.py` | State/ledger, gate orchestration, ship authorization |
 | `.hermes/tools/scope_resolver.py` | Semantic scope classification S0-S4 |
 | `.hermes/tools/project_map.py` | Live project orientation: facts + provenance synthesis |
+| `.hermes/tools/memory.py` | Institutional memory adapter (Mem0) + context synthesis |
 | `.hermes/tools/check_runner.py` | Isolated subprocess execution and result capture |
 | `.hermes/tools/evidence.py` | Clean-tree validation, tree binding, canonical hashing, evidence verification |
 | `.hermes/tools/code_search.py` | AST/structural perception and impact tracing |
@@ -118,6 +119,56 @@ orientation is never served for uncommitted or untracked changes.
 the filesystem, and git history. It does not understand the project
 semantically in a compiler-grade sense, and it proves nothing about runtime
 behavior.
+
+## Memory
+
+Two different knowledge sources, never mixed:
+
+```text
+ORIENT = current repository ground truth (project_map.py, authoritative)
+Mem0   = historical / institutional memory (.hermes/tools/memory.py,
+         advisory only)
+```
+
+**Precedence (mandatory): current repository facts > stored memory.** A
+retrieved memory may never override a conflicting fact from ORIENT; the
+machine-readable context keeps them in separate namespaces:
+
+```json
+{
+  "current_facts": { "...": "orient result, authoritative" },
+  "memory": {
+    "repository_facts": [], "stale_repository_facts": [],
+    "workflow_preferences": [], "historical_lessons": [],
+    "decision_records": []
+  }
+}
+```
+
+| Category | Tree sensitivity | Semantics |
+| --- | --- | --- |
+| `repository_fact` | tree-sensitive (bound to observed `tree_hash`) | was true at some point; revalidated against ORIENT — conflicts become `status: stale, conflict: true`, **never deleted** |
+| `workflow_preference` | tree-independent | persists across tree changes; not artificially tree-bound |
+| `historical_lesson` | persistent advisory | lessons from previous tasks |
+| `decision_record` | persistent historical | explanatory, not authoritative |
+
+Retrieval is bounded and task-oriented (small advisory block, never the
+whole store). Writes happen only from explicit structured `memory add`
+calls — no automatic conversation capture; secret-like content is refused.
+
+Mem0 is **optional and advisory**: if it is unavailable or broken, `add`,
+`search` and `context` fail closed (`MEMORY UNAVAILABLE`, exit 1) while
+ORIENT / SCOPE / GATE keep working unchanged. Offline profile: chroma
+under `.jspace/cache/mem0` (git-ignored), mem0's mock embedder, `infer=False`
+(zero LLM calls). Memory never guarantees correctness — it only supplies
+historical context.
+
+```bash
+python .jspace/control.py --transport <t> memory add --category historical_lesson --content "..."
+python .jspace/control.py --transport <t> memory search --task "manifest serialization" [--limit 8]
+python .jspace/control.py --transport <t> memory status          # availability + counts
+python .jspace/control.py --transport <t> memory context         # ORIENT vs memory, stale conflicts
+```
 
 ## 4. Scope Model: S0-S4
 
@@ -384,6 +435,10 @@ Standalone tools (no `--transport`; see Appendix A for flags):
 | `python .hermes/tools/scope_resolver.py [--root D] [--base REF] [--json]` | Resolve scope for current changes | prints `scope=… status=… files=N`, exit 0 | git failure → `SCOPE ERROR`, exit 1 |
 | `python .hermes/tools/project_map.py [--quick\|--standard\|--deep] [--format json\|markdown] [--root D]` | Orientation facts + provenance | JSON or markdown, exit 0 | git failure → `ORIENT ERROR`, exit 1 |
 | `python .jspace/control.py --transport <t> orient [--mode M] [--format F]` | Ledger-free orientation wrapper | orientation output, exit 0 | missing `--transport` → `TRANSPORT GATE`, exit 1 |
+| `python .jspace/control.py --transport <t> memory add --category C --content "..." [--fact-key K --fact-value V]` | Structured memory write | record json, exit 0 | secret-like content / unavailable Mem0 → exit 1 |
+| `python .jspace/control.py --transport <t> memory search --task "..." [--limit N]` | Bounded task retrieval | retrieved list, exit 0 | unavailable Mem0 → `MEMORY UNAVAILABLE`, exit 1 |
+| `python .jspace/control.py --transport <t> memory status` | Backend availability + counts | status json, exit 0 | — (reports unavailability as data) |
+| `python .jspace/control.py --transport <t> memory context [--task T]` | ORIENT vs memory synthesis (stale conflicts persisted) | context json, exit 0 | unavailable Mem0 / bad ORIENT json → exit 1 |
 | `python .hermes/tools/code_search.py --outline F` | AST outline (no bodies) | symbol table, exit 0 | missing file → exit 1 |
 | `python .hermes/tools/code_search.py --trace SYM --dir D` | Structural impact map | usage entries, exit 0 | unknown symbol → empty result, exit 0 (structural approximation, see §13) |
 | `python .hermes/tools/code_search.py --verify-env` | ABI pin check (exact versions, never auto-installs) | `ENV CHECK OK`, exit 0 | drift → exit 1 with fix hint |
@@ -403,6 +458,7 @@ hermes-disciplined-harness/
 │   ├── venv/                      # dev venv (git-ignored)
 │   └── tools/
 │       ├── project_map.py       # live project orientation (orient)
+│       ├── memory.py            # Mem0 adapter + context synthesis
 │       ├── scope_resolver.py      # S0-S4 scope classification
 │       ├── check_runner.py        # isolated check execution
 │       ├── evidence.py            # sealing, tree binding, verification
@@ -420,7 +476,7 @@ hermes-disciplined-harness/
 │   ├── pre-ship-quality-gate/SKILL.md
 │   └── asha-update/SKILL.md       # /asha update trigger
 ├── scripts/                       # bootstrap, uninstall, update (sh/ps1/py)
-├── tests/                         # 45 regression tests (see §14)
+├── tests/                         # 56 regression tests (see §14)
 ├── benchmarks/                    # measured benchmark runner + results
 ├── ruff.toml                      # centralized lint exceptions
 ├── mypy.ini                       # mypy_path for cross-module imports
@@ -467,10 +523,11 @@ Measured on the current working tree (Windows 11, CPython 3.11.16,
 
 | Gate | Result |
 | --- | --- |
-| `pytest tests/ -q` | **44 passed, 1 skipped** (skip = environment probe in `tests/test_code_search.py:116`) |
+| `pytest tests/ -q` | **55 passed, 1 skipped** (skip = environment probe in `tests/test_code_search.py:116`) |
 | `ruff check .hermes/tools/ tests/` | **All checks passed!** |
 | `ruff check .` (full tree) | 19 known errors, **all inside the generated A/B playground `benchmarks/live_eval/asha_eval/`** (intentionally messy synthetic fixture; not shipped code) |
-| `mypy .hermes/tools/` | **Success: no issues found in 6 source files** (root `mypy.ini` sets `mypy_path = .hermes/tools`) |
+| `mypy .hermes/tools/` | **Success: no issues found in 7 source files** (root `mypy.ini` sets `mypy_path = .hermes/tools`, `mem0.*` marked `ignore_missing_imports`) |
+| `mypy .jspace/control.py` | Success: no issues found in 1 source file |
 | `code_search.py --self-test` | PASSED |
 | `diff_engine.py --self-test` | PASSED |
 | Ship gate contract | `GATE SHIP: PASS` → exit 0 only after clean-tree scope resolution, checks, sealing and evidence verification (§5) |
