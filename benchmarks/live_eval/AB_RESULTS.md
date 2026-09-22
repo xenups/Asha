@@ -25,7 +25,7 @@ Target: change the retry-exhaustion branch inside `handle_event_b` only. The ide
 
 | Metric | Vanilla | Asha |
 |---|---|---|
-| Execution time (ms) | 0.89 | 291.51 |
+| Execution time (ms) | 0.91 | 277.43 |
 | Token footprint (in+out) | 4722 | 225 |
 | Bytes before → after | 21290 → 21351 | — |
 | AST-changed functions | none (syntax error: IndentationError: unexpected indent (<unknown>, line 575)) | handle_event_b |
@@ -40,7 +40,7 @@ Target: `calculate_metrics(rows, window=30)` → `summarize_window(rows, cap, wi
 
 | Metric | Vanilla | Asha |
 |---|---|---|
-| Execution time (ms) | 8.77 | 6088.49 |
+| Execution time (ms) | 8.92 | 5977.42 |
 | Token footprint (in+out) | 4738 | 65 |
 | Files touched | core.py only (broken) | core.py + service.py + test_suite.py (trace-guided) |
 | `trace_impact` entries | n/a | 15 (files: service.py, test_suite.py) |
@@ -55,7 +55,7 @@ Target: inject an inverted empty-guard (`if not window_data:` → `if True: wind
 
 | Metric | Vanilla | Asha |
 |---|---|---|
-| Execution time (ms) | 9.57 | 1275.32 |
+| Execution time (ms) | 9.95 | 1181.32 |
 | Token footprint (in+out) | 2371 | 131 |
 | Task marked done prematurely | **YES** (no gate exists) | **no — ship gate blocked it** |
 | Gate exit code | n/a (no gate) | **1** |
@@ -69,7 +69,7 @@ Target: inject an inverted empty-guard (`if not window_data:` → `if True: wind
 {
   "trial_a": {
     "vanilla": {
-      "elapsed_ms": 0.89,
+      "elapsed_ms": 0.91,
       "token_footprint": 4722,
       "bytes_before": 21290,
       "bytes_after": 21351,
@@ -79,7 +79,7 @@ Target: inject an inverted empty-guard (`if not window_data:` → `if True: wind
       "pytest_ok": false
     },
     "asha": {
-      "elapsed_ms": 291.51,
+      "elapsed_ms": 277.43,
       "token_footprint": 225,
       "patch_exit": 0,
       "ast_changed_functions": [
@@ -97,7 +97,7 @@ Target: inject an inverted empty-guard (`if not window_data:` → `if True: wind
   },
   "trial_b": {
     "vanilla": {
-      "elapsed_ms": 8.77,
+      "elapsed_ms": 8.92,
       "token_footprint": 4738,
       "mypy_exit": 1,
       "mypy_errors": 5,
@@ -105,7 +105,7 @@ Target: inject an inverted empty-guard (`if not window_data:` → `if True: wind
       "broken_references_missed": 5
     },
     "asha": {
-      "elapsed_ms": 6088.49,
+      "elapsed_ms": 5977.42,
       "token_footprint": 65,
       "trace_entries": 15,
       "trace_files": [
@@ -130,14 +130,14 @@ Target: inject an inverted empty-guard (`if not window_data:` → `if True: wind
   },
   "trial_c": {
     "vanilla": {
-      "elapsed_ms": 9.57,
+      "elapsed_ms": 9.95,
       "token_footprint": 2371,
       "marked_done_without_verification": true,
       "gate_exit": null,
       "pytest_ok": false
     },
     "asha": {
-      "elapsed_ms": 1275.32,
+      "elapsed_ms": 1181.32,
       "token_footprint": 131,
       "gate_exit": 1,
       "gate_output": "CONTROL ERROR: root must actually read SKILL.md",

@@ -259,6 +259,31 @@ latencies are dominated by cold venv interpreter startup (the stdlib tools
 themselves run in low single-digit ms); `samples_ms` arrays are in
 `benchmarks/results.json` if you need the distribution.
 
+### The Wall-Clock Trade-Off (measured, honest)
+
+Asha-Harness does not come free. The live A/B benchmark
+(`benchmarks/live_eval/AB.py`, cold-run reproducible) measures the price:
+
+| Trial | Vanilla | Asha | Overhead |
+|---|---|---|---|
+| A — ambiguous patch | 0.91 ms | 277.43 ms | ~300× |
+| B — signature + blast radius | 8.92 ms | 5,977.42 ms | **~670×** |
+| C — regressive feature | 9.95 ms | 1,181.32 ms | ~120× |
+
+The overhead is deliberate and structural: every Asha step spawns a cold venv
+process (interpreter startup dominates), parses the tree-sitter AST, and runs
+multi-stage static verification (`trace_impact` → atomic SEARCH/REPLACE →
+mypy → gate). A single Trial B pass costs ~6 s — but that 6 s is what finds
+the hidden 5th–15th use sites, refuses to ship a broken signature, and keeps
+the deployment green.
+
+**The trade is milliseconds for certainty:** the ~670× wall-time overhead
+eliminates broken production deployments (Trial A/Vanilla corrupts the whole
+file; Trial B/Vanilla ships 5 broken references; Trial C/Vanilla marks a
+failing task done) and collapses a multi-thousand-token read footprint to
+65–225 tokens (95–98% reduction). Raw execution speed buys nothing when the
+output must be cut over to production.
+
 ---
 
 ## 5. Universal Target-Agnostic Operating Policy
