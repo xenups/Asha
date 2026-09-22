@@ -28,6 +28,7 @@ import argparse
 import concurrent.futures
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -41,7 +42,11 @@ TOOLS = REPO / '.hermes' / 'tools'
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
-LIVE = REPO / 'benchmarks' / 'results' / 'live'
+RESULTS = REPO / 'benchmarks' / 'results'
+# Cohorts never pool (STEP 17): live-v1 = codex/gpt-5.6-terra (inconclusive),
+# live-v2 = its own result root, freeze, payloads and aggregates.
+EXPERIMENT = os.environ.get('ASHA_BENCH_EXPERIMENT', 'live-v1')
+LIVE = RESULTS / ('live' if EXPERIMENT == 'live-v1' else EXPERIMENT)
 PAYLOADS = LIVE / '_payloads'
 STORE = LIVE / '_store'
 MAPPING = LIVE / '_mapping.json'
@@ -53,7 +58,16 @@ REPLICATES = 3
 # task-001 is excluded from LIVE execution: base_commit is the empty tree
 # (re-implementing the whole repository from nothing is not a bounded task).
 LIVE_EXCLUDED = {'task-001'}
-MODEL = 'gpt-5.6-terra'
+# STEP 3: ONE runner and ONE model for all conditions of a cohort.
+RUNNER = os.environ.get('ASHA_BENCH_RUNNER', 'codex')
+# STEP 3/4: ONE runner, ONE model per cohort. live-v2 = opencode runner
+# with the operator-selected deepseek flash 4 model (user directive);
+# ASHA_BENCH_MODEL overrides for future cohorts only.
+MODEL = os.environ.get(
+    'ASHA_BENCH_MODEL',
+    'opencode/deepseek-v4-flash' if RUNNER == 'opencode'
+    else 'gpt-5.6-terra')
+COMPLETION_EVENT = {'codex': 'turn.completed', 'opencode': 'text'}
 RUN_TIMEOUT_S = 900
 CONCURRENCY = 4
 
@@ -231,6 +245,81 @@ def normalize_events(raw_events: list[dict], workspace: Path,
             'tool_result_summary': redact(str(item.get('aggregated_output')
                                               or item.get('text') or ''))[:400],
             'exit_code': item.get('exit_code'),
+            'files_touched': files,
+        })
+    return events
+
+
+def _rel_path(path: str, workspace: Path) -> str:
+    clean = str(path).replace('\\', '/').strip()
+    prefix = str(workspace).replace('\\', '/').rstrip('/')
+    if clean.startswith(prefix + '/'):
+        return clean[len(prefix) + 1:]
+    return clean
+
+
+def normalize_opencode(raw_events: list[dict], workspace: Path,
+                       inventory: list[str]) -> list[dict]:
+    """opencode `run --format json` -> the same flat event shape as the
+    codex normalizer. t_rel_ms remains harness arrival latency (STEP 12:
+    provider lines carry no authoritative cross-event clock contract we
+    are willing to rely on); event counts stay primary."""
+    events: list[dict] = []
+    t0: float | None = None
+    for index, raw in enumerate(raw_events):
+        arrived = raw.get('_t_arrival')
+        if t0 is None and arrived is not None:
+            t0 = arrived
+        part = raw.get('part') or {}
+        kind = raw.get('type')
+        files: list[str] = []
+        action: str | None = None
+        tool_name: str | None = None
+        arguments: str | None = None
+        summary = ''
+        exit_code: int | None = None
+        if kind == 'tool_use':
+            tool_name = str(part.get('tool'))
+            state = part.get('state') or {}
+            inp = state.get('input') or {}
+            arguments = redact(str(inp.get('command') or tool_name))
+            summary = redact(str(state.get('output') or ''))[:400]
+            exit_code = (state.get('metadata') or {}).get('exit')
+            if tool_name == 'bash':
+                command = str(inp.get('command') or '')
+                files = paths_in_command(command, inventory, workspace)
+                action = ('nav' if NAV_RE.match(command)
+                          else ('read' if files else 'command'))
+            elif tool_name in ('write', 'edit', 'patch'):
+                target = _rel_path(
+                    str(inp.get('filePath') or inp.get('path') or ''),
+                    workspace)
+                if target:
+                    files = [target]
+                action = 'write'
+            else:  # read/grep/glob/... : substantive only if it names
+                target = _rel_path(               # a repository file
+                    str(inp.get('filePath') or inp.get('path') or ''),
+                    workspace)
+                if target and target in inventory:
+                    files = [target]
+                    action = 'read'
+        elif kind == 'step_finish':
+            summary = (f"cost={part.get('cost')} "
+                       f"tokens={part.get('tokens')}")
+        elif kind == 'text':
+            summary = redact(str(part.get('text') or ''))[:400]
+        events.append({
+            'event_index': index,
+            'timestamp': arrived,
+            't_rel_ms': (int((arrived - t0) * 1000)
+                         if t0 is not None and arrived else None),
+            'event_type': kind,
+            'action': action,
+            'tool_name': tool_name,
+            'tool_arguments': arguments,
+            'tool_result_summary': summary,
+            'exit_code': exit_code,
             'files_touched': files,
         })
     return events
@@ -426,11 +515,26 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         print('LIVE ERROR: working tree dirty; freeze refused',
               file=sys.stderr)
         return 1
-    codex_version = subprocess.run(['codex', '--version'],
-                                   capture_output=True, text=True,
-                                   timeout=60).stdout.strip()
+    runner_version = subprocess.run(
+        [RUNNER, '--version'], capture_output=True, text=True,
+        timeout=60).stdout.strip()
+    previous: dict[str, Any] | None = None
+    if EXPERIMENT != 'live-v1':
+        for old in sorted(RESULTS.glob('live/*.json')):
+            if old.name.startswith('_'):
+                continue
+            try:
+                blob = read_json(old)
+            except Exception:  # noqa: S112 -- skip unrelated json files
+                continue
+            if blob.get('status') == 'inconclusive':
+                previous = {'path': str(old.relative_to(REPO)),
+                            'status': blob.get('status'),
+                            'sha256': sha256_file(old)}
+                break
     freeze: dict[str, Any] = {
-        'schema': 1,
+        'schema': 2,
+        'experiment_version': EXPERIMENT,
         'asha_commit': head,
         'asha_tree_hash': tree,
         'task_set_version': sha256_file(TASKS_FILE),
@@ -438,15 +542,22 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         'excluded': {k: 'empty-tree base: repository re-implementation '
                         'is not a bounded task'
                      for k in sorted(LIVE_EXCLUDED)},
+        'conditions': list(CONDITIONS),
+        'tasks': len(live),
+        'planned_trajectories': len(live) * len(CONDITIONS) * REPLICATES,
         'model': MODEL,
         'model_version': MODEL,
-        'runner': codex_version,
-        'provider': 'openai',
-        'system_prompt': 'codex exec built-in (identical across conditions; '
-                         '--ignore-user-config not used)',
+        'runner': RUNNER,
+        'runner_version': runner_version,
+        'provider': ('opencode-zen' if RUNNER == 'opencode'
+                     else 'openai'),
+        'system_prompt': (
+            'opencode run built-in (identical across conditions)'
+            if RUNNER == 'opencode' else
+            'codex exec built-in (identical across conditions; '
+            '--ignore-user-config not used)'),
         'timeout_s': RUN_TIMEOUT_S,
         'replicates': REPLICATES,
-        'conditions': list(CONDITIONS),
         'aliases': ALIASES,
         'frozen_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
     }
@@ -478,6 +589,8 @@ def cmd_prepare(args: argparse.Namespace) -> int:
             encoding='utf-8')
     freeze['payload_hashes'] = {
         p.name: sha256_file(p) for p in sorted(PAYLOADS.glob('*.json'))}
+    if previous is not None:
+        freeze['previous_cohort'] = previous
     FREEZE.write_text(json.dumps(freeze, indent=2, sort_keys=True),
                       encoding='utf-8')
     print(json.dumps({'frozen': freeze['asha_commit'][:12],
@@ -579,20 +692,29 @@ def run_one(task: dict, condition: str, replicate: int,
     prompt = build_prompt(task, condition)
     (run_dir / 'prompt.txt').write_text(prompt, encoding='utf-8')
 
-    cmd = ['codex', 'exec', '--json', '--color', 'never', '--ephemeral',
-           '-C', str(workspace), '-s', 'workspace-write', '-m', MODEL,
-           '-o', str(run_dir / 'last_message.txt'), '-']
+    if RUNNER == 'opencode':
+        # non-interactive, structured transcript, same sandboxed workspace
+        cmd = ['opencode', 'run', '-m', MODEL, '--format', 'json', prompt]
+        prompt_as_arg = True
+    else:
+        cmd = ['codex', 'exec', '--json', '--color', 'never', '--ephemeral',
+               '-C', str(workspace), '-s', 'workspace-write', '-m', MODEL,
+               '-o', str(run_dir / 'last_message.txt'), '-']
+        prompt_as_arg = False
     started = time.time()
     raw: list[dict] = []
     timed_out = False
-    proc = subprocess.Popen(cmd, cwd=workspace, stdin=subprocess.PIPE,
+    proc = subprocess.Popen(cmd, cwd=workspace,
+                            stdin=(subprocess.DEVNULL if prompt_as_arg
+                                   else subprocess.PIPE),
                             stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True,
                             encoding='utf-8', errors='replace')
     try:
-        assert proc.stdin is not None
-        proc.stdin.write(prompt)
-        proc.stdin.close()
+        if not prompt_as_arg:
+            assert proc.stdin is not None
+            proc.stdin.write(prompt)
+            proc.stdin.close()
         assert proc.stdout is not None
         for line in proc.stdout:
             line = line.strip()
@@ -615,7 +737,21 @@ def run_one(task: dict, condition: str, replicate: int,
     elapsed_ms = int((time.time() - started) * 1000)
 
     inventory = file_inventory(workspace)
-    events = normalize_events(raw, workspace, inventory)
+    if RUNNER == 'opencode':
+        events = normalize_opencode(raw, workspace, inventory)
+        texts = [e['tool_result_summary'] for e in events
+                 if e.get('event_type') == 'text' and
+                 e.get('tool_result_summary')]
+        (run_dir / 'last_message.txt').write_text(
+            texts[-1] if texts else '', encoding='utf-8')
+        cost_usd = sum(c for c in
+                       [(r2.get('part') or {}).get('cost')
+                        for r2 in raw
+                        if r2.get('type') == 'step_finish']
+                       if isinstance(c, (int, float))) or None
+    else:
+        events = normalize_events(raw, workspace, inventory)
+        cost_usd = None
     mapping[anon] = {'task_id': task['id'], 'condition': condition,
                      'replicate': replicate}
     record = {
@@ -634,6 +770,8 @@ def run_one(task: dict, condition: str, replicate: int,
         'wall_clock_ms': elapsed_ms,
         'timed_out': timed_out,
         'exit_code': proc.returncode,
+        'runner': RUNNER,
+        'cost_usd': cost_usd,
         'stderr_tail': redact(stderr_tail),
         'metrics': {},
         'trajectory': {'events': events},
@@ -689,7 +827,41 @@ def is_valid_run(record: dict[str, Any]) -> bool:
         return False
     types = [e.get('event_type')
              for e in record.get('trajectory', {}).get('events', [])]
-    return 'turn.completed' in types
+    completion = COMPLETION_EVENT.get(
+        str(record.get('runner') or 'codex'), 'turn.completed')
+    return completion in types
+
+
+QUOTA_PATTERNS = ('usage limit', 'quota', 'rate limit',
+                  'rate_limit', 'too many requests', '429')
+AUTH_PATTERNS = ('401', 'unauthorized', 'authentication',
+                 'invalid api key', 'login required', 'not logged in')
+ENV_PATTERNS = ('enoent', 'spawn', 'access is denied',
+                'not a git repository', 'unable to read file')
+
+
+def classify_failure(record: dict[str, Any]) -> str:
+    """STEP 11 taxonomy; a runner failure is never agent failure."""
+    if is_valid_run(record):
+        return 'valid'
+    if record.get('timed_out'):
+        return 'timeout'
+    blob = ' '.join([
+        str(record.get('stderr_tail') or ''),
+        ' '.join(str(e.get('tool_result_summary') or '')
+                 for e in record.get('trajectory', {}).get('events', [])),
+    ]).lower()
+    if any(p in blob for p in QUOTA_PATTERNS):
+        return 'quota_failure'
+    if any(p in blob for p in AUTH_PATTERNS):
+        return 'authentication_failure'
+    if any(p in blob for p in ENV_PATTERNS):
+        return 'environment_failure'
+    types = [e.get('event_type')
+             for e in record.get('trajectory', {}).get('events', [])]
+    if record.get('exit_code') == 0 or not types:
+        return 'invalid_protocol'
+    return 'runner_failure'
 
 
 def verify_workspace(workspace: Path, base: str) -> dict[str, Any]:
@@ -725,11 +897,12 @@ def _score_one(run_path: Path, freeze: dict[str, Any],
     if not is_valid_run(record):
         types = [e.get('event_type')
                  for e in record['trajectory']['events']]
+        klass = classify_failure(record)
         record['invalid'] = {
-            'reason': 'runner_error_event (codex usage limit; '
-                      'reproduced verbatim: "You\'ve hit your usage '
-                      'limit. Upgrade to Plus ... Oct 22nd, 2026 ...")'
-            if 'error' in types else 'no_turn_completed',
+            'class': klass,
+            'reason': (f'{klass}: runner-level failure, never agent '
+                       f'failure (event_types={len(types)}, '
+                       f'exit={record.get("exit_code")})'),
             'exit_code': record.get('exit_code'),
             'timed_out': record.get('timed_out'),
         }
@@ -739,7 +912,7 @@ def _score_one(run_path: Path, freeze: dict[str, Any],
             encoding='utf-8')
         return (f"INVALID {record['run_id']} {record['task_id']} "
                 f"{record['condition']} r{record['replicate']}: "
-                f"{record['invalid']['reason'].split(chr(58))[0]}")
+                f"{klass}")
     task = tasks[record['task_id']]
     events = record['trajectory']['events']
     # class labels for the irrelevant_tool_calls derivation
@@ -942,16 +1115,33 @@ def aggregate(runs: list[dict], freeze: dict) -> dict[str, Any]:
                            'not a bounded task) -- proven from '
                            '_freeze.json live_task_ids/excluded',
         'task_set': freeze['task_set_version'],
-        'failure_cause': (
-            'codex usage limit (reproduced verbatim: '
-            '"You\'ve hit your usage limit. Upgrade to Plus ... '
-            'Oct 22nd, 2026"); 68 runs aborted with an error '
-            'event before/while working'),
-        'status': 'frozen task set = 8x3x3 = 72 (9th task excluded '
-                  'by design); runner quota exhausted during the '
-                  'baseline batch so valid trajectories exist ONLY '
-                  'for baseline -> A/B/C comparison unavailable',
     }
+    failure_classes: dict[str, int] = {}
+    for r in failed_runs:
+        cls = (r.get('invalid') or {}).get('class') or 'unclassified'
+        failure_classes[cls] = failure_classes.get(cls, 0) + 1
+    attempted_conds = {r['condition'] for r in runs}
+    valid_conds = {r['condition'] for r in valid_runs}
+    zero_valid = sorted(attempted_conds - valid_conds)
+    recon['failure_classes'] = failure_classes
+    recon['failure_cause'] = (
+        ('runner failure classes: '
+         + ', '.join(f'{k}={v}' for k, v in
+                     sorted(failure_classes.items())))
+        if failure_classes else 'no runner failures')
+    if not valid_runs:
+        recon['status'] = (
+            'inconclusive: 0 valid trajectories '
+            f"({recon['failure_cause']})")
+    elif zero_valid:
+        recon['status'] = (
+            'inconclusive (STEP 19 stop condition): valid only in '
+            f"{sorted(valid_conds)}; zero-valid cells "
+            f"{zero_valid} -- cohort unbalanced, never padded")
+    else:
+        recon['status'] = (
+            'balanced cohort: every condition has valid trajectories; '
+            'runner/model uniform across A/B/C')
     out.update({
         'planned_trajectories': recon['planned_protocol'],
         'frozen_trajectories': recon['planned_frozen'],
@@ -963,17 +1153,23 @@ def aggregate(runs: list[dict], freeze: dict) -> dict[str, Any]:
         'invalid_runs': [
             {'run_id': r['run_id'], 'task_id': r['task_id'],
              'condition': r['condition'], 'replicate': r['replicate'],
+             'failure_class': (r.get('invalid') or {}).get('class'),
              'reason': (r.get('invalid') or {}).get('reason')}
             for r in failed_runs],
         'limitations': [
-            ('valid N is concentrated in baseline only; orient and '
-            'orient_mem0 cells have 0 valid trajectories (runner '
-            'quota) -- their cells are n/a, never zero'),
-            ('9 protocol trajectories never attempted: task-001 '
-            'excluded at freeze for empty-tree base'),
+            (f"runner={freeze.get('runner')} model="
+             f"{freeze.get('model')}: one runner/model per cohort, "
+             'cohorts never pool'),
+            ('0-valid cells are n/a, never zero'
+             + (f" ({', '.join(zero_valid)})" if zero_valid else '')
+             + '; invalid runs are never scored or judged'),
+            (f"{recon['excluded']} protocol trajectories never "
+             'attempted: task-001 excluded at freeze for empty-tree '
+             'base'),
             ('timestamps are harness arrival times, not model-'
-            'internal timings; event counts are primary'),
+             'internal timings; event counts are primary'),
         ],
+        'failure_classes': failure_classes,
     })
     for condition in CONDITIONS:
         attempted_group = [r for r in runs
@@ -1088,6 +1284,23 @@ def aggregate(runs: list[dict], freeze: dict) -> dict[str, Any]:
             'baseline_distractor_exclusion_visible': 'see tool-layer '
                 'benchmarks/results/*.md distractor_excluded (3 / 9); '
                 'behavioral impact measured here, retriever NOT tuned',
+            'runs_with_impact_judgement': sum(
+                1 for run in c_runs
+                if run.get('evaluation', {}).get('memory_impact')),
+            'memory_used': sum(
+                c for run in c_runs
+                for outcome, c in (run.get('evaluation', {})
+                                   .get('memory_impact_counts')
+                                   or {}).items()
+                if outcome in ('retrieved_and_consumed',
+                               'retrieved_and_caused_wrong_direction',
+                               'retrieved_and_caused_wrong_edit')),
+            'memory_harmful_behavior': sum(
+                c for run in c_runs
+                for outcome, c in (run.get('evaluation', {})
+                                   .get('memory_impact_counts')
+                                   or {}).items()
+                if outcome.startswith('retrieved_and_caused')),
         }
     # STEP 18 orient analysis row block
     out['orient_analysis'] = {
@@ -1134,6 +1347,10 @@ def render_report(aggregate_data: dict[str, Any],
     per = aggregate_data['per_condition']
     freeze = read_json(FREEZE)
     recon = aggregate_data['reconciliation']
+    zero_conds = sorted(
+        c for c in CONDITIONS
+        if per.get(c, {}).get('attempted')
+        and not per.get(c, {}).get('trajectories'))
     evaluation_note = (
         'blinded verdicts merged' if judged
         else 'PENDING blinded evaluation')
@@ -1174,6 +1391,9 @@ def render_report(aggregate_data: dict[str, Any],
         f"- attempted: {recon['attempted']}",
         f"- valid: {recon['valid']}",
         f"- failed: {recon['failed']} -- " + recon['failure_cause'],
+        ('- failure classes: '
+         + json.dumps(recon.get('failure_classes') or {},
+                      sort_keys=True)),
         ("- reconciliation_status: " + recon['status']),
         '',
         '## 3. Dataset',
@@ -1337,25 +1557,32 @@ def render_report(aggregate_data: dict[str, Any],
     lines += ['', '## 11. Limitations', '',
               ('- Missing data: ' + str(recon['failed']) + ' / '
                + str(recon['attempted']) + ' attempted trajectories '
-               'invalid (runner quota); ' + str(recon['excluded'])
+               'invalid (classes: '
+               + json.dumps(recon.get('failure_classes') or {},
+                            sort_keys=True) + '); '
+               + str(recon['excluded'])
                + ' protocol trajectories never attempted (task-001 '
                'excluded at freeze).'),
-              ('- Sample size: valid N per cell = '
-               + str(recon['valid']) + ' total, concentrated in '
-               'baseline over 2 tasks; +ORIENT and +ORIENT+MEM0 have '
-               '0 valid trajectories.'),
-              ('- Model dependence: one pinned model '
+              ('- Sample size: valid N total = '
+               + str(recon['valid'])
+               + '; per-cell denominators are in every table above'
+               + ('; zero-valid cells ('
+                  + ', '.join(zero_conds) + ') are n/a, never zero'
+                  if zero_conds else '') + '.'),
+              ('- Runner/model dependence: one runner ('
+               + str(aggregate_data.get('runner')) + '), one pinned '
+               'model '
                f"({aggregate_data['model']}); results are not "
-              'model-general.'),
+              'runner- or model-general.'),
               ('- Repository dependence: single repository (Asha itself); '
               'task-selection bias toward tasks with replayable ground '
               'truth.'),
               ('- Run variance: distributions reported, means alone '
               'prove nothing.'),
               ('- Timestamp semantics: event_time is harness arrival '
-              'time; codex JSONL carries no authoritative timestamps, '
-              'so ms values are labeled latency, event counts are '
-              'primary.'),
+              'time; runner event streams are not treated as an '
+              'authoritative cross-event clock, so ms values are '
+              'labeled latency and event counts are primary.'),
               ('- Blinding: evaluator packages carry no condition '
               'labels or filenames; behavioral traces inside a diff '
               'could still hint at condition (imperfect blinding).'),
@@ -1402,6 +1629,25 @@ def render_report(aggregate_data: dict[str, Any],
                'replay at each workspace, not the agent\'s own '
                'confidence.'),
               '']
+
+    previous = freeze.get('previous_cohort')
+    if previous:
+        old = read_json(REPO / str(previous['path']))
+        lines += ['', '## Previous Inconclusive Cohort (not pooled)',
+                  '',
+                  ('- artifact: `' + str(previous['path'])
+                   + '` (sha256 ' + previous['sha256'][:12] + ')'),
+                  ('- status: ' + str(old.get('status')) + ' -- '
+                   + str(old.get('reason'))),
+                  ('- valid: '
+                   + str(old.get('valid_trajectories'))
+                   + ' baseline-only trajectories; '
+                   + str(old.get('failed_trajectories'))
+                   + ' runner failures; B/C cells 0 valid'),
+                  ('- never pooled with this cohort: different '
+                   'runner/model; no combined percentage exists '
+                   '(STEP 17)'),
+                  '']
     return '\n'.join(lines)
 
 
@@ -1431,10 +1677,84 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_preflight(args: argparse.Namespace) -> int:
+    """STEP 6: staged capacity probe with the FROZEN runner/model in the
+    exact benchmark execution mode, before any of the 72 trajectories."""
+    freeze = read_json(FREEZE)
+    runner = str(freeze.get('runner') or 'codex')
+    model = str(freeze.get('model'))
+    quota_hits = 0
+    results: list[dict] = []
+    for i in range(3):
+        probe = LIVE / '_preflight' / f'probe_{i}'
+        probe.mkdir(parents=True, exist_ok=True)
+        ws = probe / 'repo'
+        ws.mkdir(exist_ok=True)
+        subprocess.run(['git', 'init', '-q', '-b', 'main'], cwd=ws,
+                       check=False)
+        subprocess.run(['git', 'config', 'user.email', 'p@p'], cwd=ws,
+                       check=False)
+        subprocess.run(['git', 'config', 'user.name', 'p'], cwd=ws,
+                       check=False)
+        (ws / 'app.py').write_text('x=1\n', encoding='utf-8')
+        subprocess.run(['git', 'add', '-A'], cwd=ws, check=False)
+        subprocess.run(['git', 'commit', '-qm', 'init'], cwd=ws,
+                       check=False)
+        prompt = ('List the files in this repository with `ls`, then '
+                  'reply done.')
+        if runner == 'opencode':
+            cmd = ['opencode', 'run', '-m', model, '--format', 'json',
+                   prompt]
+        else:
+            cmd = ['codex', 'exec', '--json', '--color', 'never',
+                   '--ephemeral', '-C', str(ws), '-s', 'workspace-write',
+                   '-m', model, '-o', str(probe / 'last.txt'), '-']
+        started = time.time()
+        try:
+            proc = subprocess.run(cmd, cwd=ws, capture_output=True,
+                                  text=True, encoding='utf-8',
+                                  errors='replace', timeout=300)
+            out = proc.stdout
+            rc: int | None = proc.returncode
+            err = proc.stderr[-500:]
+        except subprocess.TimeoutExpired:
+            out, rc, err = '', None, 'timeout 300s'
+        blob = (out + err).lower()
+        hit = any(p in blob for p in QUOTA_PATTERNS + AUTH_PATTERNS)
+        quota_hits += int(hit)
+        cost = sum(c for c in [
+            (json.loads(ln).get('part') or {}).get('cost')
+            for ln in out.splitlines() if ln.startswith('{')
+            and json.loads(ln).get('type') == 'step_finish']
+            if isinstance(c, (int, float)))
+        results.append({'probe': i, 'exit_code': rc,
+                        'duration_ms': int((time.time() - started) * 1000),
+                        'cost_usd': cost, 'quota_or_auth_signal': hit,
+                        'stderr_tail': err[-200:]})
+        print(f'PREFLIGHT {i}: rc={rc} '
+              f'{results[-1]["duration_ms"]}ms cost={cost} '
+              f'quota_signal={hit}')
+    report = {'runner': runner, 'model': model,
+              'probes': results, 'quota_or_auth_signals': quota_hits,
+              'capacity_basis': (
+                  'no provider quota CLI endpoint; 3 staged probes all '
+                  'clean + in-batch stop rule (STEP 11/19)') if
+              quota_hits == 0 else 'quota/auth signal seen: STOP before batch'}
+    (LIVE / '_preflight.json').write_text(
+        json.dumps(report, indent=2, sort_keys=True) + '\n',
+        encoding='utf-8')
+    print(json.dumps({k: report[k] for k in
+                      ('runner', 'model', 'quota_or_auth_signals',
+                       'capacity_basis')}, indent=2))
+    return 0 if quota_hits == 0 else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('prepare', help='validate + freeze + payloads + seed')
+    sub.add_parser('preflight',
+                   help='STEP 6: staged capacity probe before the batch')
     run_parser = sub.add_parser('run', help='execute trajectories A->B->C')
     run_parser.add_argument('--condition', choices=(*CONDITIONS,),
                             default=None)
@@ -1446,8 +1766,9 @@ def main(argv: list[str] | None = None) -> int:
     apply_parser.add_argument('--verdicts', required=True)
     sub.add_parser('report', help='aggregate json + human md')
     args = parser.parse_args(argv)
-    return {'prepare': cmd_prepare, 'run': cmd_run, 'score': cmd_score,
-            'blind': cmd_blind, 'apply-judgements': apply_judgements,
+    return {'prepare': cmd_prepare, 'preflight': cmd_preflight,
+            'run': cmd_run, 'score': cmd_score, 'blind': cmd_blind,
+            'apply-judgements': apply_judgements,
             'report': cmd_report}[args.command](args)
 
 

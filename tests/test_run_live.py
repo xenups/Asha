@@ -219,6 +219,104 @@ def test_normalize_events(tmp_path: Path) -> None:
     assert events[2]["tool_arguments"] == "cat src/a.py"
 
 
+# ---- 10d. runner recovery (live-v2): opencode path + failure taxonomy -----
+
+def test_classify_failure_taxonomy() -> None:
+    def make(exit_code=1, timed_out=False, events=(), stderr=''):
+        return {'exit_code': exit_code, 'timed_out': timed_out,
+                'stderr_tail': stderr,
+                'runner': 'opencode',
+                'trajectory': {'events': [
+                    {'event_type': t} for t in events]}}
+
+    assert run_live.classify_failure(
+        make(exit_code=0, events=('text',))) == 'valid'
+    assert run_live.classify_failure(
+        make(timed_out=True, events=('step_start',))) == 'timeout'
+    assert run_live.classify_failure(
+        make(events=('error',),
+             stderr="You've hit your usage limit")) == 'quota_failure'
+    assert run_live.classify_failure(
+        make(events=('error',), stderr='401 Unauthorized')
+        ) == 'authentication_failure'
+    assert run_live.classify_failure(
+        make(exit_code=0, events=('step_start',))
+        ) == 'invalid_protocol'
+    assert run_live.classify_failure(
+        make(exit_code=1, events=('step_start', 'tool_use'))
+        ) == 'runner_failure'
+
+
+def test_opencode_completion_marker() -> None:
+    finished: dict = {'exit_code': 0, 'timed_out': False,
+                      'runner': 'opencode',
+                      'trajectory': {'events': [
+                          {'event_type': 'step_start'},
+                          {'event_type': 'text'}]}}
+    assert run_live.is_valid_run(finished) is True
+    unfinished: dict = {'exit_code': 0, 'timed_out': False,
+                        'runner': 'opencode',
+                        'trajectory': {'events': [
+                            {'event_type': 'step_start'}]}}
+    assert run_live.is_valid_run(unfinished) is False
+    # v1 codex records (no runner key) keep the turn.completed rule
+    old = {'exit_code': 0, 'timed_out': False,
+           'trajectory': {'events': [{'event_type': 'turn.completed'}]}}
+    assert run_live.is_valid_run(old) is True
+
+
+def test_normalize_opencode_events(tmp_path: Path) -> None:
+    ws = tmp_path / 'repo'
+    ws.mkdir()
+    (ws / 'app.py').write_text('x=1\n', encoding='utf-8')
+    inv = ['app.py']
+    t = 1000.0
+    raw = []
+
+    def add(obj):
+        nonlocal t
+        t += 0.5
+        obj['_t_arrival'] = t
+        raw.append(obj)
+
+    add({'type': 'tool_use',
+         'part': {'tool': 'bash',
+                  'state': {'input': {'command': 'ls'},
+                            'output': 'app.py',
+                            'metadata': {'exit': 0}}}})
+    add({'type': 'tool_use',
+         'part': {'tool': 'write',
+                  'state': {'input': {'filePath': str(ws / 'new.py')},
+                            'output': 'ok'}}})
+    add({'type': 'text', 'part': {'text': 'done'}})
+    events = run_live.normalize_opencode(raw, ws, inv)
+    assert [e['action'] for e in events] == ['nav', 'write', None]
+    assert events[1]['files_touched'] == ['new.py']
+    assert events[2]['tool_result_summary'] == 'done'
+    assert events[0]['t_rel_ms'] == 0 and events[2]['t_rel_ms'] == 1000
+
+
+def test_experiment_cohorts_never_share_paths(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib
+    import os
+    monkeypatch.setenv('ASHA_BENCH_EXPERIMENT', 'live-v2')
+    monkeypatch.setenv('ASHA_BENCH_RUNNER', 'opencode')
+    reloaded = importlib.reload(run_live)
+    try:
+        assert reloaded.LIVE.name == 'live-v2'
+        assert reloaded.RUNNER == 'opencode'
+        assert reloaded.MODEL == 'opencode/deepseek-v4-flash'
+        assert str(reloaded.FREEZE).endswith(
+            'live-v2' + os.sep + '_freeze.json')
+    finally:
+        monkeypatch.delenv('ASHA_BENCH_EXPERIMENT')
+        monkeypatch.delenv('ASHA_BENCH_RUNNER')
+        importlib.reload(run_live)
+    assert run_live.LIVE.name == 'live'
+    assert run_live.MODEL == 'gpt-5.6-terra'
+
+
 # ---- 10b. validity marking: partial/failed runs never count ---------------
 
 def test_is_valid_run_rules() -> None:
