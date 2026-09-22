@@ -993,6 +993,7 @@ def aggregate(runs: list[dict], freeze: dict) -> dict[str, Any]:
         m = [r['metrics'] for r in group]
         ver = [x['verification'] for x in m if x.get('verification')]
         out['per_condition'][condition] = {
+            **out['per_condition'].get(condition, {}),
             'trajectories': len(group),
             'valid': len(group),
             'timed_out': rate([bool(r.get('timed_out')) for r in group]),
@@ -1421,7 +1422,8 @@ def cmd_report(args: argparse.Namespace) -> int:
         json.dumps(aggregate_data, indent=2, sort_keys=True),
         encoding='utf-8')
     base.with_suffix('.md').write_text(
-        render_report(aggregate_data, judged == len(runs)),
+        render_report(aggregate_data,
+                      judged == len(valid_runs)),
         encoding='utf-8')
     # per-trajectory artifacts (STEP 21 schema lives in each run.json)
     print(f"wrote {base}.json and {base}.md "
