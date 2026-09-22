@@ -169,7 +169,7 @@ def default_state(root, level):
         'modules': default_modules(level),
         'mod_history': [],
         'checkpoints': [],
-        'questions': [],
+        'questions': {},
         'spent': 0,
         'agents': {
             'root': {'parent': None, 'task': '', 'owns': [], 'depth': 0, 'reads': {},
@@ -205,18 +205,19 @@ def validate(state):
     require(isinstance(state.get('agents'), dict) and 'root' in state.get('agents', {}),
             'State must contain a root agent.')
     require(isinstance(state.get('checkpoints', []), list) and
-            isinstance(state.get('questions', []), list),
-            'checkpoints and questions must be lists.')
+            isinstance(state.get('questions', {}), dict),
+            'checkpoints must be a list and questions must be a dict keyed by qid.')
     for checkpoint in state['checkpoints']:
         require(isinstance(checkpoint, dict) and checkpoint.get('id') is not None
                 and isinstance(checkpoint.get('claim'), str)
                 and isinstance(checkpoint.get('evidence'), dict),
                 'Malformed checkpoint: ' + str(checkpoint))
-    for question in state['questions']:
-        require(isinstance(question, dict) and nonempty(question.get('question'))
+    for qid, question in state['questions'].items():
+        require(isinstance(qid, str) and nonempty(qid) and isinstance(question, dict)
+                and nonempty(question.get('question'))
                 and question.get('checkpoint') is not None
                 and question.get('closed') in (True, False),
-                'Malformed open question: ' + str(question))
+                'Malformed question ' + str(qid) + ': ' + str(question))
 
 
 def markdown(state):
@@ -422,8 +423,13 @@ def gate(root, state, aid, stage):
                     '. Reopen a dependent question or record a new checkpoint with --supersede ID.')
     for qid, question in state['questions'].items():
         if question['closed']:
-            checkpoint = next(item for item in state['checkpoints'] if item['id'] == question['checkpoint'])
-            require(current_evidence(root, checkpoint['evidence']),
+            checkpoint = next(
+                (item for item in state['checkpoints']
+                 if item['id'] == question['checkpoint']), None)
+            require(checkpoint is not None,
+                    'Closed question ' + str(qid) + ' references missing '
+                    'checkpoint ' + str(question['checkpoint']))
+            require(current_evidence(root, checkpoint['evidence'], 'Checkpoint ' + str(question['checkpoint'])),
                     'Closed question evidence changed: ' + qid + '. Use note --reopen ' + qid + ' and reverify.')
     if stage == 'ship':
         require(not any(not question['closed'] for question in state['questions'].values()), 'Open questions require evidence-backed closure.')
@@ -594,6 +600,11 @@ def main(argv=None):
             pass
         elif ns.command == 'read':
             print(read_files(state, ns.agent, ns.targets or ['SKILL.md']))
+            # Receipts must be durable: check_reads verifies them in later
+            # processes, so an unsaved read would make every gate fail-closed
+            # forever (regression: dict/list questions aside, this made the
+            # ship gate unreachable across CLI invocations).
+            save(root, state)
         elif ns.command == 'pulse':
             agent = get_agent(state, ns.agent)
             agent['tools'] += 1
@@ -610,6 +621,48 @@ def main(argv=None):
             save(root, state)
         elif ns.command == 'check':
             gate(root, state, ns.agent if hasattr(ns, 'agent') else 'root', ns.stage)
+            if ns.stage == 'ship':
+                # Scoped evidence gate: delegate to the toolchain modules.
+                tools_dir = SKILL / '.hermes' / 'tools'
+                if tools_dir.is_dir() and str(tools_dir) not in sys.path:
+                    sys.path.insert(0, str(tools_dir))
+                import check_runner
+                import evidence as evidence_engine
+                import scope_resolver
+                try:
+                    # Tamper check on any prior artifact BEFORE anything else.
+                    evidence_engine.verify(root)
+                    evidence_engine.require_clean_tree(root)
+                    resolved = scope_resolver.resolve(root)
+                    checks = check_runner.run(root, resolved)
+                    ok = all(c['status'] in ('passed', 'skipped')
+                             for c in checks)
+                    sealed = evidence_engine.seal({
+                        'schema': evidence_engine.SCHEMA,
+                        'stage': 'ship',
+                        'scope': resolved['scope'],
+                        'commit': evidence_engine.head_hash(root),
+                        'tree_hash': evidence_engine.tree_hash(root),
+                        'observed_at': evidence_engine.now_iso(),
+                        'checks': checks,
+                        'authorized_to_ship': ok,
+                    })
+                    evidence_engine.write(root, sealed)
+                    evidence_engine.verify(root)  # roundtrip self-check
+                except (evidence_engine.EvidenceError,
+                        scope_resolver.ScopeError,
+                        check_runner.CheckRunnerError) as exc:
+                    print('SHIP GATE REFUSED: ' + str(exc), file=sys.stderr)
+                    sys.exit(1)
+                print('scope: ' + resolved['scope'] +
+                      ' (' + resolved['status'] + ')')
+                print('evidence: .jspace/evidence.json')
+                if not ok:
+                    failed = ', '.join(c['name'] for c in checks
+                                       if c['status'] == 'failed')
+                    print('GATE SHIP: FAIL -- checks failed: ' + failed,
+                          file=sys.stderr)
+                    sys.exit(1)
             print('GATE ' + ns.stage.upper() + ': PASS')
         elif ns.command == 'checkpoint':
             receipt = evidence(root, ns.evidence)
@@ -622,32 +675,31 @@ def main(argv=None):
                     if cp['id'] == ns.supersede:
                         cp['active'] = False
             state['checkpoints'].append(entry)
-            keep = []
-            for qid, q in state['questions'].items():
-                keep.append(q)
-            state['questions'] = keep
             for text in ns.question:
-                state['questions'].append({'question': text, 'checkpoint': cid, 'closed': False})
+                qid = str(len(state['questions']) + 1)
+                state['questions'][qid] = {'question': text, 'checkpoint': cid, 'closed': False}
             save(root, state)
             print('checkpoint ' + str(cid) + ': ' + ns.claim)
             for text in ns.question:
                 print('  open question: ' + text)
         elif ns.command == 'question':
             if ns.open_q:
-                qid = len(state['questions']) + 1
-                state['questions'].append({'question': ns.open_q, 'checkpoint': ns.checkpoint,
-                                           'closed': False})
+                qid = str(len(state['questions']) + 1)
+                state['questions'][qid] = {'question': ns.open_q, 'checkpoint': ns.checkpoint,
+                                           'closed': False}
                 save(root, state)
-                print('question ' + str(qid) + ' open: ' + ns.open_q)
+                print('question ' + qid + ' open: ' + ns.open_q)
             elif ns.reopen:
-                q = next((q for q in state['questions'] if q.get('question', '') == str(ns.reopen)
+                q = next((q for existing, q in state['questions'].items()
+                          if existing == str(ns.reopen)
                           or q['checkpoint'] == ns.reopen), None)
                 require(q is not None, 'No question with that id.')
                 q['closed'] = False
                 save(root, state)
                 print('question reopened: ' + str(ns.reopen))
             elif ns.close:
-                q = next((q for q in state['questions'] if q['checkpoint'] == ns.close), None)
+                q = next((q for q in state['questions'].values()
+                          if q['checkpoint'] == ns.close), None)
                 require(q is not None, 'No open question for checkpoint ' + str(ns.close))
                 require(ns.evidence, 'closing a question requires --evidence')
                 receipt = evidence(root, ns.evidence)
@@ -752,7 +804,8 @@ def main(argv=None):
                 print('level: ' + state['level'])
                 print('transport: ' + str(state['transport']))
                 print('checkpoints: ' + str(len(state['checkpoints'])))
-                print('open questions: ' + str(sum(1 for q in state['questions'] if not q['closed'])))
+                print('open questions: ' + str(sum(1 for q in state['questions'].values()
+                                                  if not q['closed'])))
                 print('agents: ' + ', '.join(active_agents(state)))
                 print('spent: ' + str(state['spent']) + '/' + str(state['config']['budget']))
 

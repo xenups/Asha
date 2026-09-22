@@ -8,6 +8,7 @@ __pycache__/
 .ruff_cache/
 .jspace/control.json
 .jspace/CONTROL.md
+.jspace/evidence.json
 .jspace/cache/
 .jspace/lock
 *.tmp
