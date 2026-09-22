@@ -23,7 +23,7 @@ Ship ONLY when critique passes AND linter/type tests return exit code 0:
 - `ruff check .` (or project linter)
 - `mypy .` if project uses it
 - `pytest` (full relevant suite)
-- J-Space `control.py check --stage ship` if loop-mode controller active.
+- J-Space `control.py --transport <ssh|local> check --stage ship` if loop-mode controller active.
 
 ## 4. Tooling
 - Structural review aid: `code_search.py --outline <file>` (AST symbol map, no bodies).

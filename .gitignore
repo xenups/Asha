@@ -1,5 +1,5 @@
-.hermes/venv/
 .venv/
+.hermes/venv/
 venv/
 __pycache__/
 *.pyc

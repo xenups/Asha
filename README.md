@@ -1,9 +1,13 @@
-# Hermes Disciplined Harness
+# Asha-Harness
 
-A standalone, fail-closed toolchain for reproducible agent work: J-Space
-governance, AST-based perception, and atomic in-situ execution — with
-**empirical, machine-measured benchmarks** and an OS-agnostic bootstrap so the
-same harness can be rebuilt identically on Linux, macOS, and Windows.
+**Asha (اَشَه)** — Ancient Persian concept of universal truth, deterministic
+cosmic order, and non-destructive harmony, set against *Druj* (chaos, entropy,
+and structural corruption).
+
+Asha-Harness is the disciplined fail-closed toolchain for reproducible agent
+work: J-Space governance, AST-based perception, and atomic in-situ execution —
+with **empirical, machine-measured benchmarks** and an OS-agnostic bootstrap so
+the same harness can be rebuilt identically on Linux, macOS, and Windows.
 
 Everything in `Benchmarks` below was measured on a real machine (see
 `Environment` for the exact matrix); no number is estimated.
@@ -124,9 +128,9 @@ when used, every `control.py` invocation on the remote side must declare
 ### Repository layout
 
 ```
-hermes-disciplined-harness/
+asha-harness/
 ├── .hermes/
-│   ├── venv/                  # git-ignored; see Bootstrap
+│   ├── venv/                  # our active dev venv (git-ignored; fresh boots use .venv)
 │   └── tools/
 │       ├── code_search.py     # AST perception
 │       └── diff_engine.py     # atomic patching
@@ -135,6 +139,11 @@ hermes-disciplined-harness/
 │   ├── control.json           # runtime ledger (git-ignored)
 │   └── cache/                 # git-ignored
 ├── skills/pre-ship-quality-gate/SKILL.md
+├── scripts/
+│   ├── bootstrap.sh           # one-shot bootstrap (Linux/macOS)
+│   ├── bootstrap.ps1          # one-shot bootstrap (Windows)
+│   ├── uninstall.sh           # zero-bleed teardown (Linux/macOS)
+│   └── uninstall.ps1          # zero-bleed teardown (Windows)
 ├── tests/                     # 15 regression tests (14 pass, 1 env-probe skip)
 ├── benchmarks/
 │   ├── bench.py               # empirical benchmark runner (re-runnable)
@@ -147,16 +156,32 @@ hermes-disciplined-harness/
 
 ## 3. Cross-Platform Bootstrap (OS-Agnostic)
 
-Recreates the identical `.hermes/venv` + toolchain from scratch. Requires only
-a Python ≥ 3.10 with `venv` and a shell. **Copy-paste, both platforms.**
+Recreates the identical `.venv` + toolchain from scratch. Requires only a
+Python ≥ 3.10 with `venv` and a shell.
+
+**One-shot bootstrap:**
+
+```bash
+bash scripts/bootstrap.sh                                     # Linux / macOS
+powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1   # Windows
+```
+
+The bootstrap builds `.venv`, installs the pinned ABI matrix
+(`tree-sitter==0.21.3`, `tree-sitter-languages==1.10.2`, `ast-grep-py==0.45.3`,
+`ruff`, `mypy`, `pytest`, `chromadb`, `mem0ai`), asserts
+`code_search.py --verify-env`, runs both tool self-tests, registers the two
+MCP servers over `stdio` (skip with `ASHA_SKIP_MCP=1` / `-SkipMcp`), and ends
+with `ruff` + `mypy` + `pytest` — fail-closed on every step. Idempotent.
+
+Manual equivalent (for when no shell is available):
 
 ### Linux / macOS (bash)
 
 ```bash
-git clone <your-repo-url> hermes-disciplined-harness
-cd hermes-disciplined-harness
-python3 -m venv .hermes/venv
-source .hermes/venv/bin/activate
+git clone <your-repo-url> asha-harness
+cd asha-harness
+python3 -m venv .venv
+source .venv/bin/activate
 pip install --upgrade pip
 pip install \
   "tree-sitter==0.21.3" \
@@ -172,10 +197,10 @@ python -m pytest tests/ -q
 ### Windows (PowerShell)
 
 ```powershell
-git clone <your-repo-url> hermes-disciplined-harness
-cd hermes-disciplined-harness
-py -3 -m venv .hermes\venv
-.hermes\venv\Scripts\Activate.ps1
+git clone <your-repo-url> asha-harness
+cd asha-harness
+py -3 -m venv .venv
+.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install "tree-sitter==0.21.3" "tree-sitter-languages==1.10.2" "ast-grep-py==0.45.3" "ruff" "mypy" "pytest" "chromadb" "mem0ai"
 python .hermes\tools\code_search.py --verify-env
@@ -187,14 +212,14 @@ python -m pytest tests\ -q
 ### Windows (CMD)
 
 ```cmd
-git clone <your-repo-url> hermes-disciplined-harness
-cd hermes-disciplined-harness
-py -3 -m venv .hermes\venv
-.hermes\venv\Scripts\python.exe -m pip install --upgrade pip
-.hermes\venv\Scripts\python.exe -m pip install "tree-sitter==0.21.3" "tree-sitter-languages==1.10.2" "ast-grep-py==0.45.3" "ruff" "mypy" "pytest" "chromadb" "mem0ai"
-.hermes\venv\Scripts\python.exe .hermes\tools\code_search.py --verify-env
-.hermes\venv\Scripts\python.exe .hermes\tools\diff_engine.py --self-test
-.hermes\venv\Scripts\python.exe -m pytest tests -q
+git clone <your-repo-url> asha-harness
+cd asha-harness
+py -3 -m venv .venv
+.venv\Scripts\python.exe -m pip install --upgrade pip
+.venv\Scripts\python.exe -m pip install "tree-sitter==0.21.3" "tree-sitter-languages==1.10.2" "ast-grep-py==0.45.3" "ruff" "mypy" "pytest" "chromadb" "mem0ai"
+.venv\Scripts\python.exe .hermes\tools\code_search.py --verify-env
+.venv\Scripts\python.exe .hermes\tools\diff_engine.py --self-test
+.venv\Scripts\python.exe -m pytest tests -q
 ```
 
 **Drift check:** after bootstrap, both platforms must pass all gates listed in
@@ -216,10 +241,10 @@ Rerun anytime: `.hermes/venv/python benchmarks/bench.py --json`.
 | **AST outline vs raw read** | Raw source | 767 lines · 3,087 tokens |
 | | AST outline | 39 lines · 117 tokens |
 | | **Token reduction** | **96.21 %** |
-| | Parse latency (median, n=5) | **154.78 ms** |
-| **Atomic diff safety** | Valid patch apply (median, n=5) | **111.89 ms** |
-| | Rollback via inverse hunk (median, n=5) | **106.42 ms** |
-| | Colliding/mismatched patch | **exit code 1** · 104.13 ms · **zero corruption** (bytes identical, no temp litter) |
+| | Parse latency (median, n=5) | **156.79 ms** |
+| **Atomic diff safety** | Valid patch apply (median, n=5) | **109.96 ms** |
+| | Rollback via inverse hunk (median, n=5) | **109.27 ms** |
+| | Colliding/mismatched patch | **exit code 1** · 115.19 ms · **zero corruption** (bytes identical, no temp litter) |
 | **Fail-closed transport gate** | `init` without `--transport` | **exit code 1** · **no ledger written** |
 | | `init --transport local` | **exit code 0** · ledger pinned `transport: local` |
 | | Mixed transport (`ssh` on a `local` session) | **exit code 1** (`Transport mismatch`) |
@@ -229,7 +254,7 @@ Rerun anytime: `.hermes/venv/python benchmarks/bench.py --json`.
 
 Sanity: the 96.21 % token reduction is exactly the outline's job — 3,087
 tokens of bodies and strings collapse to 117 tokens of symbol declarations
-with line ranges, at 154.78 ms median parse on this machine. Both parse
+with line ranges, at 156.79 ms median parse on this machine. Both parse
 latencies are dominated by cold venv interpreter startup (the stdlib tools
 themselves run in low single-digit ms); `samples_ms` arrays are in
 `benchmarks/results.json` if you need the distribution.
@@ -256,10 +281,91 @@ target-agnostic by design (they operate on files and ledgers, not one codebase).
    no partial application, no partial writes, ever.
 4. **Pre-ship quality gate (fail-closed).** Before commit/push:
    `ruff check .` exit 0, `mypy .` exit 0, `pytest` green, and (when a session
-   is active) `control.py --transport <t> check --stage ship` must print
+   is active) `control.py --transport <ssh|local> check --stage ship` must print
    `GATE SHIP: PASS`. Any red gate ⇒ not shippable; fix and re-run.
 5. **Zero-daemon.** Tools spawn no servers, no listeners, no background
    processes. Verify with `netstat`/`ss` (measurement: 0 new ports, §4).
+
+---
+
+## 6. The Asha Impact: Before vs. After Benchmark
+
+What disciplined tooling buys you, using the actual measured numbers from §4:
+
+| Dimension | Before (raw) | After (Asha-Harness) | Impact |
+|---|---|---|---|
+| **Token & context reduction** | 3,087 tokens of raw file read | 117 tokens of AST outline | **96.21 % context reduction** — the agent reads symbol structure, not bodies |
+| **Atomic integrity** | Whole-file overwrite risk; one bad write corrupts the target | SEARCH/REPLACE diff engine: exact unique match → temp verify → `os.replace` | Whole-file corruption eliminated; **instant rollback** (109.27 ms inverse hunk, §4) |
+| **Cross-service awareness** | Blind edits; downstream callers break silently after rename/signature change | `trace_impact` call-graph tracing (`import` / `call` / `inherit`) | Interface breakage caught **before** it reaches dependent code |
+| **Transport discipline** | Implicit execution context; SSH/local silently mixed | Mandatory `--transport <ssh|local>` fail-closed flag, ledger-pinned | Session cannot mix transports; omission exits 1 pre-write |
+| **Fail-closed gate** | Ship with warnings tolerated | Zero-warning requirement: `ruff` / `mypy` / `pytest` all exit 0 before closure | No known risk ships; every gate re-verified at the seam |
+
+---
+
+## 7. Zero-Bleed Teardown
+
+Purge the harness — venv, caches, and registered MCP servers — leaving zero
+residue. The uninstaller is idempotent: re-running it is a no-op, and it never
+touches files outside the repo `.venv`/`.jspace` bounds or the two registered
+MCP server entries.
+
+**One-line uninstall:**
+
+```bash
+bash scripts/uninstall.sh              # Linux / macOS
+powershell -ExecutionPolicy Bypass -File scripts/uninstall.ps1   # Windows
+```
+
+What it does:
+
+1. `hermes mcp remove sequential_thinking` and
+   `hermes mcp remove remote_linux` (their only registration is the one this
+   bootstrap created; if absent, removal is skipped — no shared servers are
+   touched).
+2. Deletes the isolated `.venv` virtual environment (venv size excluded via
+   `.gitignore`, culled here).
+3. Deletes `.jspace/cache/` and any stale `.jspace/lock`.
+4. Asserts zero lingering harness processes
+   (`pgrep -f 'hermes-disciplined-harness|asha-harness'` on POSIX,
+   `Get-CimInstance Win32_Process | Where CommandLine -match 'asha-harness'` on
+   Windows) and zero new listening ports (port snapshot before/after — the
+   harness spawns none, so the delta must be empty).
+
+`scripts/uninstall.sh` and `scripts/uninstall.ps1` are themselves
+self-tearing and exit 0 on success.
+
+---
+
+## 8. Agent Direct Self-Adoption Prompt
+
+> Copy this block verbatim into the system prompt of any agent that will work
+> in a repository governed by Asha-Harness.
+
+```text
+ASA-HARNESS DIRECTIVE (binding)
+
+1. DETECT: Before any work, determine whether Asha-Harness is active in the
+   current repository — presence of .hermes/tools/code_search.py,
+   .hermes/tools/diff_engine.py, .jspace/control.py, and
+   skills/pre-ship-quality-gate/SKILL.md. If all four exist, proceed to (3).
+2. BOOTSTRAP: If any are missing, trigger the bootstrap autonomously:
+   bash scripts/bootstrap.sh          # Linux / macOS
+   powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1   # Windows
+   The bootstrap must pass `code_search.py --verify-env` before any edit.
+3. BIND: All code edits MUST go through .hermes/tools/diff_engine.py
+   (SEARCH/REPLACE, atomic). All structural exploration MUST go through
+   .hermes/tools/code_search.py (--outline / --pattern / --trace). Raw
+   in-place file mutation is forbidden.
+4. REFUSE: Any change that violates the transport locked in
+   .jspace/control.json. If the ledger declares transport: local, refuse all
+   SSH-mediated edits; if transport: ssh, refuse local-only edits on files
+   owned by the remote session. When no ledger exists yet, initialize one:
+   python .jspace/control.py --transport <ssh|local> init --goal <G> --next <N>.
+5. GATE: Before task closure run, in order: ruff check . (exit 0), mypy .
+   (exit 0), pytest tests/ (exit 0), and
+   python .jspace/control.py --transport <declared> check --stage ship.
+   Any red gate means the task is NOT closed.
+```
 
 ---
 

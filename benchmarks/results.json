@@ -1,5 +1,5 @@
 {
-  "tool": "hermes-disciplined-harness",
+  "tool": "asha-harness",
   "results": [
     {
       "benchmark": "AST outline vs raw read",
@@ -9,21 +9,21 @@
       "outline_lines": 39,
       "outline_tokens": 117,
       "token_reduction_pct": 96.21,
-      "parse_median_ms": 152.15,
+      "parse_median_ms": 156.79,
       "samples_ms": [
-        163.38270000051125,
-        150.08029999989958,
-        148.8035000002128,
-        152.14500000001863,
-        160.57810000074824
+        153.93919999951322,
+        205.50590000129887,
+        162.78039999997418,
+        155.50009999969916,
+        156.78729999854113
       ]
     },
     {
       "benchmark": "diff_engine atomic SEARCH/REPLACE",
-      "patch_median_ms": 106.98,
-      "rollback_median_ms": 108.44,
+      "patch_median_ms": 109.96,
+      "rollback_median_ms": 109.27,
       "rejection_exit_code": 1,
-      "rejection_ms": 108.15,
+      "rejection_ms": 115.19,
       "zero_corruption": true
     },
     {
@@ -36,8 +36,8 @@
     },
     {
       "benchmark": "zero-daemon verification",
-      "listening_before": 38,
-      "listening_after": 38,
+      "listening_before": 39,
+      "listening_after": 39,
       "new_listening_ports": []
     }
   ]

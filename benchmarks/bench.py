@@ -193,7 +193,7 @@ def main() -> None:
     if args.json:
         out = ROOT / "benchmarks" / "results.json"
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps({"tool": "hermes-disciplined-harness", "results": results},
+        out.write_text(json.dumps({"tool": "asha-harness", "results": results},
                                   indent=2), encoding="utf-8")
         print(f"wrote {out}")
 
