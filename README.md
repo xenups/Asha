@@ -170,6 +170,70 @@ python .jspace/control.py --transport <t> memory status          # availability 
 python .jspace/control.py --transport <t> memory context         # ORIENT vs memory, stale conflicts
 ```
 
+## Empirical Evaluation
+
+Why: the architecture above claims to help agent software-engineering
+workflows. `benchmarks/` measures that claim instead of asserting it, and
+records honestly when a metric cannot be measured.
+
+### Conditions (identical task set, identical tool binaries)
+
+| Condition | Available Asha context |
+| --- | --- |
+| `baseline` | none |
+| `orient` | ORIENT facts |
+| `orient_mem0` | ORIENT facts + Mem0 lessons |
+
+The only intended difference is the available context; no model execution
+belongs to this harness (agent-layer outcomes are not run here).
+
+### Metrics
+
+| Metric | Answers | Layer | Availability |
+| --- | --- | --- | --- |
+| `source_of_truth_error_rate` | wrong first hypothesis | agent | null + reason (agent layer not executed) |
+| time-to-first-correct-hypothesis | orientation speed | agent | null + reason |
+| `regressed_decision_rate` | repeated disproven mistakes | agent | null + reason; retrieval/precedence measured as tool-layer proxies |
+| `final_correctness_rate` | primary outcome | agent | null + reason |
+| `verification_time_ms`, checks executed | verification cost | tool | measured (real replays) |
+| `scope_accuracy`, under/over/uncertain | scope quality | tool | measured (real replays) |
+| orient exposure, Mem0 retrieval, precedence | context reachability | tool | measured (real replays) |
+
+Unavailable metrics are `null` with an `unavailable_reasons` map -- never
+zero-filled. Counts are reported as `X / N`, never bare percentages.
+
+### Ground truth
+
+Per task in `benchmarks/tasks.jsonl`: `ground_truth_source` (authoritative
+implementation files), `ground_truth_tests`, `ground_truth_scope`
+(maintainer annotation per this document's scope policy),
+`ground_truth_outcome` (merged commit + gate status), plus
+`known_failure_modes` and `historical_lesson` (Mem0 experiment seeds).
+All fields derive from observable repository history; agent answers are
+never used as ground truth.
+
+### Limitations
+
+* Small, single-repository sample (see recorded `task_count`); counts, no
+  significance claims.
+* Task-selection bias: only tasks with replayable ground truth qualify.
+* Scope ground truth measures conformance to the documented policy, not
+  the validity of the policy.
+* Verification replay uses current tool binaries against each era's own
+  config; duration values vary between runs (classifications do not).
+
+### Reproduce
+
+```bash
+python benchmarks/run_eval.py --condition all
+```
+
+Refuses a dirty tree (canonical runs only); `--skip-verification` for a
+fast classification-only pass. Outputs `benchmarks/results/<run_id>.json`
+(one per condition) plus a comparison `<run_id>.md`. `results/` is
+gitignored (wall-clock data, run-local). The agent-layer observation
+record shapes for future scored runs are the metric schemas above.
+
 ## 4. Scope Model: S0-S4
 
 | Scope | Meaning | Typical changes | Verification |

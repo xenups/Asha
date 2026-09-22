@@ -12,3 +12,4 @@ __pycache__/
 .jspace/cache/
 .jspace/lock
 *.tmp
+benchmarks/results/
