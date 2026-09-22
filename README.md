@@ -2,215 +2,632 @@
 
 **Asha (اَشَه)** — Ancient Persian concept of universal truth, deterministic
 cosmic order, and non-destructive harmony, set against *Druj* (chaos, entropy,
-and structural corruption).
+structural corruption).
 
-Asha-Harness is the disciplined fail-closed toolchain for reproducible agent
-work: J-Space governance, AST-based perception, and atomic in-situ execution —
-with **empirical, machine-measured benchmarks** and an OS-agnostic bootstrap so
-the same harness can be rebuilt identically on Linux, macOS, and Windows.
+## 1. What Asha Is
 
-Everything in `Benchmarks` below was measured on a real machine (see
-`Environment` for the exact matrix); no number is estimated.
+Asha is a **zero-daemon governance and execution harness for coding agents**.
+Its job is to constrain and verify repository changes. Specifically:
+
+- It is **not** an autonomous coding agent.
+- It does **not** replace Git, CI, pytest, mypy, Ruff, or project-specific
+  tooling — it drives them.
+- It answers exactly one question: **does this change have sufficient
+  evidence to be authorized to ship?**
+
+Core chain:
+
+```text
+repository state
+    ↓
+ORIENT (facts + provenance)
+    ↓
+agent reasoning
+    ↓
+change detection
+    ↓
+semantic scope
+    ↓
+applicable checks
+    ↓
+execution evidence
+    ↓
+cryptographic binding
+    ↓
+ship authorization
+```
+
+## 2. Core Design Principles
+
+Explicit invariants:
+
+1. **Fail closed.** Missing transport, dirty tree, missing receipts, failed
+   checks, unreadable or tampered evidence → refusal (exit 1). Never a pass
+   by default.
+2. **Deterministic scope hierarchy.** `S4 > S3 > S2 > S1 > S0` and
+   `final_scope = max(detected_scopes)`.
+3. **Unknown impact must never downgrade scope.** Ambiguity elevates
+   (`uncertain` → S3); incomplete analysis never produces S1/S2.
+4. **Ship evidence must bind to the exact Git tree being verified**
+   (`commit` = HEAD, `tree_hash` = `HEAD^{tree}`).
+5. **Working tree must be clean for ship authorization**
+   (`git status --porcelain` strictly empty).
+6. **Evidence must be machine-verifiable** (canonical SHA-256 digest,
+   re-computable by any third party).
+7. **Atomic mutation is separate from verification.** `diff_engine.py`
+   writes; checks verify; neither substitutes for the other.
+8. **Git push is not equivalent to task completion**, and a passing test
+   suite is not equivalent to valid evidence.
+9. **Asha is a tool for agents, not a Git hook.** It does not block every
+   push; it is invoked deliberately at the ship boundary.
+
+## 3. Architecture
+
+| Component | Responsibility |
+| --- | --- |
+| `.jspace/control.py` | State/ledger, gate orchestration, ship authorization |
+| `.hermes/tools/scope_resolver.py` | Semantic scope classification S0-S4 |
+| `.hermes/tools/project_map.py` | Live project orientation: facts + provenance synthesis |
+| `.hermes/tools/check_runner.py` | Isolated subprocess execution and result capture |
+| `.hermes/tools/evidence.py` | Clean-tree validation, tree binding, canonical hashing, evidence verification |
+| `.hermes/tools/code_search.py` | AST/structural perception and impact tracing |
+| `.hermes/tools/diff_engine.py` | Exact atomic source mutation |
+
+Supporting scripts (documented in §10 and Appendix E): `scripts/update.py`
+(atomic self-update), `scripts/bootstrap.{sh,ps1}`,
+`scripts/uninstall.{sh,ps1}`.
+
+### Project orientation (`orient`)
+
+`project_map.py` answers *what is this repository?* **before** an agent
+changes anything — with facts and provenance only, never opinions.
+
+```bash
+python .hermes/tools/project_map.py --quick                 # json to stdout
+python .hermes/tools/project_map.py --standard --format markdown
+python .hermes/tools/project_map.py --deep
+python .jspace/control.py --transport <ssh|local> orient [--mode quick|standard|deep] [--format json|markdown] [--no-cache]
+```
+
+`control.py orient` is a ledger-free, read-only wrapper (no
+`control.json` is created or modified); the transport declaration is still
+mandatory like every other command.
+
+| Mode | Contents |
+| --- | --- |
+| `--quick` | Git state, stack, layout, tooling, configuration locations |
+| `--standard` (default) | + entry-point candidates, recent-git hotspots, generated candidates, warnings |
+| `--deep` (on demand, never default) | + schema/model candidates and public symbol inventory |
+
+**Fact + provenance model.** Every reported fact is
+`{value, source, confidence}` (layout-style facts use `path` instead of
+`value`). `confidence` is exactly one of `direct` (config file says so),
+`detected` (observed on filesystem / in git), `inferred` (derived) — and is
+never fabricated. Entry points are **candidates**, detected by lightweight
+AST patterns; file classification uses `generated_candidates`, never
+`generated_files`; hotspots are raw git signals (revision counts, authors,
+touch counts) with no risk language.
+
+**Cache and invalidation.** Orientation may cache to
+`.jspace/cache/orient.json` (git-ignored — a cache can never dirty the
+repository). Cache identity is `tree_hash`, keyed per mode. A **dirty
+working tree bypasses the cache entirely** (`cache_key: null`): stale
+orientation is never served for uncommitted or untracked changes.
+
+**Limitations.** Orientation is deterministic synthesis over config files,
+the filesystem, and git history. It does not understand the project
+semantically in a compiler-grade sense, and it proves nothing about runtime
+behavior.
+
+## 4. Scope Model: S0-S4
+
+| Scope | Meaning | Typical changes | Verification |
+| --- | --- | --- | --- |
+| S0 | Non-runtime | docs, comments, test-only changes with no runtime footprint | direct/project-appropriate tests |
+| S1 | Runtime leaf | private/local runtime helper with **proven** zero downstream consumers | focused tests |
+| S2 | Internal package logic | runtime implementation change inside one package without contract drift | Ruff + pytest + mypy as configured |
+| S3 | Contract / external impact | public signatures, exported types, schemas, downstream consumers, unresolved semantic impact | broader regression + type checks |
+| S4 | Repository/toolchain | `pyproject.toml`, Ruff/mypy config, CI/toolchain/lockfile changes | repository-wide/toolchain checks |
+
+```text
+S4 > S3 > S2 > S1 > S0
+final_scope = max(detected_scopes)
+```
+
+Fail-closed behavior:
+
+```text
+uncertain impact
+    ↓
+S3 or explicit uncertain state
+    ↓
+never downgrade to S1/S2 merely because analysis is incomplete
+```
+
+Detection rules as implemented in `scope_resolver.py`:
+
+- **S4 (static path rules):** `pyproject.toml`, `ruff.toml`, `mypy.ini`,
+  `setup.cfg`, `tox.ini`, lockfiles (`poetry.lock`, `uv.lock`,
+  `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `*.lock`), `.github/**`,
+  `.circleci/**`, `.pre-commit-config.yaml`, `.python-version`.
+- **S0 (static path rules):** `*.md`/`*.rst`, `tests/**`, `docs/**`,
+  `examples/**`, `benchmarks/**`, license files. Python files whose AST is
+  byte-identical after the edit (comment-only changes) are also S0.
+- **S3 (semantic):** the public API surface changed — public function or
+  method signatures, class bases/class-level annotations, `__all__`; added or
+  removed public API (this is why module renames/deletions elevate to S3);
+  unparseable sources; any `uncertain` condition below.
+- **S1 (semantic):** only private (`_`-prefixed) definitions changed **and**
+  every changed name has zero call-sites in a repository-wide AST scan
+  (`trace_impact`) **and** no ambiguity exists.
+- **S2 (semantic default):** everything else runtime: module-level edits,
+  public function bodies with unchanged signatures, private helpers with
+  callers, non-Python runtime files.
+- **`uncertain`:** dynamic constructs in the changed file
+  (`eval`, `exec`, `globals()`, `locals()`, `__import__`, `importlib`) or a
+  changed private name referenced as a string literal (reflection-style
+  lookup). Sets `status: "uncertain"` and forces scope to at least S3.
+
+`trace_impact` (the `--trace` mode of `code_search.py` and the caller count
+inside `scope_resolver.py`) is a **structural, AST-based approximation** —
+import/call/inherit usage maps and `Name`/`Attribute` call counting. It is
+**not** a compiler-grade whole-program semantic call graph (see §13).
+
+## 5. Ship Gate
+
+```bash
+python .jspace/control.py --transport <ssh|local> [--root DIR] check --stage ship
+```
+
+Ordered flow as implemented:
+
+```text
+1.  Validate --transport (exit 1 before any state is written)
+2.  Load + validate ledger (schema, questions dict, transport pin match)
+3.  Validate read receipts, open-question rule, checkpoint/question digests
+4.  Verify prior evidence digest if .jspace/evidence.json exists (tamper → refuse)
+5.  Require clean Git working tree
+6.  Resolve semantic scope over changed / affected files
+7.  Determine mandatory checks for that scope
+8.  Execute checks in isolated subprocesses
+9.  Seal evidence bound to HEAD and HEAD^{tree}, atomic write, digest roundtrip
+10. Authorize ship (exit 0) or emit authorized_to_ship=false + exit 1
+```
+
+Mandatory checks per scope (as implemented):
+
+| Scope | checks |
+| --- | --- |
+| S0, S1 | `pytest` |
+| S2, S3, S4 | `ruff`, `pytest`, `mypy` |
+
+Hard equivalences:
+
+```text
+push   ≠ done
+commit ≠ ship authorization
+tests pass ≠ evidence is valid
+```
+
+## 6. Evidence Format
+
+`.jspace/evidence.json` — exact current schema (git-ignored):
+
+```json
+{
+  "schema": 1,
+  "stage": "ship",
+  "scope": "S0",
+  "commit": "b8bde7a3ab791884a841f2982006b3c8daf5d743",
+  "tree_hash": "ce67f834e6d2326ebb12c8970431b3e09a075587",
+  "observed_at": "2026-09-22T16:15:32+00:00",
+  "checks": [
+    {
+      "name": "pytest",
+      "scope": "package",
+      "status": "passed",
+      "exit_code": 0,
+      "duration_ms": 655,
+      "output_tail": "1 passed in 0.02s\n"
+    }
+  ],
+  "authorized_to_ship": true,
+  "evidence_sha256": "3427b9f8da9bb5bc7703c4920523c66bec13fea5d88268b695bf4570ab3944ee"
+}
+```
+
+Field meanings:
+
+| Field | Meaning |
+| --- | --- |
+| `schema` | Evidence schema version (currently `1`) |
+| `stage` | Gate stage, currently `ship` |
+| `scope` | Resolved S0-S4 scope |
+| `commit` | Git HEAD commit hash |
+| `tree_hash` | `HEAD^{tree}` hash |
+| `observed_at` | Observation timestamp (UTC ISO 8601, second precision) |
+| `checks` | Executed verification results (see below) |
+| `authorized_to_ship` | Final authorization result (boolean) |
+| `evidence_sha256` | Canonical digest excluding the digest field itself |
+
+Each entry of `checks` — exact emitted fields:
+
+| Field | Values / meaning |
+| --- | --- |
+| `name` | `ruff` \| `pytest` \| `mypy` |
+| `scope` | `changed_files` (ruff) \| `package` (pytest) \| `dependency_graph` (mypy) |
+| `status` | `passed` \| `failed` \| `skipped` |
+| `exit_code` | Integer subprocess exit code; `-1` means the process could not run (error/timeout) |
+| `duration_ms` | Wall-clock duration of the subprocess |
+| `output_tail` | Last 2000 characters of combined stdout + stderr |
+| `note` | Present only when `status` is `skipped`: `"no applicable target"` (then `duration_ms`/`output_tail` are absent and `exit_code` is `0`) |
+
+Check target selection (as implemented): `pytest` runs `tests/ -q`; `ruff`
+runs on the changed Python files, else `.`; `mypy` runs on the changed Python
+files, else `.hermes/tools/` if present, else it is `skipped`.
+
+## 7. Evidence Integrity
+
+Digest procedure:
+
+```text
+payload = evidence JSON without evidence_sha256
+canonical JSON =
+    sort_keys=true
+    separators=(",", ":")
+    ensure_ascii=false
+
+evidence_sha256 = SHA-256(canonical JSON)
+```
+
+Tree binding:
+
+```text
+commit    = git rev-parse HEAD
+tree_hash = git rev-parse HEAD^{tree}
+```
+
+Both matter: the digest proves the artifact was not edited after sealing;
+the tree binding proves *which exact tree* the checks ran against. Together
+they make evidence portable — any third party can recompute the digest and
+re-derive the tree from the commit.
+
+Tamper detection:
+
+```text
+authorized_to_ship: false
+        ↓
+manually changed to true
+        ↓
+digest mismatch
+        ↓
+ship refused (exit 1: "evidence_sha256 mismatch")
+```
+
+The prior artifact is verified **before** anything else in the ship gate, so
+a tampered file can never be silently replaced by a fresh run.
+
+## 8. Typical Agent Workflow
+
+Two distinct loops.
+
+**Tight development loop — smallest useful checks:**
+
+```text
+edit
+→ focused test
+→ changed-file lint
+→ inspect diff
+```
+
+**Pre-ship loop — uses the resolved scope:**
+
+```text
+orient (only when the repository is unfamiliar)
+→ scope resolution
+→ applicable checks
+→ full required regression
+→ evidence generation
+→ ship gate
+```
+
+Asha does **not** force full-project checks for every intermediate edit. The
+scope model exists precisely so the tight loop stays tight; the pre-ship loop
+is where evidence is produced.
+
+## 9. Example Real-World Task
+
+Contract drift found in this repository's own CI:
+
+```text
+test expects manifest["file_list"]
+writer emits manifest["files"]
+        ↓
+inspect producer (bundle_writer.py emits "files")
+        ↓
+inspect repository history (git log -S: writer never had "file_list")
+        ↓
+prove canonical contract (a second test already asserts "files")
+        ↓
+atomic one-line test correction (diff_engine.py SEARCH/REPLACE)
+        ↓
+direct test (pytest tests/test_compose_export.py -q → passed)
+        ↓
+full regression (pytest tests/ -q → 104 total, green)
+        ↓
+ship evidence (control.py check --stage ship)
+```
+
+Note the decision: the **test** was aligned to the writer's contract, not
+vice versa — one source of truth, no backward-compatibility shim invented.
+
+## 10. CLI Reference
+
+`control.py` is always invoked as
+`python .jspace/control.py --transport <ssh|local> [--root DIR] <command>`.
+
+| Command | Purpose | Success | Failure |
+| --- | --- | --- | --- |
+| `init --goal G --next N` | Create ledger | prints goal + transport, exit 0 | missing/invalid `--transport` → exit 1, **no ledger written** |
+| `read FILE...` | Record read receipts (persisted) | prints content, exit 0 | missing file / digest drift → exit 1 |
+| `pulse --event tool --label X` | Tool heartbeat into ledger | exit 0 | invalid event → usage error, exit 2 |
+| `check --stage work` | Ledger consistency gate | `GATE WORK: PASS`, exit 0 | any invariant broken → `CONTROL ERROR: …`, exit 1 |
+| `check --stage ship` | Full scoped evidence gate (§5) | `GATE SHIP: PASS`, exit 0 | tamper / dirty tree / failed checks → exit 1 |
+| `checkpoint --claim C --evidence P` | Seal evidence receipt | `checkpoint N: …`, exit 0 | missing/empty evidence file → exit 1 |
+| `question --open TEXT` / `--close N --evidence P` / `--reopen N` | Manage open questions (dict keyed by qid) | exit 0 | close without `--evidence` → exit 1 |
+| `status [--json]` | Dump ledger state | exit 0 | corrupt ledger → exit 1 |
+
+Standalone tools (no `--transport`; see Appendix A for flags):
+
+| Command | Purpose | Success | Failure |
+| --- | --- | --- | --- |
+| `python .hermes/tools/scope_resolver.py [--root D] [--base REF] [--json]` | Resolve scope for current changes | prints `scope=… status=… files=N`, exit 0 | git failure → `SCOPE ERROR`, exit 1 |
+| `python .hermes/tools/project_map.py [--quick\|--standard\|--deep] [--format json\|markdown] [--root D]` | Orientation facts + provenance | JSON or markdown, exit 0 | git failure → `ORIENT ERROR`, exit 1 |
+| `python .jspace/control.py --transport <t> orient [--mode M] [--format F]` | Ledger-free orientation wrapper | orientation output, exit 0 | missing `--transport` → `TRANSPORT GATE`, exit 1 |
+| `python .hermes/tools/code_search.py --outline F` | AST outline (no bodies) | symbol table, exit 0 | missing file → exit 1 |
+| `python .hermes/tools/code_search.py --trace SYM --dir D` | Structural impact map | usage entries, exit 0 | unknown symbol → empty result, exit 0 (structural approximation, see §13) |
+| `python .hermes/tools/code_search.py --verify-env` | ABI pin check (exact versions, never auto-installs) | `ENV CHECK OK`, exit 0 | drift → exit 1 with fix hint |
+| `python .hermes/tools/diff_engine.py --file F --patch P` | Atomic SEARCH/REPLACE | `OK: patched F`, exit 0 | missing/ambiguous SEARCH → `ValueError`, exit 1, target untouched |
+| `python scripts/update.py [--dry-run]` (+ `update.sh` / `update.ps1`) | 5-step atomic self-update (Appendix E) | `Asha is already up to date.` / updated, exit 0 | dirty tree, divergence, red gate → exit 1 (rollback) |
+| `bash scripts/bootstrap.sh` / `powershell -File scripts/bootstrap.ps1` | One-shot toolchain bootstrap (Appendix C) | all gates green, exit 0 | any step red → exit 1 (fail-closed) |
+| `bash scripts/uninstall.sh` / `powershell -File scripts/uninstall.ps1` | Zero-bleed teardown (Appendix D) | exit 0 | residue found → nonzero |
+
+`check_runner.py` and `evidence.py` are libraries — they have no CLI;
+`control.py` calls them.
+
+## 11. Repository Layout
+
+```text
+hermes-disciplined-harness/
+├── .hermes/
+│   ├── venv/                      # dev venv (git-ignored)
+│   └── tools/
+│       ├── project_map.py       # live project orientation (orient)
+│       ├── scope_resolver.py      # S0-S4 scope classification
+│       ├── check_runner.py        # isolated check execution
+│       ├── evidence.py            # sealing, tree binding, verification
+│       ├── code_search.py         # AST perception / trace
+│       └── diff_engine.py         # atomic SEARCH/REPLACE
+├── .jspace/
+│   ├── control.py                 # ledger + gates + ship authorization
+│   ├── control.json               # runtime ledger (git-ignored)
+│   ├── evidence.json              # ship evidence (git-ignored)
+│   ├── dependencies.json          # self-update targets
+│   └── cache/                     # git-ignored
+├── SKILL.md                       # read-gate skill file (root)
+├── modules/self-monitoring.md     # default gate module
+├── skills/
+│   ├── pre-ship-quality-gate/SKILL.md
+│   └── asha-update/SKILL.md       # /asha update trigger
+├── scripts/                       # bootstrap, uninstall, update (sh/ps1/py)
+├── tests/                         # 45 regression tests (see §14)
+├── benchmarks/                    # measured benchmark runner + results
+├── ruff.toml                      # centralized lint exceptions
+├── mypy.ini                       # mypy_path for cross-module imports
+└── .gitignore
+```
+
+## 12. Failure / Exit Semantics
+
+```text
+exit 0 = requested gate completed successfully
+exit 1 = gate refused / verification failed
+exit 2 = argparse usage error (bad flags/choices; stock argparse behavior)
+```
+
+Refusal reasons are always printed to stderr with their exact cause
+(`TRANSPORT GATE: …`, `CONTROL ERROR: …`, `SHIP GATE REFUSED: …`,
+`GATE SHIP: FAIL -- checks failed: …`, `SCOPE ERROR: …`).
+
+Unexpected internal failures must never be converted into false
+authorization: any unhandled exception exits nonzero, and evidence is only
+written by the deliberate sealing step — a crash before sealing leaves the
+previous artifact (verified or refused) in place, never a new "pass".
+
+## 13. What Asha Does NOT Guarantee
+
+- AST impact tracing is **not** perfect whole-program semantic analysis.
+- Dynamic imports, `getattr`, registries, and reflection can cause
+  uncertainty; Asha responds by elevating scope, never by guessing.
+- S1 requires **proven** zero downstream impact; uncertainty must not
+  produce S1.
+- Asha does not prove business correctness.
+- Passing tests do not prove absence of all defects.
+- Evidence proves **what was checked and on which tree** — not that the
+  software is universally correct.
+- Project orientation is deterministic fact synthesis (configs, filesystem,
+  git history, lightweight AST patterns) — it does not semantically
+  understand the project, and entry points / generated files it reports are
+  candidates, not guarantees.
+
+## 14. Status / Verification
+
+Measured on the current working tree (Windows 11, CPython 3.11.16,
+`.hermes/venv`):
+
+| Gate | Result |
+| --- | --- |
+| `pytest tests/ -q` | **44 passed, 1 skipped** (skip = environment probe in `tests/test_code_search.py:116`) |
+| `ruff check .hermes/tools/ tests/` | **All checks passed!** |
+| `ruff check .` (full tree) | 19 known errors, **all inside the generated A/B playground `benchmarks/live_eval/asha_eval/`** (intentionally messy synthetic fixture; not shipped code) |
+| `mypy .hermes/tools/` | **Success: no issues found in 6 source files** (root `mypy.ini` sets `mypy_path = .hermes/tools`) |
+| `code_search.py --self-test` | PASSED |
+| `diff_engine.py --self-test` | PASSED |
+| Ship gate contract | `GATE SHIP: PASS` → exit 0 only after clean-tree scope resolution, checks, sealing and evidence verification (§5) |
+
+Push is performed only after the ship gate exits 0 (§12/§13); verify the
+current remote with `git ls-remote origin main`.
 
 ---
 
-## 1. Architectural Blueprint
+## Appendix A — Tooling & Environment Catalog (Reproducibility Matrix)
 
-### J-Space Governance (`.jspace/control.py`)
+### Python runtime (measured)
 
-A stdlib-only cooperative controller that keeps the working session in a
-durable, human-readable ledger (`.jspace/control.json` + `.jspace/CONTROL.md`).
-
-- **Mandatory `--transport <ssh|local>` gate (fail-closed).** Every invocation
-  must declare its execution transport. Omission prints
-  `TRANSPORT GATE: --transport <ssh|local> is MANDATORY` to stderr and exits
-  **1** *before any state is written* (zero ledger mutation on gate failure).
-- **Transport pinning.** The declared transport is recorded in the ledger.
-  A later invocation with a different transport is refused
-  (`Transport mismatch: ledger has 'local' but CLI passed 'ssh'`) — a session
-  cannot silently mix SSH and local execution.
-- **Ledger authority.** `control.json` is the single source of truth; command
-  order matters (`init` → `pulse`/`checkpoint`/`report` → `check --stage ship`),
-  evidence is content-addressed (SHA-256), and cross-phase gates (`check`,
-  `audit`) re-verify evidence hashes still match before passing.
-- **Zero daemons.** Pure file-based state; no ports, no background process.
-
-### Atomic Self-Update (fail-closed, `/asha update`)
-
-The harness updates itself atomically via `scripts/update.py` (wrappers:
-`scripts/update.sh` / `scripts/update.ps1`; skill: `skills/asha-update/`).
-Declared repositories live in `.jspace/dependencies.json` (self: origin/main,
-pinned; optional `submodules` list with per-repo `remote` / `branch` /
-`test_command`). Protocol — every boundary fail-closed:
-
-1. **Clean tree guard** — `git status --porcelain` must be empty; dirty ⇒
-   refuse (exit 1), never update over uncommitted work.
-2. **Fetch & inspect** — `git fetch <remote> <branch>`; no new commits ⇒
-   "Asha is already up to date." exit 0.
-3. **Fast-forward only** — `git merge --ff-only <remote>/<branch>`; diverged
-   history is refused, never merged.
-4. **Dependency & ABI audit** — `code_search.py --verify-env`, `ruff check .`,
-   `pytest tests/ -q`.
-5. **Rollback on gate failure** — any red gate ⇒ `git reset --hard HEAD@{1}`,
-   exit 1, exact failure reason reported.
-
-**Workflow:** ask the agent "update asha", "/asha update", or
-"update asha / dependencies". Use `--dry-run` first (fetch + report, no
-mutation). After a green update the operation is logged into
-`.jspace/control.json` via `control.py --transport <t> pulse --event tool
---label "asha-update: ..."`.
-
-### AST Perception (`.hermes/tools/code_search.py`)
-
-tree-sitter-based structural navigation instead of raw file reads:
-
-- `--outline <file>` → symbol declarations only (classes, defs, decorators,
-  line ranges, nesting), **no bodies**.
-- `--pattern <pat> --file <f>` → ast-grep AST pattern matches (line/col ranges
-  + snippets only).
-- `--trace <symbol> --dir <d>` → import / call / inherit impact map across a
-  tree, compact `{file, line, usage_type}` entries.
-- `--verify-env` → fail-closed dependency pin check (exact-version comparison,
-  exit 1 with a fix hint, **never auto-installs**).
-
-### Atomic In-situ Execution (`.hermes/tools/diff_engine.py`)
-
-Aider-style atomic SEARCH/REPLACE patching, local disk only:
-
-- SEARCH block must match the target **exactly** and **uniquely**; missing or
-  ambiguous blocks raise `ValueError` → CLI exit 1, target untouched.
-- **Atomic write**: patched content goes to a temp sibling, integrity-verified,
-  then `os.replace` — a crash between write and replace leaves the original
-  file intact (zero corruption window).
-- Rollback = the inverse SEARCH/REPLACE hunk; verified in tests and measured
-  below.
-
-### Operating Invariants
-
-1. No edit without `--transport` declared (gate exits 1).
-2. Ledger is the authority; every phase gate re-verifies evidence hashes.
-3. Patching is atomic-only — SEARCH/REPLACE or nothing; no partial writes.
-4. Tools are zero-daemon: no listening ports are ever spawned.
-
----
-
-## 2. Tooling & Environment Catalog (Reproducibility Matrix)
-
-Everything below was used to produce this repository and its measured numbers.
-
-### Python runtime
-
-| Component | Version (measured) |
-|---|---|
+| Component | Version |
+| --- | --- |
 | CPython interpreter | 3.11.16 (Windows, x86-64) |
 | venv location | `.hermes/venv/` (git-ignored) |
-| core lint/type/test | ruff 0.16.8 · mypy 2.3.1 · pytest 9.1.1 |
+| lint / type / test | ruff 0.16.8 · mypy 2.3.1 · pytest 9.1.1 |
 | vector memory stack | chromadb 1.5.9 · mem0ai 2.1.0 |
 
 ### Pinned ABI-critical parser matrix
 
 | Package | Pinned version |
-|---|---|
+| --- | --- |
 | `tree-sitter` | **0.21.3** |
 | `tree-sitter-languages` | **1.10.2** |
 | `ast-grep-py` | **0.45.3** |
 
 **Why the pins matter — the 2-argument constructor ABI hazard:**
-`tree-sitter` **0.24+** changed its core `Parser` C ABI: the constructor
-`Language.???`/`Parser()` bindings switched to a **2-argument calling
-convention** (language + options) and the internal C struct layout changed.
-`tree-sitter-languages==1.10.2` was compiled against the **0.21.x ABI**
-(`get_parser(lang)` → `Parser(language)` single-argument). Mixing a pinned
-parser wheel with a newer core (`>=0.24`) causes a **segfault or
-`TypeError: Parser.__init__() takes 1 positional argument but 2 were given`**
-at first parse — a silent, non-Pythonic crash. Version 0.21.3 + 1.10.2 +
-0.45.3 are verified together by `code_search.py --verify-env` (exact-string
-comparison; mismatch → exit 1). `ast-grep-py==0.45.3` additionally pins the
-parser ABI for `SgRoot(src, lang)` pattern matching. **Do not upgrade one
-without re-verifying all three.**
+`tree-sitter` **0.24+** changed its core `Parser` C ABI: the bindings
+switched to a 2-argument calling convention (language + options) and the
+internal C struct layout changed. `tree-sitter-languages==1.10.2` was
+compiled against the **0.21.x ABI** (`get_parser(lang)` → single-argument
+`Parser(language)`). Mixing a pinned parser wheel with a newer core
+(>=0.24) causes a segfault or
+`TypeError: Parser.__init__() takes 1 positional argument but 2 were given`
+at first parse. The three pins are verified together by
+`code_search.py --verify-env` (exact-string comparison; mismatch → exit 1).
+**Do not upgrade one without re-verifying all three.**
+
+### AST tool flags (`code_search.py`)
+
+| Flag | Output |
+| --- | --- |
+| `--outline <file>` | Symbol declarations only (classes, defs, decorators, line ranges, nesting) — no bodies |
+| `--pattern <pat> --file <f>` | ast-grep AST matches (line/col + snippets) |
+| `--trace <symbol> --dir <d>` | Import / call / inherit usage map, compact `{file, line, usage_type}` entries |
+| `--verify-env` | Fail-closed ABI pin check (never auto-installs) |
+| `--self-test` | Built-in end-to-end self-test |
 
 ### MCP server declarations (stdio only)
 
 | Server | Package | Transport |
-|---|---|---|
+| --- | --- | --- |
 | `sequential_thinking` | `npx -y @modelcontextprotocol/server-sequential-thinking` | `stdio` |
-| `remote_linux` | `@modelcontextprotocol/server-ssh` (SSH MCP) | `stdio` |
+| `remote_linux` | `@modelcontextprotocol/server-ssh` | `stdio` |
 
-Both run strictly over `stdio` — no TCP ports, no HTTP listeners, matching the
-zero-daemon invariant. `remote_linux` is the *only* sanctioned SSH pathway;
-when used, every `control.py` invocation on the remote side must declare
-`--transport ssh` (see §1).
+Both run strictly over `stdio` — no TCP ports, no HTTP listeners, matching
+the zero-daemon invariant (measured: 0 new listeners spawned, §Appendix B).
 
-### In-situ local utilities
+### Operating policy (target-agnostic)
 
-| Tool | Role |
-|---|---|
-| `.hermes/tools/code_search.py` | AST outline / pattern / impact trace |
-| `.hermes/tools/diff_engine.py` | Atomic SEARCH/REPLACE patch |
-| `.jspace/control.py` | Session ledger + transport gate |
-| `skills/pre-ship-quality-gate/SKILL.md` | Fail-closed pre-ship audit protocol |
+1. Every `control.py` invocation declares `--transport <ssh|local>`;
+   omission or unknown value → exit 1 with zero state written; a session's
+   transport is ledger-pinned and mixing is refused.
+2. `.jspace/control.json` is the single source of truth for goals,
+   checkpoints (SHA-256 receipts), and open questions (a `dict` keyed by
+   qid). Never hand-edit it; it is git-ignored — the policy ships, the
+   session state does not.
+3. All file edits go through `diff_engine.py` (exact, unique match →
+   temp + verify → `os.replace`); no partial application, ever.
+4. Before task closure: scoped ruff + pytest + mypy for the resolved scope,
+   then `check --stage ship` must print `GATE SHIP: PASS`.
 
-### Repository layout
+## Appendix B — Empirical Benchmarks
 
-```
-asha-harness/
-├── .hermes/
-│   ├── venv/                  # our active dev venv (git-ignored; fresh boots use .venv)
-│   └── tools/
-│       ├── code_search.py     # AST perception
-│       └── diff_engine.py     # atomic patching
-├── .jspace/
-│   ├── control.py             # governance + transport gate
-│   ├── control.json           # runtime ledger (git-ignored)
-│   └── cache/                 # git-ignored
-├── skills/
-│   ├── pre-ship-quality-gate/SKILL.md
-│   └── asha-update/SKILL.md     # /asha update trigger
-├── scripts/
-│   ├── bootstrap.sh           # one-shot bootstrap (Linux/macOS)
-│   ├── bootstrap.ps1          # one-shot bootstrap (Windows)
-│   ├── uninstall.sh           # zero-bleed teardown (Linux/macOS)
-│   ├── uninstall.ps1          # zero-bleed teardown (Windows)
-│   ├── update.sh              # atomic self-update (Linux/macOS)
-│   ├── update.ps1             # atomic self-update (Windows)
-│   └── update.py              # fail-closed 5-step update protocol
-├── .jspace/dependencies.json  # update target declarations
-├── tests/                     # 15 regression tests (14 pass, 1 env-probe skip)
-├── benchmarks/
-│   ├── bench.py               # empirical benchmark runner (re-runnable)
-│   └── results.json           # machine-measured numbers for this README
-├── ruff.toml                  # centralized lint exceptions
-└── .gitignore
-```
+**Environment (Windows 11, git-bash/MSYS, x86-64):** CPython 3.11.16, ruff
+0.16.8, mypy 2.3.1, pytest 9.1.1, tree-sitter 0.21.3, tree-sitter-languages
+1.10.2, ast-grep-py 0.45.3. Subject: `.jspace/control.py` (767 lines /
+3,087 tokens — a real shipped file). Rerun:
+`.hermes/venv/python benchmarks/bench.py --json`.
 
----
+| Benchmark | Metric | Measured value |
+| --- | --- | --- |
+| AST outline vs raw read | Raw source | 767 lines · 3,087 tokens |
+| | AST outline | 39 lines · 117 tokens |
+| | **Token reduction** | **96.21 %** |
+| | Parse latency (median, n=5) | **156.79 ms** |
+| Atomic diff safety | Valid patch apply (median, n=5) | **109.96 ms** |
+| | Rollback via inverse hunk (median, n=5) | **109.27 ms** |
+| | Colliding/mismatched patch | **exit 1** · 115.19 ms · **zero corruption** |
+| Fail-closed transport gate | `init` without `--transport` | **exit 1**, no ledger written |
+| | `init --transport local` | **exit 0**, ledger pinned |
+| | Mixed transport | **exit 1** (`Transport mismatch`) |
+| Zero-daemon verification | Listening TCP ports before → after | 38 → 38 (**0 new listeners**) |
 
-## 3. Cross-Platform Bootstrap (OS-Agnostic)
+### Token Efficiency Matrix (empirical reductions)
 
-Recreates the identical `.venv` + toolchain from scratch. Requires only a
-Python ≥ 3.10 with `venv` and a shell.
+| Scenario | Raw input (tokens) | Asha pipeline (tokens) | Reduction |
+| --- | --- | --- | --- |
+| File exploration (`control.py` outline) | 3,087 | 117 | **96.21 %** |
+| Ambiguous method patching (Trial A) | 4,722 | 225 | **95.23 %** |
+| Signature refactor + scope tracing (Trial B) | 4,738 | 65 | **98.62 %** |
+| Regression detection (Trial C) | 2,371 | 131 | **94.47 %** |
 
-**One-shot bootstrap:**
+Token footprint counts everything the pipeline reads from or writes to
+stdin/stdout — no hidden LLM traffic.
+
+### Wall-Clock Trade-Off (measured, honest)
+
+Live A/B benchmark (`benchmarks/live_eval/AB.py`, cold-run reproducible):
+
+| Trial | Vanilla | Asha | Overhead |
+| --- | --- | --- | --- |
+| A — ambiguous patch | 0.91 ms | 277.43 ms | ~300× |
+| B — signature + scope | 8.92 ms | 5,977.42 ms | **~670×** |
+| C — regressive feature | 9.95 ms | 1,181.32 ms | ~120× |
+
+| Layer | What it costs | Who pays it |
+| --- | --- | --- |
+| **Local wall-clock** | Cold venv spawn + tree-sitter parse + multi-stage verification: **~100×–670× more local compute** (ms → up to ~6 s/trial) | The harness toolchain, on the machine |
+| **End-to-end turnaround** | Model inference + network round-trips scale with context volume; **>95 %** context reduction shrinks tokens-per-step and payloads | The agent runtime, over the wire |
+
+Net effect: cheap local silicon buys a drastically smaller context window —
+total agent round-trip ends up equal or faster, while the destructive
+regressions Vanilla ships in every trial are eliminated.
+
+### Asha Impact (dimensions beyond tokens)
+
+| Dimension | Before (raw) | After (Asha) |
+| --- | --- | --- |
+| Atomic integrity | Whole-file overwrite: one bad write corrupts the target | SEARCH/REPLACE → temp verify → `os.replace`; instant rollback (109.27 ms) |
+| Cross-service awareness | Blind edits; downstream callers break silently | `--trace` usage maps catch interface breakage before it lands |
+| Transport discipline | Implicit; SSH/local silently mixed | Mandatory `--transport`, ledger-pinned, omission exits 1 pre-write |
+| Gate discipline | Warnings tolerated | Scope-matched checks must all pass before evidence is sealed |
+
+## Appendix C — Cross-Platform Bootstrap
+
+Requires only Python >= 3.10 with `venv` and a shell.
 
 ```bash
-bash scripts/bootstrap.sh                                     # Linux / macOS
+bash scripts/bootstrap.sh                                       # Linux / macOS
 powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1   # Windows
 ```
 
-The bootstrap builds `.venv`, installs the pinned ABI matrix
-(`tree-sitter==0.21.3`, `tree-sitter-languages==1.10.2`, `ast-grep-py==0.45.3`,
-`ruff`, `mypy`, `pytest`, `chromadb`, `mem0ai`), asserts
-`code_search.py --verify-env`, runs both tool self-tests, registers the two
-MCP servers over `stdio` (skip with `ASHA_SKIP_MCP=1` / `-SkipMcp`), and ends
-with `ruff` + `mypy` + `pytest` — fail-closed on every step. Idempotent.
+The bootstrap builds the venv, installs the pinned ABI matrix
+(`tree-sitter==0.21.3`, `tree-sitter-languages==1.10.2`,
+`ast-grep-py==0.45.3`, `ruff`, `mypy`, `pytest`, `chromadb`, `mem0ai`),
+asserts `code_search.py --verify-env`, runs both tool self-tests, registers
+the two MCP servers over `stdio` (skip with `ASHA_SKIP_MCP=1` / `-SkipMcp`),
+and ends with ruff + mypy + pytest — fail-closed on every step. Idempotent.
 
-Manual equivalent (for when no shell is available):
-
-### Linux / macOS (bash)
+Manual equivalent (Linux/macOS):
 
 ```bash
-git clone <your-repo-url> asha-harness
-cd asha-harness
+git clone <your-repo-url> hermes-disciplined-harness
+cd hermes-disciplined-harness
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
@@ -225,11 +642,11 @@ python .hermes/tools/diff_engine.py --self-test
 python -m pytest tests/ -q
 ```
 
-### Windows (PowerShell)
+Windows (PowerShell):
 
 ```powershell
-git clone <your-repo-url> asha-harness
-cd asha-harness
+git clone <your-repo-url> hermes-disciplined-harness
+cd hermes-disciplined-harness
 py -3 -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
@@ -240,11 +657,11 @@ python .hermes\tools\diff_engine.py --self-test
 python -m pytest tests\ -q
 ```
 
-### Windows (CMD)
+Windows (CMD):
 
 ```cmd
-git clone <your-repo-url> asha-harness
-cd asha-harness
+git clone <your-repo-url> hermes-disciplined-harness
+cd hermes-disciplined-harness
 py -3 -m venv .venv
 .venv\Scripts\python.exe -m pip install --upgrade pip
 .venv\Scripts\python.exe -m pip install "tree-sitter==0.21.3" "tree-sitter-languages==1.10.2" "ast-grep-py==0.45.3" "ruff" "mypy" "pytest" "chromadb" "mem0ai"
@@ -253,192 +670,52 @@ py -3 -m venv .venv
 .venv\Scripts\python.exe -m pytest tests -q
 ```
 
-**Drift check:** after bootstrap, both platforms must pass all gates listed in
-§5. The venv path separator is the only platform difference; the toolchain
-itself is byte-identical.
-
----
-
-## 4. Empirical Benchmarks
-
-**Environment (Windows 11, git-bash/MSYS, x86-64):** CPython 3.11.16, ruff
-0.16.8, mypy 2.3.1, pytest 9.1.1, tree-sitter 0.21.3, tree-sitter-languages
-1.10.2, ast-grep-py 0.45.3. Benchmark subject: `.jspace/control.py`
-(767 lines / 3,087 tokens — a real, shipped file, not a synthetic fixture).
-Rerun anytime: `.hermes/venv/python benchmarks/bench.py --json`.
-
-| Benchmark | Metric | Measured value |
-|---|---|---|
-| **AST outline vs raw read** | Raw source | 767 lines · 3,087 tokens |
-| | AST outline | 39 lines · 117 tokens |
-| | **Token reduction** | **96.21 %** |
-| | Parse latency (median, n=5) | **156.79 ms** |
-| **Atomic diff safety** | Valid patch apply (median, n=5) | **109.96 ms** |
-| | Rollback via inverse hunk (median, n=5) | **109.27 ms** |
-| | Colliding/mismatched patch | **exit code 1** · 115.19 ms · **zero corruption** (bytes identical, no temp litter) |
-| **Fail-closed transport gate** | `init` without `--transport` | **exit code 1** · **no ledger written** |
-| | `init --transport local` | **exit code 0** · ledger pinned `transport: local` |
-| | Mixed transport (`ssh` on a `local` session) | **exit code 1** (`Transport mismatch`) |
-| **Zero-daemon verification** | Listening TCP ports before tool runs | 38 |
-| | Listening TCP ports after tool runs | 38 |
-| | New listeners spawned | **0** |
-
-Sanity: the 96.21 % token reduction is exactly the outline's job — 3,087
-tokens of bodies and strings collapse to 117 tokens of symbol declarations
-with line ranges, at 156.79 ms median parse on this machine. Both parse
-latencies are dominated by cold venv interpreter startup (the stdlib tools
-themselves run in low single-digit ms); `samples_ms` arrays are in
-`benchmarks/results.json` if you need the distribution.
-
-### Token Efficiency Matrix (empirical reductions)
-
-Every workflow collapses its context footprint by ~95% or more — measured
-values from `benchmarks/bench.py` (§ above) and `benchmarks/live_eval/AB.py`
-(cold-run reproducible, §8 method note):
-
-| Scenario | Raw input (tokens) | Asha pipeline (tokens) | Reduction |
-|---|---|---|---|
-| File exploration (`control.py` outline) | 3,087 | 117 | **96.21 %** |
-| Ambiguous method patching (Trial A) | 4,722 | 225 | **95.23 %** |
-| Signature refactor + blast radius (Trial B) | 4,738 | 65 | **98.62 %** |
-| Regression detection (Trial C) | 2,371 | 131 | **94.47 %** |
-
-Token footprint counts everything the pipeline reads from or writes to
-stdin/stdout — no hidden LLM traffic. The agent sees symbols + line ranges,
-never bodies.
-
-### The Wall-Clock Trade-Off (measured, honest)
-
-Asha-Harness does not come free. The live A/B benchmark
-(`benchmarks/live_eval/AB.py`, cold-run reproducible) measures the price:
-
-| Trial | Vanilla | Asha | Overhead |
-|---|---|---|---|
-| A — ambiguous patch | 0.91 ms | 277.43 ms | ~300× |
-| B — signature + blast radius | 8.92 ms | 5,977.42 ms | **~670×** |
-| C — regressive feature | 9.95 ms | 1,181.32 ms | ~120× |
-
-The overhead is deliberate and structural: every Asha step spawns a cold venv
-process (interpreter startup dominates), parses the tree-sitter AST, and runs
-multi-stage static verification (`trace_impact` → atomic SEARCH/REPLACE →
-mypy → gate). A single Trial B pass costs ~6 s — but that 6 s is what finds
-the hidden 5th–15th use sites, refuses to ship a broken signature, and keeps
-the deployment green.
-
-**The trade is milliseconds for certainty:** the ~670× wall-time overhead
-eliminates broken production deployments (Trial A/Vanilla corrupts the whole
-file; Trial B/Vanilla ships 5 broken references; Trial C/Vanilla marks a
-failing task done) and collapses a multi-thousand-token read footprint to
-65–225 tokens (95–98% reduction). Raw execution speed buys nothing when the
-output must be cut over to production.
-
-**Two distinct latencies, honestly separated:**
-
-| Layer | What it costs | Who pays it |
-|---|---|---|
-| **Local wall-clock** | Cold venv spawn + tree-sitter AST parse + multi-stage verification: **~100×–670× more local compute** (milliseconds → up to ~6 s per trial) | The harness toolchain, on the machine |
-| **End-to-end turnaround** | Model inference + network round-trips scale with prompt/context volume; cutting context by **>95 %** shrinks tokens-per-step and round-trip payloads | The agent runtime, over the wire |
-
-Net effect: the extra local milliseconds buy a drastically smaller context
-window, so total agent round-trip duration ends up **equal or faster** — while
-the destructive production regressions Vanilla ships in every trial are
-eliminated. You spend cheap silicon cycles to save expensive model and network
-cycles, and you no longer pay for broken deploys at all.
-
----
-
-## 5. Universal Target-Agnostic Operating Policy
-
-Applies to any repository or agent session using this harness — the tools are
-target-agnostic by design (they operate on files and ledgers, not one codebase).
-
-1. **Mandatory transport flag.** Every `control.py` invocation carries
-   `--transport <ssh|local>`. Omission or an unknown value ⇒ exit 1, no state
-   written. Remote (SSH) execution declares `ssh`; everything else `local`.
-   A session's transport is pinned in the ledger; mixing is refused.
-2. **J-Space ledger authority.** `.jspace/control.json` is the single source
-   of truth for goals, next actions, checkpoints (SHA-256 evidence receipts)
-   and reports. Never hand-edit it; use `control.py`. A checked-in ledger is
-   a contradiction (git-ignored); the *policy* ships, the *session state* does
-   not.
-3. **Atomic-only patching invariant.** All file edits go through
-   `diff_engine.py` SEARCH/REPLACE (exact, unique match → temp + verify →
-   `os.replace`). Any patch that cannot match exactly is rejected whole —
-   no partial application, no partial writes, ever.
-4. **Pre-ship quality gate (fail-closed).** Before commit/push:
-   `ruff check .` exit 0, `mypy .` exit 0, `pytest` green, and (when a session
-   is active) `control.py --transport <ssh|local> check --stage ship` must print
-   `GATE SHIP: PASS`. Any red gate ⇒ not shippable; fix and re-run.
-5. **Zero-daemon.** Tools spawn no servers, no listeners, no background
-   processes. Verify with `netstat`/`ss` (measurement: 0 new ports, §4).
-
----
-
-## 6. The Asha Impact: Before vs. After Benchmark
-
-What disciplined tooling buys you, using the actual measured numbers from §4:
-
-| Dimension | Before (raw) | After (Asha-Harness) | Impact |
-|---|---|---|---|
-| **Token & context reduction** | 3,087 tokens of raw file read | 117 tokens of AST outline | **96.21 % context reduction** — the agent reads symbol structure, not bodies |
-| | 4,722 tokens (Trial A patching) | 225 tokens | **95.23 %** — exact-target edits, no body dump |
-| | 4,738 tokens (Trial B refactor) | 65 tokens | **98.62 %** — trace-driven blast radius, compact use-site map |
-| | 2,371 tokens (Trial C regression) | 131 tokens | **94.47 %** — gate checks a sliver of context, not the module |
-| **Atomic integrity** | Whole-file overwrite risk; one bad write corrupts the target | SEARCH/REPLACE diff engine: exact unique match → temp verify → `os.replace` | Whole-file corruption eliminated; **instant rollback** (109.27 ms inverse hunk, §4) |
-| **Cross-service awareness** | Blind edits; downstream callers break silently after rename/signature change | `trace_impact` call-graph tracing (`import` / `call` / `inherit`) | Interface breakage caught **before** it reaches dependent code |
-| **Transport discipline** | Implicit execution context; SSH/local silently mixed | Mandatory `--transport <ssh|local>` fail-closed flag, ledger-pinned | Session cannot mix transports; omission exits 1 pre-write |
-| **Fail-closed gate** | Ship with warnings tolerated | Zero-warning requirement: `ruff` / `mypy` / `pytest` all exit 0 before closure | No known risk ships; every gate re-verified at the seam |
-
----
-
-## 7. Zero-Bleed Teardown
-
-Purge the harness — venv, caches, and registered MCP servers — leaving zero
-residue. The uninstaller is idempotent: re-running it is a no-op, and it never
-touches files outside the repo `.venv`/`.jspace` bounds or the two registered
-MCP server entries.
-
-**One-line uninstall:**
+## Appendix D — Zero-Bleed Teardown
 
 ```bash
-bash scripts/uninstall.sh              # Linux / macOS
+bash scripts/uninstall.sh                                      # Linux / macOS
 powershell -ExecutionPolicy Bypass -File scripts/uninstall.ps1   # Windows
 ```
 
-What it does:
+Removes, in order: the two MCP server registrations (`hermes mcp remove
+sequential_thinking`, `hermes mcp remove remote_linux` — skipped if absent,
+never touching shared servers), the isolated venv, `.jspace/cache/` and any
+stale `.jspace/lock`; then asserts zero lingering harness processes and zero
+new listening ports. Idempotent; exits 0 on success; never touches files
+outside the repo bounds.
 
-1. `hermes mcp remove sequential_thinking` and
-   `hermes mcp remove remote_linux` (their only registration is the one this
-   bootstrap created; if absent, removal is skipped — no shared servers are
-   touched).
-2. Deletes the isolated `.venv` virtual environment (venv size excluded via
-   `.gitignore`, culled here).
-3. Deletes `.jspace/cache/` and any stale `.jspace/lock`.
-4. Asserts zero lingering harness processes
-   (`pgrep -f 'hermes-disciplined-harness|asha-harness'` on POSIX,
-   `Get-CimInstance Win32_Process | Where CommandLine -match 'asha-harness'` on
-   Windows) and zero new listening ports (port snapshot before/after — the
-   harness spawns none, so the delta must be empty).
+## Appendix E — Atomic Self-Update (`/asha update`)
 
-`scripts/uninstall.sh` and `scripts/uninstall.ps1` are themselves
-self-tearing and exit 0 on success.
+Targets live in `.jspace/dependencies.json` (self: origin/main, pinned;
+optional `submodules` with per-repo `remote`/`branch`/`test_command`).
+Protocol — every boundary fail-closed:
 
----
+1. **Clean tree guard** — `git status --porcelain` must be empty; dirty ⇒
+   refuse (exit 1).
+2. **Fetch & inspect** — no new commits ⇒ `Asha is already up to date.`, exit 0.
+3. **Fast-forward only** — `git merge --ff-only`; divergence refused.
+4. **Dependency & ABI audit** — `code_search.py --verify-env`,
+   `ruff check .`, `pytest tests/ -q`.
+5. **Rollback on gate failure** — any red gate ⇒
+   `git reset --hard HEAD@{1}`, exit 1 with the exact reason.
 
-## 8. Agent Direct Self-Adoption Prompt
+Ask the agent "update asha" or "/asha update" (skill:
+`skills/asha-update/`). Use `--dry-run` first (inspect only, no mutation).
 
-> Copy this block verbatim into the system prompt of any agent that will work
-> in a repository governed by Asha-Harness.
+## Appendix F — Agent Direct Self-Adoption Prompt
+
+> Copy this block verbatim into the system prompt of any agent that will
+> work in a repository governed by Asha-Harness.
 
 ```text
-ASA-HARNESS DIRECTIVE (binding)
+ASHA-HARNESS DIRECTIVE (binding)
 
 1. DETECT: Before any work, determine whether Asha-Harness is active in the
    current repository — presence of .hermes/tools/code_search.py,
-   .hermes/tools/diff_engine.py, .jspace/control.py, and
-   skills/pre-ship-quality-gate/SKILL.md. If all four exist, proceed to (3).
+   .hermes/tools/diff_engine.py, .hermes/tools/scope_resolver.py,
+   .jspace/control.py, and SKILL.md. If all five exist, proceed to (3).
 2. BOOTSTRAP: If any are missing, trigger the bootstrap autonomously:
-   bash scripts/bootstrap.sh          # Linux / macOS
+   bash scripts/bootstrap.sh            # Linux / macOS
    powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1   # Windows
    The bootstrap must pass `code_search.py --verify-env` before any edit.
 3. BIND: All code edits MUST go through .hermes/tools/diff_engine.py
@@ -446,25 +723,11 @@ ASA-HARNESS DIRECTIVE (binding)
    .hermes/tools/code_search.py (--outline / --pattern / --trace). Raw
    in-place file mutation is forbidden.
 4. REFUSE: Any change that violates the transport locked in
-   .jspace/control.json. If the ledger declares transport: local, refuse all
-   SSH-mediated edits; if transport: ssh, refuse local-only edits on files
-   owned by the remote session. When no ledger exists yet, initialize one:
+   .jspace/control.json. When no ledger exists yet, initialize one:
    python .jspace/control.py --transport <ssh|local> init --goal <G> --next <N>.
-5. GATE: Before task closure run, in order: ruff check . (exit 0), mypy .
-   (exit 0), pytest tests/ (exit 0), and
-   python .jspace/control.py --transport <declared> check --stage ship.
-   Any red gate means the task is NOT closed.
-```
-
----
-
-## Verified gates (as produced)
-
-```
-ruff check .            → All checks passed!        (exit 0)
-mypy  .                 → Success: no issues found  (exit 0)
-pytest tests/ -q        → 14 passed, 1 skipped      (exit 0; skip = env-probe)
-code_search --self-test → PASSED
-diff_engine --self-test → PASSED
-benchmarks/bench.py     → all four benchmarks measured, results.json written
+5. GATE: Before task closure: resolve scope, run its checks
+   (ruff / pytest / mypy as scoped), then
+   python .jspace/control.py --transport <declared> check --stage ship
+   must print GATE SHIP: PASS. Any red gate means the task is NOT closed.
+   push != done; commit != ship authorization.
 ```

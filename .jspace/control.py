@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import time
@@ -481,6 +482,13 @@ def main(argv=None):
     p.add_argument('--count', type=int, default=None)
     p.add_argument('--label', default='')
 
+    p = sub.add_parser('orient')
+    p.add_argument('--mode', default='standard',
+                   choices=['quick', 'standard', 'deep'])
+    p.add_argument('--format', dest='fmt', default='json',
+                   choices=['json', 'markdown'])
+    p.add_argument('--no-cache', action='store_true')
+
     p = sub.add_parser('check')
     p.add_argument('--stage', required=True, choices=['work', 'ship'])
 
@@ -571,6 +579,21 @@ def main(argv=None):
     ctx = locked(root) if not ns.no_lock else contextlib.nullcontext()
 
     with ctx:
+        if ns.command == 'orient':
+            # Ledger-free read-only perception: delegates to project_map.py
+            # (facts + provenance). Transport still declared; no state write.
+            script = SKILL / '.hermes' / 'tools' / 'project_map.py'
+            argv = [sys.executable, str(script), '--' + ns.mode,
+                    '--format', ns.fmt, '--root', str(root)]
+            if ns.no_cache:
+                argv.append('--no-cache')
+            proc = subprocess.run(argv, capture_output=True, text=True,
+                                  timeout=300)
+            sys.stdout.write(proc.stdout)
+            sys.stderr.write(proc.stderr)
+            if proc.returncode != 0:
+                sys.exit(proc.returncode or 1)
+            return 0
         if ns.command == 'init':
             state = default_state(root, 'medium' if ns.level in ('media', 'medium') else ns.level)
             state['goal'] = ns.goal
