@@ -681,6 +681,17 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 # ----------------------------------------------------------------- score --
 
+def is_valid_run(record: dict[str, Any]) -> bool:
+    """A trajectory counts only when the runner finished the turn:
+    exit 0, no timeout, turn.completed present. Everything else is
+    marked invalid and excluded from primary results (STEP 1/2)."""
+    if record.get('exit_code') != 0 or record.get('timed_out'):
+        return False
+    types = [e.get('event_type')
+             for e in record.get('trajectory', {}).get('events', [])]
+    return 'turn.completed' in types
+
+
 def verify_workspace(workspace: Path, base: str) -> dict[str, Any]:
     """STEP 16: harness-side verification, measured separately from the
     agent's reasoning phase (reuse Asha's own engines)."""
@@ -711,6 +722,24 @@ def _score_one(run_path: Path, freeze: dict[str, Any],
                tasks: dict[str, dict], skip_verification: bool
                ) -> str:
     record = read_json(run_path)
+    if not is_valid_run(record):
+        types = [e.get('event_type')
+                 for e in record['trajectory']['events']]
+        record['invalid'] = {
+            'reason': 'runner_error_event (codex usage limit; '
+                      'reproduced verbatim: "You\'ve hit your usage '
+                      'limit. Upgrade to Plus ... Oct 22nd, 2026 ...")'
+            if 'error' in types else 'no_turn_completed',
+            'exit_code': record.get('exit_code'),
+            'timed_out': record.get('timed_out'),
+        }
+        record['metrics'] = {}
+        run_path.write_text(
+            json.dumps(record, indent=2, sort_keys=True),
+            encoding='utf-8')
+        return (f"INVALID {record['run_id']} {record['task_id']} "
+                f"{record['condition']} r{record['replicate']}: "
+                f"{record['invalid']['reason'].split(chr(58))[0]}")
     task = tasks[record['task_id']]
     events = record['trajectory']['events']
     # class labels for the irrelevant_tool_calls derivation
@@ -756,7 +785,7 @@ def cmd_score(args: argparse.Namespace) -> int:
 
 # ------------------------------------------------- blinded evaluation -----
 
-def cmd_blind(args: argparse.Namespace) -> int:
+def cmd_blind(args: argparse.Namespace | None = None) -> int:
     """STEP 12: anonymized judging packages. Condition labels and the
     private mapping never enter a judge package."""
     tasks = {t['id']: t for t in live_tasks()}
@@ -766,6 +795,8 @@ def cmd_blind(args: argparse.Namespace) -> int:
     judge_root.mkdir(parents=True, exist_ok=True)
     for run_path in sorted((LIVE / 'runs').glob('*/run.json')):
         record = read_json(run_path)
+        if record.get('invalid'):
+            continue  # invalid trajectories are never judged
         task = tasks[record['task_id']]
         workspace = run_path.parent / 'repo'
         diff = ''
@@ -789,10 +820,20 @@ def cmd_blind(args: argparse.Namespace) -> int:
                         + target.read_text(encoding='utf-8',
                                            errors='replace')[:8000])
             diff = diff_proc.stdout
+        # Blinding fix (blocking defect): the correctness package must
+        # not identify the condition. Memory shown to the agent lives in
+        # a sidecar consumed only by the memory-impact evaluator.
         mem_payload = None
         if record['condition'] == 'orient_mem0':
             mem_payload = read_json(
                 PAYLOADS / f"{record['task_id']}_memory.json")
+            memory_dir = judge_root / '_memory_context'
+            memory_dir.mkdir(parents=True, exist_ok=True)
+            (memory_dir / f"{record['run_id']}.json").write_text(
+                json.dumps({'anon_id': record['run_id'],
+                            'memory_context': mem_payload},
+                           indent=2, sort_keys=True),
+                encoding='utf-8')
         package = {
             'anon_id': record['run_id'],
             'task_description': task['task_description'],
@@ -813,7 +854,6 @@ def cmd_blind(args: argparse.Namespace) -> int:
                     encoding='utf-8', errors='replace')
                 if (run_path.parent / 'last_message.txt').exists()
                 else ''),
-            'memory_context_shown_to_agent': mem_payload,
             'questions_for_evaluator': {
                 'final': 'correct | partial | incorrect + short '
                          'evidence-based reason',
@@ -821,12 +861,6 @@ def cmd_blind(args: argparse.Namespace) -> int:
                      'expected source of truth? (yes/no + reason)',
                 'repeated_mistake': 'does the trajectory repeat any '
                      'known_failure_mode? (none | <mode>)',
-                'memory_impact': ('for each memory shown: retrieved_not_used '
-                                  '| retrieved_and_ignored | '
-                                  'retrieved_and_consumed | '
-                                  'retrieved_and_caused_wrong_direction | '
-                                  'retrieved_and_caused_wrong_edit'
-                                  ) if mem_payload else None,
             },
         }
         (judge_root / f"{record['run_id']}.json").write_text(
@@ -888,14 +922,79 @@ def aggregate(runs: list[dict], freeze: dict) -> dict[str, Any]:
         'mem0_analysis': {},
         'orient_analysis': {},
     }
+    # STEP 0/15: honest reconciliation from the frozen manifest
+    dataset = load_tasks()
+    valid_runs = [r for r in runs if not r.get('invalid')]
+    failed_runs = [r for r in runs if r.get('invalid')]
+    tasks_planned = len(dataset)
+    tasks_frozen = len(freeze['live_task_ids'])
+    recon = {
+        'planned_protocol': tasks_planned * 3 * 3,
+        'tasks_planned': tasks_planned,
+        'planned_frozen': tasks_frozen * 3 * 3,
+        'tasks_frozen': tasks_frozen,
+        'attempted': len(runs),
+        'valid': len(valid_runs),
+        'failed': len(failed_runs),
+        'excluded': tasks_planned * 3 * 3 - tasks_frozen * 3 * 3,
+        'excluded_reason': 'task-001 excluded at freeze (empty-tree '
+                           'base; whole-repository re-implementation is '
+                           'not a bounded task) -- proven from '
+                           '_freeze.json live_task_ids/excluded',
+        'task_set': freeze['task_set_version'],
+        'failure_cause': (
+            'codex usage limit (reproduced verbatim: '
+            '"You\'ve hit your usage limit. Upgrade to Plus ... '
+            'Oct 22nd, 2026"); 68 runs aborted with an error '
+            'event before/while working'),
+        'status': 'frozen task set = 8x3x3 = 72 (9th task excluded '
+                  'by design); runner quota exhausted during the '
+                  'baseline batch so valid trajectories exist ONLY '
+                  'for baseline -> A/B/C comparison unavailable',
+    }
+    out.update({
+        'planned_trajectories': recon['planned_protocol'],
+        'frozen_trajectories': recon['planned_frozen'],
+        'attempted_trajectories': recon['attempted'],
+        'valid_trajectories': recon['valid'],
+        'failed_trajectories': recon['failed'],
+        'excluded_trajectories': recon['excluded'],
+        'reconciliation': recon,
+        'invalid_runs': [
+            {'run_id': r['run_id'], 'task_id': r['task_id'],
+             'condition': r['condition'], 'replicate': r['replicate'],
+             'reason': (r.get('invalid') or {}).get('reason')}
+            for r in failed_runs],
+        'limitations': [
+            ('valid N is concentrated in baseline only; orient and '
+            'orient_mem0 cells have 0 valid trajectories (runner '
+            'quota) -- their cells are n/a, never zero'),
+            ('9 protocol trajectories never attempted: task-001 '
+            'excluded at freeze for empty-tree base'),
+            ('timestamps are harness arrival times, not model-'
+            'internal timings; event counts are primary'),
+        ],
+    })
     for condition in CONDITIONS:
-        group = [r for r in runs if r['condition'] == condition]
+        attempted_group = [r for r in runs
+                           if r['condition'] == condition]
+        group = [r for r in attempted_group
+                 if not r.get('invalid')]
+        if attempted_group:
+            out['per_condition'].setdefault(condition, {})
+            out['per_condition'][condition]['attempted'] = len(
+                attempted_group)
+            out['per_condition'][condition]['invalid'] = len(
+                attempted_group) - len(group)
         if not group:
+            if attempted_group:
+                out['per_condition'][condition]['trajectories'] = 0
             continue
         m = [r['metrics'] for r in group]
         ver = [x['verification'] for x in m if x.get('verification')]
         out['per_condition'][condition] = {
             'trajectories': len(group),
+            'valid': len(group),
             'timed_out': rate([bool(r.get('timed_out')) for r in group]),
             'final_correctness': rate([x.get('final_correct') for x in m]),
             'first_action_correctness': rate(
@@ -930,7 +1029,8 @@ def aggregate(runs: list[dict], freeze: dict) -> dict[str, Any]:
                 for level in ('S0', 'S1', 'S2', 'S3', 'S4')},
         }
     # STEP 13/14: memory analysis from condition C payloads + verdicts
-    c_runs = [r for r in runs if r['condition'] == 'orient_mem0']
+    c_runs = [r for r in valid_runs
+              if r['condition'] == 'orient_mem0']
     if c_runs:
         tasks = {t['id']: t for t in live_tasks()}
         retrieved_total = 0
@@ -979,7 +1079,7 @@ def aggregate(runs: list[dict], freeze: dict) -> dict[str, Any]:
                 cond: rate([
                     str((r.get('evaluation') or {}).get(
                         'repeated_mistake', 'none')).lower() != 'none'
-                    for r in runs if r['condition'] == cond
+                    for r in valid_runs if r['condition'] == cond
                     and tasks[r['task_id']].get('historical_lesson')])
                 for cond in ('orient', 'orient_mem0')
                 if any(r['condition'] == cond
@@ -1015,8 +1115,11 @@ def _fmt(value: Any) -> str:
     if value is None:
         return 'n/a'
     if isinstance(value, dict):
-        if value.get('value') is not None and 'k' in value:
-            return f"{value['k']} / {value['N']}"
+        if 'k' in value:
+            if value.get('N') in (None, 0):
+                return '0 valid (n/a)'
+            pct = round(100 * (value.get('value') or 0), 1)
+            return f"{value['k']} / {value['N']} ({pct}%)"
         if 'count' in value:
             return (f"n={value['count']} mean={value['mean']} "
                     f"med={value['median']} min={value['min']} "
@@ -1028,28 +1131,76 @@ def _fmt(value: Any) -> str:
 def render_report(aggregate_data: dict[str, Any],
                   judged: bool) -> str:
     per = aggregate_data['per_condition']
+    freeze = read_json(FREEZE)
+    recon = aggregate_data['reconciliation']
     evaluation_note = (
         'blinded verdicts merged' if judged
         else 'PENDING blinded evaluation')
+
+    def cell_count(cond: str, key: str) -> str:
+        return str(per.get(cond, {}).get(key, 0))
+
     lines = [
         '# Asha live agent benchmark -- ' + aggregate_data['run_id'],
         '',
-        '## Experiment',
+        '## 1. Experiment configuration',
         '',
-        (f"- tasks: {len(read_json(FREEZE)['live_task_ids'])} live "
-        f"(task-set {aggregate_data['task_set_version']}; "
-        'task-001 excluded: empty-tree base)'),
-        '- conditions: baseline | orient | orient_mem0',
-        (f"- replicates: {read_json(FREEZE)['replicates']} per "
-        'task x condition'),
-        f"- total trajectories: {aggregate_data['trajectory_count']}",
-        (f"- Asha commit: `{aggregate_data['asha_commit']}` "
+        (f"- Asha commit (frozen): `{aggregate_data['asha_commit']}` "
         f"(tree `{aggregate_data['asha_tree_hash'][:12]}`)"),
         (f"- model: {aggregate_data['model']} "
         f"({aggregate_data.get('runner')})"),
+        (f"- timeout: {freeze['timeout_s']}s, replicates: "
+         f"{freeze['replicates']} per task x condition"),
+        ('- prompts: byte-identical across conditions except the '
+         'injected ORIENT / MEMORY sections; no ground-truth leakage '
+         '(asserted by tests and by prompt_sha256 recording)'),
+        ('- event_time = harness arrival time (codex JSONL has no '
+         'authoritative timestamps); event-based metrics are primary'),
         f"- evaluation: {evaluation_note}",
         '',
-        '## Results',
+        ('## 2. Reconciliation: protocol '
+         f"{recon['planned_protocol']} vs frozen "
+         f"{recon['planned_frozen']} vs valid {recon['valid']}"),
+        '',
+        (f"- planned (protocol): {recon['planned_protocol']} = "
+         f"{recon['tasks_planned']} tasks x 3 conditions x 3 "
+         'replicates'),
+        (f"- planned (frozen manifest): {recon['planned_frozen']} = "
+         f"{recon['tasks_frozen']} live tasks, task-set "
+         f"{recon['task_set']}"),
+        (f"- excluded at freeze: {recon['excluded']} = task-001 x 9 "
+        '-- proven from _freeze.json: ' + recon['excluded_reason']),
+        f"- attempted: {recon['attempted']}",
+        f"- valid: {recon['valid']}",
+        f"- failed: {recon['failed']} -- " + recon['failure_cause'],
+        ("- reconciliation_status: " + recon['status']),
+        '',
+        '## 3. Dataset',
+        '',
+        (f"- {recon['tasks_frozen']} live historical tasks from "
+         f"task-set {recon['task_set']} (one repository, own history)"),
+        ('- ground truth: merged patch / git history / gate status '
+         "at merge time / maintainer annotation -- never the "
+         "agent's own result"),
+        '',
+        '## 4. Conditions',
+        '',
+        '| Condition | Injected context | Attempted | Invalid | Valid |',
+        '| --- | --- | --- | --- | --- |',
+        ('| baseline | task + tools only | '
+         + cell_count('baseline', 'attempted') + ' | '
+         + cell_count('baseline', 'invalid') + ' | '
+         + cell_count('baseline', 'trajectories') + ' |'),
+        ('| +ORIENT | + orient --standard payload | '
+         + cell_count('orient', 'attempted') + ' | '
+         + cell_count('orient', 'invalid') + ' | '
+         + cell_count('orient', 'trajectories') + ' |'),
+        ('| +ORIENT+MEM0 | + advisory memory context | '
+         + cell_count('orient_mem0', 'attempted') + ' | '
+         + cell_count('orient_mem0', 'invalid') + ' | '
+         + cell_count('orient_mem0', 'trajectories') + ' |'),
+        '',
+        '## 5. Final correctness and condition comparison',
         '',
         '| Metric | Baseline | +ORIENT | +ORIENT+MEM0 |',
         '| --- | --- | --- | --- |',
@@ -1092,8 +1243,31 @@ def render_report(aggregate_data: dict[str, Any],
             for cond in CONDITIONS]
         lines.append(f'| {cls} | ' + ' | '.join(cells) + ' |')
 
+    lines += ['', '## 6. ORIENT results', '']
+    for cond in CONDITIONS:
+        block = per.get(cond) or {}
+        valid_n = block.get('trajectories', 0)
+        if not valid_n:
+            lines.append(
+                f'- {cond}: 0 valid trajectories -- all '
+                f"{block.get('attempted', 0)} attempts failed at the "
+                'runner level; every ORIENT metric n/a (never zero)')
+            continue
+        lines.append(
+            f'- {cond} (N={valid_n}): first-action correct='
+            f"{_fmt(block.get('first_action_correctness'))}; "
+            'source-of-truth divergence='
+            f"{_fmt(block.get('source_of_truth_divergence'))}; "
+            'time-to-correct events='
+            f"{_fmt(block.get('events_to_correct_hypothesis'))}; "
+            'time-to-correct ms='
+            f"{_fmt(block.get('time_to_first_relevant_file_ms'))}; "
+            'recovery: count total='
+            f"{block.get('recovery_count_total')}, tool calls="
+            f"{_fmt(block.get('recovery_tool_calls'))}")
+
     mem = aggregate_data.get('mem0_analysis') or {}
-    lines += ['', '## Mem0 analysis (condition C)', '']
+    lines += ['', '## 7. Mem0 results (condition C)', '']
     if mem:
         for key in ('retrieved_total', 'useful_memories',
                     'irrelevant_memories', 'stale_memories',
@@ -1106,10 +1280,52 @@ def render_report(aggregate_data: dict[str, Any],
                      + str(mem.get(
                          'baseline_distractor_exclusion_visible')))
     else:
-        lines.append('- n/a (no condition-C runs)')
+        lines.append('- 0 valid condition-C trajectories: retrieval '
+                     'payloads exist in _payloads/*_memory.json but '
+                     'used/useful/harmful behavioral rates are n/a')
 
-    lines += ['', '## Scope (reported separately from behavior, STEP 17)',
-              '']
+    lines += ['', '## 8. Context pollution', '']
+    if mem:
+        blob = json.dumps(mem.get('pollution_outcomes'),
+                          sort_keys=True)
+        lines.append(f'- pollution outcomes: `{blob}`')
+        lines.append('- retrieved != used; used != useful; useful != '
+                     'causally responsible -- outcomes above come from '
+                     'the blinded evaluator, not from retrieval counts')
+    else:
+        lines.append('- n/a (no valid condition-C trajectories); the '
+                     'tool-layer 3 / 9 distractor-exclusion result '
+                     'remains visible as retrieval behavior only')
+    lines += ['', '## 9. Recovery cost', '']
+    for cond in CONDITIONS:
+        block = per.get(cond) or {}
+        if block.get('trajectories'):
+            lines.append(
+                f"- {cond}: recovery count total="
+                f"{block.get('recovery_count_total')}; tool calls="
+                f"{_fmt(block.get('recovery_tool_calls'))}; wasted "
+                f"reads total={block.get('wasted_reads_total')} "
+                '(self-correction never scores like a right first '
+                'decision)')
+        else:
+            lines.append(f'- {cond}: n/a (0 valid trajectories)')
+
+    lines += ['', ('## 10. Verification cost (harness-side, separate '
+              'from agent behavior)'), '']
+    for cond in CONDITIONS:
+        block = per.get(cond) or {}
+        if block.get('trajectories'):
+            lines.append(
+                f"- {cond}: verification ms="
+                f"{_fmt(block.get('verification_time_ms'))}; checks="
+                f"{_fmt(block.get('checks_executed'))}; failed total="
+                f"{block.get('failed_checks_total')} -- lower cost is "
+                'not automatically better')
+        else:
+            lines.append(f'- {cond}: n/a (0 valid trajectories)')
+
+    lines += ['', ('Scope (deterministic analysis, reported separately '
+              'from reasoning -- STEP 17)'), '']
     for cond in CONDITIONS:
         block = per.get(cond, {})
         if block:
@@ -1117,49 +1333,73 @@ def render_report(aggregate_data: dict[str, Any],
                          f"`{json.dumps(block.get('scope_distribution'))}` "
                          '| agent reasoning metrics above')
 
-    lines += ['', '## Interpretation', '', '### Observed', '']
-    for cond in CONDITIONS:
-        block = per.get(cond, {})
-        if not block:
-            continue
-        lines.append(
-            f"- {cond} (n={block['trajectories']}): final_correct="
-            f"{_fmt(block['final_correctness'])}; first-action="
-            f"{_fmt(block['first_action_correctness'])}; divergence="
-            f"{_fmt(block['source_of_truth_divergence'])}; wasted "
-            f"reads total={block['wasted_reads_total']}")
-    if not judged:
-        lines.append('- final correctness cells are pending blinded '
-                     'evaluation (never zero-filled)')
-    lines += ['', '### Interpretation (non-causal)', '',
-              ('- Counts and distributions only; single model, single '
-              'repository, n per cell as listed. No causal claim about '
-              'Asha improving agents is made beyond "on this sample, '
-              'condition X differed from condition Y by ...".'),
-              ('- Verifier numbers reflect the harness-side check replay '
-              'at each workspace, not the agent\'s own confidence.'),
-              '']
-
-    lines += ['## Limitations', '',
-              ('- Sample size: trajectories per cell as listed; '
-              'task-001 excluded (empty-tree base).'),
+    lines += ['', '## 11. Limitations', '',
+              ('- Missing data: ' + str(recon['failed']) + ' / '
+               + str(recon['attempted']) + ' attempted trajectories '
+               'invalid (runner quota); ' + str(recon['excluded'])
+               + ' protocol trajectories never attempted (task-001 '
+               'excluded at freeze).'),
+              ('- Sample size: valid N per cell = '
+               + str(recon['valid']) + ' total, concentrated in '
+               'baseline over 2 tasks; +ORIENT and +ORIENT+MEM0 have '
+               '0 valid trajectories.'),
               ('- Model dependence: one pinned model '
-              f"({aggregate_data['model']}); results are not "
+               f"({aggregate_data['model']}); results are not "
               'model-general.'),
               ('- Repository dependence: single repository (Asha itself); '
               'task-selection bias toward tasks with replayable ground '
               'truth.'),
-              ('- Run variance: 3 replicates only; distributions '
-              'reported, means alone prove nothing.'),
-              ('- Blinding: evaluator packages carry no condition labels; '
-              'behavioral traces inside a diff could still hint at '
-              'condition (imperfect blinding).'),
+              ('- Run variance: distributions reported, means alone '
+              'prove nothing.'),
+              ('- Timestamp semantics: event_time is harness arrival '
+              'time; codex JSONL carries no authoritative timestamps, '
+              'so ms values are labeled latency, event counts are '
+              'primary.'),
+              ('- Blinding: evaluator packages carry no condition '
+              'labels or filenames; behavioral traces inside a diff '
+              'could still hint at condition (imperfect blinding).'),
               ('- Agent-side test execution unavailable inside the '
               'sandbox (no network/venv): correctness is judged by the '
               'blinded evaluator plus harness-side verification.'),
-              ('- Classification rules (first-action / wasted reads) are '
-              'stated annotation rules over ground truth, not '
+              ('- Classification rules (first-action / wasted reads) '
+              'are stated annotation rules over ground truth, not '
               'ground truth themselves.'),
+              '']
+
+    lines += ['## 12. Observed facts', '']
+    for cond in CONDITIONS:
+        block = per.get(cond, {})
+        if not block:
+            continue
+        if not block.get('trajectories'):
+            lines.append(
+                f"- {cond}: 0 valid / {block.get('attempted', 0)} "
+                'attempted -- no behavioral observation exists')
+            continue
+        lines.append(
+            f"- {cond} (valid n={block['trajectories']}): "
+            f"final_correct={_fmt(block['final_correctness'])}; "
+            f"first-action={_fmt(block['first_action_correctness'])}; "
+            f"divergence={_fmt(block['source_of_truth_divergence'])}; "
+            f"wasted reads total={block['wasted_reads_total']}")
+    lines.append(f"- runner: {recon['failed']} failures, cause: "
+                 + recon['failure_cause'])
+    if not judged:
+        lines.append('- final correctness cells pending blinded '
+                     'evaluation (never zero-filled)')
+
+    lines += ['', '## 13. Interpretation (non-causal)', '',
+              ('- Counts and distributions only; single model, single '
+               'repository, n per cell as listed. No causal claim about '
+               'Asha improving agents is made.'),
+              ('- On this frozen run the experiment CANNOT answer '
+               'whether ORIENT or MEM0 help: both cells have 0 valid '
+               'trajectories. The only supportable statements are '
+               'about the baseline-4 sample and about runner '
+               'capacity.'),
+              ('- Verifier numbers reflect the harness-side check '
+               'replay at each workspace, not the agent\'s own '
+               'confidence.'),
               '']
     return '\n'.join(lines)
 
@@ -1171,10 +1411,11 @@ def cmd_report(args: argparse.Namespace) -> int:
     if not runs:
         print('LIVE ERROR: no runs', file=sys.stderr)
         return 1
-    judged = sum(1 for r in runs if r.get('evaluation'))
+    valid_runs = [r for r in runs if not r.get('invalid')]
+    judged = sum(1 for r in valid_runs if r.get('evaluation'))
     aggregate_data = aggregate(runs, freeze)
     aggregate_data['judged_runs'] = judged
-    aggregate_data['judged_total'] = len(runs)
+    aggregate_data['judged_total'] = len(valid_runs)
     base = LIVE / aggregate_data['run_id']
     base.with_suffix('.json').write_text(
         json.dumps(aggregate_data, indent=2, sort_keys=True),

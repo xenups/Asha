@@ -219,6 +219,79 @@ def test_normalize_events(tmp_path: Path) -> None:
     assert events[2]["tool_arguments"] == "cat src/a.py"
 
 
+# ---- 10b. validity marking: partial/failed runs never count ---------------
+
+def test_is_valid_run_rules() -> None:
+    def make(**over):
+        base = {"exit_code": 0, "timed_out": False,
+                "trajectory": {"events": [
+                    {"event_type": "thread.started"},
+                    {"event_type": "turn.completed"}]}}
+        base.update(over)
+        return base
+
+    assert run_live.is_valid_run(make()) is True
+    assert run_live.is_valid_run(make(exit_code=1)) is False
+    assert run_live.is_valid_run(make(timed_out=True)) is False
+    broken = make()
+    broken["trajectory"]["events"] = [
+        {"event_type": "thread.started"},
+        {"event_type": "error"},
+        {"event_type": "turn.failed"}]
+    assert run_live.is_valid_run(broken) is False
+
+
+# ---- 10c. blinding fix: correctness package is condition-neutral ---------
+
+def test_blind_package_condition_neutral(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    live_root = tmp_path / "live"
+    run_dir = live_root / "runs" / "anon9"
+    run_dir.mkdir(parents=True)
+    payloads = tmp_path / "payloads"
+    payloads.mkdir()
+    (payloads / "task-002_memory.json").write_text(
+        json.dumps({"retrieved": [{"id": "m1"}]}), encoding="utf-8")
+    monkeypatch.setattr(run_live, "LIVE", live_root)
+    monkeypatch.setattr(run_live, "PAYLOADS", payloads)
+
+    (run_dir / "run.json").write_text(json.dumps({
+        "run_id": "anon9", "task_id": "task-002",
+        "condition": "orient_mem0", "replicate": 1,
+        "metrics": {"verification": {"failed_checks": []}},
+    }), encoding="utf-8")
+    # an invalid run must produce NO package at all
+    bad_dir = live_root / "runs" / "anon8"
+    bad_dir.mkdir(parents=True)
+    (bad_dir / "run.json").write_text(json.dumps({
+        "run_id": "anon8", "task_id": "task-002",
+        "condition": "baseline", "replicate": 2,
+        "invalid": {"reason": "runner_error_event"},
+        "metrics": {},
+    }), encoding="utf-8")
+
+    rc = run_live.cmd_blind(None)
+    assert rc == 0
+    judge_root = live_root / "_judge"
+    packages = sorted(p.name for p in judge_root.glob("*.json"))
+    assert packages == ["anon9.json"], (
+        "filename must be the opaque run id only, and invalid runs "
+        "must not be judged")
+    package = json.loads(
+        (judge_root / "anon9.json").read_text(encoding="utf-8"))
+    assert "condition" not in package
+    assert "task_id" not in package
+    assert "memory_context_shown_to_agent" not in package
+    assert "memory_impact" not in str(package.get(
+        "questions_for_evaluator"))
+    # memory context lives only in the separate sidecar
+    sidecar = judge_root / "_memory_context" / "anon9.json"
+    assert sidecar.exists()
+    side = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert side["anon_id"] == "anon9"
+    assert side["memory_context"]["retrieved"][0]["id"] == "m1"
+
+
 # ---- 10. blinded verdict merging ------------------------------------------
 
 def test_apply_judgements_rules(tmp_path: Path,
