@@ -252,7 +252,7 @@ def test_mem0_probe_retrieval_and_precedence(tmp_path: Path) -> None:
     assert orient["stack"]["language"]["value"] == "python"
 
     task = {
-        "_root": str(repo),
+        "_root": repo,
         "id": "probe",
         "task_description": "fix manifest serialization schema drift",
         "historical_lesson": "manifest serialization previously required "
@@ -276,7 +276,55 @@ def test_mem0_probe_retrieval_and_precedence(tmp_path: Path) -> None:
     assert result["stale_marked"] is True
 
 
-# ---- 8. report formatting: counts + n/a, no fabricated numbers ------------
+# ---- 8b. store isolation: probes never leak across stores (regression) -----
+
+def test_mem0_probe_store_isolation(tmp_path: Path) -> None:
+    """Each probe must write ONLY to its own backend: the evaluation run
+    isolates one store per task precisely because shared stores confound
+    retrieval via top_k truncation over accumulated records."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "f@example.com")
+    _git(repo, "config", "user.name", "F")
+    (repo / ".gitignore").write_text(".jspace/\n", encoding="utf-8")
+    pkg = repo / "pkg"
+    pkg.mkdir()
+    (pkg / "main.py").write_text("X = 1\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base")
+
+    import project_map
+
+    orient = project_map.build(repo, "quick", use_cache=False)
+    task_a = {
+        "_root": repo,
+        "id": "a",
+        "task_description": "alpha task about manifest drift",
+        "historical_lesson": "alpha lesson about manifest serialization",
+        "control_conflict": {"fact_key": "stack.language",
+                             "fact_value": "javascript"},
+    }
+    task_b = dict(task_a, id="b",
+                  task_description="beta task about transport gates",
+                  historical_lesson="beta lesson about transport gates")
+
+    backend_a, backend_b = DictBackend(), DictBackend()
+    run_eval.mem0_probe(task_a, orient, "unrelated distractor lesson",
+                        backend_a)
+    run_eval.mem0_probe(task_b, orient, "another unrelated lesson",
+                        backend_b)
+
+    # 1 relevant lesson + 1 distractor + 1 control fact == 3, exactly
+    assert len(backend_a.store) == 3, "probe A wrote outside its backend"
+    assert len(backend_b.store) == 3, "probe B wrote outside its backend"
+    a_contents = " ".join(r["content"] for r in backend_a.store.values())
+    b_contents = " ".join(r["content"] for r in backend_b.store.values())
+    assert "alpha lesson" in a_contents and "beta lesson" not in a_contents
+    assert "beta lesson" in b_contents and "alpha lesson" not in b_contents
+
+
+# ---- 9. report formatting: counts + n/a, no fabricated numbers ------------
 
 def test_report_contains_counts_and_na() -> None:
     agg = run_eval.aggregate([_entry("match"), _entry("match"),

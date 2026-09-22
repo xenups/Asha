@@ -390,6 +390,12 @@ def render_report(base_id: str, task_sha: str, task_count: int,
          'pass.'),
         ('- Verification replay uses CURRENT tool binaries against each '
          "era's config, so drift between eras is measured too."),
+        ('- Check SELECTION follows the current tooling-detection policy, '
+         "not each era's historical gate; a replay failure can mean "
+         'policy/tool drift rather than a regression at merge time.'),
+        ('- ORIENT exposure counts directory-level visibility: root-level '
+         'files and directories without Python sources are not listed '
+         'by design.'),
         ('- Scope ground truth is a maintainer policy annotation '
          '(README section 4): it measures implementation conformance to '
          'the documented policy, not the validity of the policy '
@@ -466,7 +472,7 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"EVAL ERROR: checkout {sha} failed",
                           file=sys.stderr)
                     return 1
-                task['_root'] = str(clone)
+                task['_root'] = clone
                 base = task['base_commit'] or empty
                 entry: dict[str, Any] = {
                     'task_id': task['id'], 'condition': condition,
@@ -521,7 +527,10 @@ def main(argv: list[str] | None = None) -> int:
                 # MEM0 controlled experiment (condition C only)
                 if condition == 'orient_mem0':
                     assert orient is not None  # set by the condition above
-                    backend_resolved = memory.resolve_backend(clone)
+                    # fresh store per task: shared stores confound retrieval
+                    # with top_k truncation across accumulated records
+                    store_root = work / 'mem0_stores' / task['id']
+                    backend_resolved = memory.resolve_backend(store_root)
                     if not backend_resolved.available:
                         entry['mem0'] = {
                             'available': False,
