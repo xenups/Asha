@@ -35,6 +35,31 @@ durable, human-readable ledger (`.jspace/control.json` + `.jspace/CONTROL.md`).
   `audit`) re-verify evidence hashes still match before passing.
 - **Zero daemons.** Pure file-based state; no ports, no background process.
 
+### Atomic Self-Update (fail-closed, `/asha update`)
+
+The harness updates itself atomically via `scripts/update.py` (wrappers:
+`scripts/update.sh` / `scripts/update.ps1`; skill: `skills/asha-update/`).
+Declared repositories live in `.jspace/dependencies.json` (self: origin/main,
+pinned; optional `submodules` list with per-repo `remote` / `branch` /
+`test_command`). Protocol — every boundary fail-closed:
+
+1. **Clean tree guard** — `git status --porcelain` must be empty; dirty ⇒
+   refuse (exit 1), never update over uncommitted work.
+2. **Fetch & inspect** — `git fetch <remote> <branch>`; no new commits ⇒
+   "Asha is already up to date." exit 0.
+3. **Fast-forward only** — `git merge --ff-only <remote>/<branch>`; diverged
+   history is refused, never merged.
+4. **Dependency & ABI audit** — `code_search.py --verify-env`, `ruff check .`,
+   `pytest tests/ -q`.
+5. **Rollback on gate failure** — any red gate ⇒ `git reset --hard HEAD@{1}`,
+   exit 1, exact failure reason reported.
+
+**Workflow:** ask the agent "update asha", "/asha update", or
+"update asha / dependencies". Use `--dry-run` first (fetch + report, no
+mutation). After a green update the operation is logged into
+`.jspace/control.json` via `control.py --transport <t> pulse --event tool
+--label "asha-update: ..."`.
+
 ### AST Perception (`.hermes/tools/code_search.py`)
 
 tree-sitter-based structural navigation instead of raw file reads:
@@ -138,12 +163,18 @@ asha-harness/
 │   ├── control.py             # governance + transport gate
 │   ├── control.json           # runtime ledger (git-ignored)
 │   └── cache/                 # git-ignored
-├── skills/pre-ship-quality-gate/SKILL.md
+├── skills/
+│   ├── pre-ship-quality-gate/SKILL.md
+│   └── asha-update/SKILL.md     # /asha update trigger
 ├── scripts/
 │   ├── bootstrap.sh           # one-shot bootstrap (Linux/macOS)
 │   ├── bootstrap.ps1          # one-shot bootstrap (Windows)
 │   ├── uninstall.sh           # zero-bleed teardown (Linux/macOS)
-│   └── uninstall.ps1          # zero-bleed teardown (Windows)
+│   ├── uninstall.ps1          # zero-bleed teardown (Windows)
+│   ├── update.sh              # atomic self-update (Linux/macOS)
+│   ├── update.ps1             # atomic self-update (Windows)
+│   └── update.py              # fail-closed 5-step update protocol
+├── .jspace/dependencies.json  # update target declarations
 ├── tests/                     # 15 regression tests (14 pass, 1 env-probe skip)
 ├── benchmarks/
 │   ├── bench.py               # empirical benchmark runner (re-runnable)
