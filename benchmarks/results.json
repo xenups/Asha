@@ -1,0 +1,44 @@
+{
+  "tool": "hermes-disciplined-harness",
+  "results": [
+    {
+      "benchmark": "AST outline vs raw read",
+      "file": ".jspace\\control.py",
+      "raw_lines": 767,
+      "raw_tokens": 3087,
+      "outline_lines": 39,
+      "outline_tokens": 117,
+      "token_reduction_pct": 96.21,
+      "parse_median_ms": 152.15,
+      "samples_ms": [
+        163.38270000051125,
+        150.08029999989958,
+        148.8035000002128,
+        152.14500000001863,
+        160.57810000074824
+      ]
+    },
+    {
+      "benchmark": "diff_engine atomic SEARCH/REPLACE",
+      "patch_median_ms": 106.98,
+      "rollback_median_ms": 108.44,
+      "rejection_exit_code": 1,
+      "rejection_ms": 108.15,
+      "zero_corruption": true
+    },
+    {
+      "benchmark": "control.py fail-closed transport gate",
+      "omitted_exit_code": 1,
+      "omitted_ledger_written": false,
+      "local_exit_code": 0,
+      "ledger_transport": "local",
+      "mixed_exit_code": 1
+    },
+    {
+      "benchmark": "zero-daemon verification",
+      "listening_before": 38,
+      "listening_after": 38,
+      "new_listening_ports": []
+    }
+  ]
+}

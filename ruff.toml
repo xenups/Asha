@@ -1,0 +1,11 @@
+# Ruff configuration for the Hermes Disciplined Harness.
+# Centralizes the deliberate lint exceptions; cross-platform identical.
+[lint]
+ignore = [
+    "BLE001",  # blind `except Exception`: deliberate tolerance of third-party
+               # parser API churn in code_search.py (ast-grep / tree-sitter).
+    "B023",    # loop closure over loop variable in code_search.py: executed
+               # synchronously inside the same iteration; safe by construction.
+    "PLW1510", # subprocess.run without check=: tests assert returncode
+               # explicitly, which is the point (fail-closed verification).
+]
