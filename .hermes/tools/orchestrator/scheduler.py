@@ -32,7 +32,7 @@ from .types import (
     ExecuteHook,
     OrchestratorError,
 )
-from .worktree import WorktreeDispatcher, _commit_all, _git, _safe_id
+from .worktree import WorktreeDispatcher, _commit_all, _git, _safe_id, kill_process_tree
 
 _SHA_RE = re.compile(r'[0-9a-f]{40}')
 
@@ -105,14 +105,28 @@ def verify_worker_evidence(path: Path,
 
 def default_execute(worker: dict[str, Any], worktree: Path
                     ) -> tuple[int, str]:
-    """Production execution: run the worker's argv in its worktree."""
+    """Production execution: run the worker's argv in its worktree under
+    the worker's `timeout` (WORKER_TIMEOUT_S when unspecified/None --
+    existing behavior preserved). On timeout the child TREE is killed and
+    TimeoutExpired propagates; _run_one maps it to FAILED/timeout_exceeded."""
+    timeout = worker.get('timeout')
+    if timeout is None:
+        timeout = WORKER_TIMEOUT_S
     try:
-        proc = subprocess.run(worker['cmd'], cwd=worktree,
-                              capture_output=True, text=True,
-                              timeout=WORKER_TIMEOUT_S)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        proc = subprocess.Popen(worker['cmd'], cwd=worktree,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True,
+                                start_new_session=(os.name != 'nt'))
+    except (OSError, subprocess.SubprocessError) as exc:
         return -1, f'{type(exc).__name__}: {exc}'
-    combined = (proc.stdout or '') + (proc.stderr or '')
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        kill_process_tree(proc)
+        raise
+    except (OSError, subprocess.SubprocessError) as exc:
+        return -1, f'{type(exc).__name__}: {exc}'
+    combined = (out or '') + (err or '')
     return proc.returncode, combined[-TAIL_CHARS:]
 
 
@@ -153,6 +167,14 @@ def validate_workers(workers: Any) -> list[dict[str, Any]]:
                 not all(isinstance(part, str) for part in cmd):
             raise OrchestratorError(
                 f'{wid}.cmd must be a non-empty argv list')
+        timeout = raw.get('timeout')
+        if timeout is not None and (
+                isinstance(timeout, bool)
+                or not isinstance(timeout, (int, float))
+                or timeout <= 0):
+            raise OrchestratorError(
+                f'{wid}.timeout must be a positive number of seconds '
+                '(int/float), or absent/None for the default budget')
     for raw in workers:
         for dep in raw.get('deps', []) or []:
             if dep not in ids:
@@ -311,6 +333,11 @@ class GovernedScheduler:
                  ) -> dict[str, Any]:
         try:
             result = self.execute(worker, path)
+        except subprocess.TimeoutExpired:
+            # G3: budget exhausted; default_execute already killed the
+            # worker's process tree. Fail closed with an explicit reason.
+            return {'state': 'FAILED', 'reason': 'timeout_exceeded',
+                    'evidence': None}
         except Exception as exc:  # worker hook must not kill the scheduler
             return {'state': 'FAILED',
                     'reason': f'execution_error:{type(exc).__name__}: {exc}',
@@ -521,7 +548,8 @@ def main(argv: list[str] | None = None) -> int:
     run_p = sub.add_parser('run', help='run one worker graph to completion')
     run_p.add_argument('--spec', required=True,
                        help="JSON {task_id?, workers:[{id,deps,"
-                            "declared_scope,reads,writes,cmd}]}")
+                            "declared_scope,reads,writes,cmd,"
+                            "timeout?}]}")
     run_p.add_argument('--keep-worktrees', action='store_true',
                        help='debug: skip worktree removal (disk cost stays '
                             'until removed manually; reported)')

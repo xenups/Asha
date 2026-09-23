@@ -2,8 +2,10 @@
 """Git worktree lifecycle for physical worker isolation."""
 from __future__ import annotations
 
+import os
 import re
 import subprocess
+from contextlib import suppress
 from pathlib import Path
 
 from .types import OrchestratorError
@@ -93,3 +95,24 @@ class WorktreeDispatcher:
                     self.cleanup_errors.append(f'rmdir: {exc}')
         else:
             self.prune()
+
+
+def kill_process_tree(proc: subprocess.Popen[str]) -> None:
+    """Fail-closed teardown for a timed-out worker: kill the whole child
+    tree (Windows `taskkill /T /F`; POSIX SIGKILL to the session group
+    the worker was started in), then reap the direct child. Every error
+    is swallowed -- this runs during timeout teardown and must never
+    mask the timeout that triggered it."""
+    if os.name == 'nt':
+        with suppress(OSError, subprocess.SubprocessError):
+            subprocess.run(['taskkill', '/T', '/F', '/PID', str(proc.pid)],
+                           capture_output=True, timeout=30)
+    else:
+        with suppress(OSError):
+            # 9 = SIGKILL; killpg exists only on POSIX and is absent
+            # from the win32 typeshed -- this branch never runs on nt.
+            os.killpg(proc.pid, 9)  # type: ignore[attr-defined]
+    with suppress(OSError):
+        proc.kill()
+    with suppress(OSError, subprocess.SubprocessError):
+        proc.wait(timeout=30)

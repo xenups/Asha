@@ -20,7 +20,8 @@ WORKER_EVIDENCE_FIELDS = (
 )
 
 ExecuteHook = Callable[[dict[str, Any], Path], Any]
-"""Hook contract: (worker, worktree) -> exit code, or (exit code, tail)."""
+"""Hook contract: (worker, worktree) -> exit code, or (exit code, tail).
+A hook raising subprocess.TimeoutExpired maps to FAILED/timeout_exceeded."""
 
 
 class OrchestratorError(Exception):
