@@ -43,6 +43,15 @@ def test_initialize_echoes_supported_version() -> None:
     assert result["capabilities"] == {"tools": {}}
     assert response["id"] == 1
     assert stderr.getvalue() == ""  # supported -> silent, no warning
+    # Phase-5.6 audit decision: the official MCP SDK's current version is
+    # in the list (newest first) and echoes like any supported version.
+    response_new = server.handle_message(
+        {"jsonrpc": "2.0", "id": 6, "method": "initialize",
+         "params": {"protocolVersion": "2025-11-25"}}, stderr)
+    assert response_new is not None
+    assert response_new["result"]["protocolVersion"] == "2025-11-25"
+    assert server.SUPPORTED_PROTOCOL_VERSIONS[0] == "2025-11-25"
+    assert stderr.getvalue() == ""
 
 
 def test_initialize_echoes_older_supported_version() -> None:
@@ -64,7 +73,7 @@ def test_initialize_falls_back_on_unsupported_version() -> None:
     assert response is not None  # handshake NOT failed
     assert response["result"]["protocolVersion"] == \
         server.DEFAULT_PROTOCOL_VERSION
-    assert response["result"]["protocolVersion"] == "2025-06-18"
+    assert response["result"]["protocolVersion"] == "2025-11-25"
     # one-line warning naming the requested version, on stderr only
     warning = stderr.getvalue()
     assert warning.count("\n") == 1

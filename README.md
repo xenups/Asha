@@ -593,10 +593,10 @@ hermes mcp test asha-orchestrator
 `apply=true` does **not** grant ship authority: worker evidence always
 carries `authorized_to_ship=false` (Merge law, section 6), and landing
 work on `main` still goes through the existing ship-gate flow (section 5).
-Protocol negotiation offers `SUPPORTED_PROTOCOL_VERSIONS = [2025-06-18,
-2025-03-26, 2024-11-05]`; an unsupported request (e.g. MCP SDK's newer
-`2025-11-25`) falls back to the default with a one-line stderr warning
-and lets the client decide.
+Protocol negotiation offers `SUPPORTED_PROTOCOL_VERSIONS = [2025-11-25,
+2025-06-18, 2025-03-26, 2024-11-05]` (newest first; `2025-11-25` matches
+the official MCP SDK); an unsupported request falls back to the default
+with a one-line stderr warning and lets the client decide.
 
 ## 11. Repository Layout
 
