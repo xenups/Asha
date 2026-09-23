@@ -73,7 +73,9 @@ Explicit invariants:
 | `.hermes/tools/evidence.py` | Clean-tree validation, tree binding, canonical hashing, evidence verification |
 | `.hermes/tools/code_search.py` | AST/structural perception and impact tracing |
 | `.hermes/tools/diff_engine.py` | Exact atomic source mutation |
-| `.hermes/tools/orchestrator.py` | Dependency-aware worker scheduling: conflict-safe dispatch, git worktree isolation, tree-bound worker evidence |
+| `.hermes/tools/orchestrator.py` | Dependency-aware worker scheduling: conflict-safe dispatch, git worktree isolation, tree-bound worker evidence, coalesced graph reconciliation, generation-gated dispatch |
+| `.hermes/tools/dep_index.py` | Phase-2 dependency fact extraction (stdlib `ast`): normalized facts, UNCERTAIN markers, content-hash cache |
+| `.hermes/tools/graph_state.py` | Phase-2 immutable versioned GraphState: reverse-index affected region, cycle/uncertainty fail-closed reconciliation |
 
 Supporting scripts (documented in §10 and Appendix E): `scripts/update.py`
 (atomic self-update), `scripts/bootstrap.{sh,ps1}`,
@@ -573,7 +575,9 @@ hermes-disciplined-harness/
 │       ├── check_runner.py        # isolated check execution
 │       ├── evidence.py            # sealing, tree binding, verification
 │       ├── code_search.py         # AST perception / trace
-│       ├── orchestrator.py        # governed worker scheduling (Phase 1)
+│       ├── orchestrator.py        # governed worker scheduling (Phase 1+2)
+│       ├── dep_index.py           # Phase 2: dependency facts (stdlib ast)
+│       ├── graph_state.py         # Phase 2: immutable graph + reconciliation
 │       └── diff_engine.py         # atomic SEARCH/REPLACE
 ├── .jspace/
 │   ├── control.py                 # ledger + gates + ship authorization
@@ -587,7 +591,7 @@ hermes-disciplined-harness/
 │   ├── pre-ship-quality-gate/SKILL.md
 │   └── asha-update/SKILL.md       # /asha update trigger
 ├── scripts/                       # bootstrap, uninstall, update (sh/ps1/py)
-├── tests/                         # 119 regression tests (see §14)
+├── tests/                         # 135 regression tests (see §14)
 ├── benchmarks/                    # measured benchmark runner + results
 ├── ruff.toml                      # centralized lint exceptions
 ├── mypy.ini                       # mypy_path for cross-module imports
@@ -634,10 +638,10 @@ Measured on the current working tree (Windows 11, CPython 3.11.16,
 
 | Gate | Result |
 | --- | --- |
-| `pytest tests/ -q` | **118 passed, 1 skipped** (skip = environment probe in `tests/test_code_search.py:116`) |
+| `pytest tests/ -q` | **134 passed, 1 skipped** (skip = environment probe in `tests/test_code_search.py:116`) |
 | `ruff check .hermes/tools/ tests/` | **All checks passed!** |
 | `ruff check .` (full tree) | 19 known errors, **all inside the generated A/B playground `benchmarks/live_eval/asha_eval/`** (intentionally messy synthetic fixture; not shipped code) |
-| `mypy .hermes/tools/` | **Success: no issues found in 8 source files** (root `mypy.ini` sets `mypy_path = .hermes/tools`, `mem0.*` marked `ignore_missing_imports`) |
+| `mypy .hermes/tools/` | **Success: no issues found in 10 source files** (root `mypy.ini` sets `mypy_path = .hermes/tools`, `mem0.*` marked `ignore_missing_imports`) |
 | `mypy .jspace/control.py` | Success: no issues found in 1 source file |
 | `code_search.py --self-test` | PASSED |
 | `diff_engine.py --self-test` | PASSED |

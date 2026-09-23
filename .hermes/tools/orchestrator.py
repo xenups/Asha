@@ -69,7 +69,9 @@ from pathlib import Path
 from typing import Any
 
 import check_runner
+import dep_index
 import evidence
+import graph_state
 import scope_resolver
 
 STATES = ('PENDING', 'DEFERRED', 'RUNNING', 'DONE', 'FAILED', 'BLOCKED',
@@ -471,6 +473,11 @@ class GovernedScheduler:
         self.execute: ExecuteHook = execute or default_execute
         self.dispatcher = WorktreeDispatcher(self.repo, keep=keep_worktrees)
         self.conflicts = ConflictManager()
+        # Phase 2: in-memory dependency facts + versioned graph state.
+        self.dep_index = dep_index.DependencyIndex()
+        self.graph = graph_state.GraphState.empty()
+        self.reconcile_log: list[dict[str, Any]] = []
+        self.stale_intents_dropped = 0
         self.states: dict[str, dict[str, Any]] = {
             wid: {'state': 'PENDING', 'reason': None} for wid in self.by_id}
         self.deferral_events: list[dict[str, str]] = []
@@ -488,6 +495,16 @@ class GovernedScheduler:
 
     def state_of(self, worker_id: str) -> str:
         return str(self.states[worker_id]['state'])
+
+    def _graph_report(self) -> dict[str, Any]:
+        """Phase-2 graph summary for the run report (§2.2 / §2.4)."""
+        return {
+            'generation': self.graph.generation,
+            'reconcile_passes': len(self.reconcile_log),
+            'stale_intents_dropped': self.stale_intents_dropped,
+            'failures': [entry['reason'] for entry in self.reconcile_log
+                         if not entry['ok']],
+        }
 
     def _decide(self, worker: dict[str, Any]) -> tuple[str, str]:
         ok, why = scope_status(worker)
@@ -583,7 +600,10 @@ class GovernedScheduler:
             return {'state': 'INVALID_EVIDENCE',
                     'reason': f'{type(exc).__name__}: {exc}',
                     'evidence': None}
-        return {'state': 'DONE', 'reason': None, 'evidence': str(evi_path)}
+        return {'state': 'DONE', 'reason': None, 'evidence': str(evi_path),
+                # Phase-2 reconciliation input: git-derived paths bound to
+                # the same target_tree identity the sealed evidence carries.
+                'observed': list(observed), 'target_tree': target_tree}
 
     def _run_one(self, worker: dict[str, Any], path: Path
                  ) -> dict[str, Any]:
@@ -598,6 +618,41 @@ class GovernedScheduler:
         else:
             rc, tail = int(result), ''
         return self._collect(worker, path, rc, tail)
+
+    # -- Phase-2 online reconciliation --------------------------------------
+
+    def _read_blob(self, tree: str, path: str) -> str | None:
+        """Read one path from a worker result tree (read-only git).
+
+        Undecodable bytes decode with replacement so a broken file fails
+        the AST parser as UNCERTAIN (fail-closed) instead of vanishing;
+        a missing path returns None = deletion side of the delta.
+        """
+        proc = subprocess.run(['git', 'show', f'{tree}:{path}'],
+                              cwd=self.repo, capture_output=True)
+        if proc.returncode != 0:
+            return None
+        return proc.stdout.decode('utf-8', errors='replace')
+
+    def _reconcile(self, updates: dict[str, str | None]) -> None:
+        """One reconciliation pass per coalesced batch (§2.3 / §2.4).
+
+        Failure keeps the previous GraphState by reference (fail-closed);
+        every pass is appended to self.reconcile_log for the run report.
+        """
+        if not updates:
+            return
+        outcome = graph_state.reconcile(self.graph, self.dep_index, updates)
+        self.graph = outcome.state  # atomic swap (same ref on failure)
+        self.reconcile_log.append({
+            'ok': outcome.ok,
+            'reason': outcome.reason,
+            'generation': outcome.generation,
+            'files': list(outcome.files),
+            'affected': list(outcome.affected),
+            'added': outcome.added,
+            'removed': outcome.removed,
+        })
 
     # -- the scheduling loop ------------------------------------------------
 
@@ -625,6 +680,7 @@ class GovernedScheduler:
                     self._set(wid, 'FAILED', 'cycle')
             report['reason'] = 'cycle'
             report['cycle'] = cycle
+            report['graph'] = self._graph_report()
             self.dispatcher.cleanup()
             report['cleanup_errors'] = list(self.dispatcher.cleanup_errors)
             return report
@@ -642,6 +698,7 @@ class GovernedScheduler:
                         if state not in ('PENDING', 'DEFERRED'):
                             continue
                         worker = self.by_id[wid]
+                        decided_against = self.graph.generation
                         decision, reason = self._decide(worker)
                         if decision == 'block':
                             self._set(wid, 'BLOCKED', reason)
@@ -653,6 +710,14 @@ class GovernedScheduler:
                                 self._deferred_seen.add(key)
                                 self.deferral_events.append(
                                     {'worker': wid, 'reason': reason})
+                            continue
+                        # §2.5: a dispatch intent is valid only for the
+                        # graph generation its decision was made against;
+                        # on mismatch discard it and re-evaluate the node.
+                        intent = graph_state.DispatchIntent(
+                            wid, decided_against)
+                        if not intent.matches(self.graph):
+                            self.stale_intents_dropped += 1
                             continue
                         try:
                             path = self.dispatcher.create(wid)
@@ -672,6 +737,9 @@ class GovernedScheduler:
                 if futures:
                     finished, _ = wait(futures,
                                        return_when=FIRST_COMPLETED)
+                    # §2.4: coalesce every completion drained in this
+                    # batch into ONE reconciliation pass (+1 generation).
+                    pending: dict[str, str | None] = {}
                     for fut in finished:
                         wid = futures.pop(fut)
                         try:
@@ -692,10 +760,16 @@ class GovernedScheduler:
                             sorter.done(wid)
                             self.completed.append(wid)
                             ready.extend(sorter.get_ready())
+                            # Phase-2 input: read each observed path from
+                            # the tree identity this outcome just verified.
+                            for item in outcome.get('observed') or ():
+                                pending[item] = self._read_blob(
+                                    str(outcome['target_tree']), item)
                         else:
                             abort = True
                             fail_reason = fail_reason or (
                                 f'{wid}:{outcome["state"]}')
+                    self._reconcile(pending)
                     continue
                 break  # nothing dispatched, nothing running: schedule ends
 
@@ -728,6 +802,7 @@ class GovernedScheduler:
         report['status'] = 'ok' if all_done else 'failed'
         report['reason'] = None if all_done else (
             fail_reason or 'incomplete')
+        report['graph'] = self._graph_report()
         return report
 
 
