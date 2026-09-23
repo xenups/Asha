@@ -582,7 +582,8 @@ hermes-disciplined-harness/
 │       │   ├── conflict.py        # dispatch safety: scope + R/W matrix
 │       │   ├── worktree.py        # git worktree lifecycle + isolation
 │       │   ├── scheduler.py       # scheduling loop, reconcile, CLI main
-│       │   └── __main__.py        # python orchestrator/ | -m orchestrator
+│       │   └── __main__.py        # python -m orchestrator (dir-form: CPython
+│       │                           # runpy bootstraps before user code)
 │       ├── dep_index.py           # Phase 2: dependency facts (stdlib ast)
 │       ├── graph_state.py         # Phase 2: immutable graph + reconciliation
 │       └── diff_engine.py         # atomic SEARCH/REPLACE
