@@ -152,9 +152,53 @@ machine-readable context keeps them in separate namespaces:
 | `historical_lesson` | persistent advisory | lessons from previous tasks |
 | `decision_record` | persistent historical | explanatory, not authoritative |
 
-Retrieval is bounded and task-oriented (small advisory block, never the
-whole store). Writes happen only from explicit structured `memory add`
-calls — no automatic conversation capture; secret-like content is refused.
+Roles, stated once:
+
+```text
+Mem0   = candidate retrieval
+Asha   = deterministic relevance selection (gate in .hermes/tools/memory.py)
+ORIENT = current truth
+```
+
+The memory flow is a gate chain, because **retrieval does not imply
+selection** — Mem0 finds candidates, Asha decides which candidates may
+become advisory context:
+
+```text
+task → Mem0 candidate retrieval → relevance gate → current-fact conflict
+     gate → deterministic dedup → bounded top-k (default K = 3) → agent
+```
+
+Relevance decisions are deterministic and explained per candidate
+(`evaluate_candidate`): hard rejects `repo_mismatch`,
+`stale_repository_fact`, `current_fact_override`; strong positives
+`target_path_match` / `target_symbol_match`; medium
+`multi_token_overlap`; generic-token overlap alone is never sufficient
+(`generic_token_only`). Audit shape (`search --explain`):
+
+```json
+{ "memory_id": "...", "accepted": false, "reason": "generic_token_only",
+  "matched_entities": []}
+```
+
+Only accepted, deduplicated, bounded records reach the agent; rejected
+candidates stay in the audit (debugging/tests), never in the context.
+The two-layer agent view (`context --format text`) renders
+`CURRENT REPOSITORY FACTS` and `HISTORICAL MEMORY (ADVISORY)` as
+separate sections so the layers cannot be confused. A stale
+`repository_fact` is rejected from advisory context but a historical
+lesson is never deleted because a repository fact went stale.
+
+Report terminology keeps the two evaluation lenses distinct:
+`retrieval_useful` = deterministic provenance rule (retrieved record
+content == task historical_lesson, mechanical);
+`judge_useful` = the blinded memory evaluator's useful class. They
+legitimately differ and are never equated. After the relevance-gate
+change no new live benchmark has been run — no behavioral improvement
+is claimed until a future benchmark proves it.
+
+Writes happen only from explicit structured `memory add` calls — no
+automatic conversation capture; secret-like content is refused.
 
 Mem0 is **optional and advisory**: if it is unavailable or broken, `add`,
 `search` and `context` fail closed (`MEMORY UNAVAILABLE`, exit 1) while
@@ -165,9 +209,9 @@ historical context.
 
 ```bash
 python .jspace/control.py --transport <t> memory add --category historical_lesson --content "..."
-python .jspace/control.py --transport <t> memory search --task "manifest serialization" [--limit 8]
+python .jspace/control.py --transport <t> memory search --task "manifest serialization" [--limit 3] [--explain]
 python .jspace/control.py --transport <t> memory status          # availability + counts
-python .jspace/control.py --transport <t> memory context         # ORIENT vs memory, stale conflicts
+python .jspace/control.py --transport <t> memory context [--format text]  # two-layer view + gated retrieval
 ```
 
 ## Empirical Evaluation

@@ -27,8 +27,9 @@ Offline profile (no API keys, no daemon, no LLM call):
     llm          = openai provider with a dummy key, never invoked because
                    every add uses infer=False
     ponytail: with a real OPENAI_API_KEY swap embedder/llm providers for
-    semantic ranking; offline relevance is enforced by keyword filtering
-    in search_memory().
+    semantic ranking; offline relevance is enforced by the deterministic
+    relevance gate (evaluate_candidate/select_memory in search_memory):
+    Mem0 retrieves candidates, Asha selects bounded advisory context.
 """
 from __future__ import annotations
 
@@ -277,27 +278,215 @@ def add_memory(root: Path, content: str, category: str, *,
     return {'id': memory_id, 'content': content, 'metadata': metadata}
 
 
-def search_memory(root: Path, task: str, *, limit: int = 8,
-                  backend: Any | None = None) -> list[dict[str, Any]]:
-    """Bounded, task-oriented retrieval (STEP 8): fetch a small window from
-    the backend, then keep only records overlapping the task tokens."""
+# --------------------------------------------------------------------------
+# Deterministic relevance gate (retrieval is not selection):
+#     Mem0 candidate retrieval -> relevance gate -> current-fact conflict
+#     gate -> bounded top-k -> agent.  Authority model stays immutable:
+#     CURRENT REPOSITORY FACTS > STORED MEMORY.  No new model, embedding
+#     system or daemon: cheap token/entity matching over candidates only.
+# --------------------------------------------------------------------------
+
+GENERIC_TOKENS = frozenset({
+    'file', 'files', 'test', 'tests', 'code', 'project', 'module', 'service',
+    'data', 'function', 'functions', 'class', 'classes', 'change', 'error',
+    'errors', 'bug', 'fix', 'issue', 'task', 'work', 'make', 'need', 'use',
+    'update', 'add', 'remove', 'run', 'new', 'old',
+})
+ACCEPT_REASONS = frozenset({
+    'target_path_match', 'target_symbol_match', 'multi_token_overlap',
+    'task_token_match',
+})
+REJECT_REASONS = frozenset({
+    'repo_mismatch', 'stale_repository_fact', 'current_fact_override',
+    'repository_fact_without_entity_anchor', 'generic_token_only',
+    'no_task_overlap', 'duplicate_content', 'top_k_bound',
+})
+_REASON_RANK = {'target_path_match': 4, 'target_symbol_match': 4,
+                'multi_token_overlap': 3, 'task_token_match': 2}
+DEFAULT_TOP_K = 3
+_PATH_RE = re.compile(
+    r'[\w./\\-]+\.(?:py|md|json|ya?ml|toml|sh|ts|js|sql|cfg|ini|txt)\b')
+_CAMEL_RE = re.compile(r'\b[A-Za-z0-9]+(?:[A-Z][a-z0-9]+)+\b')
+_SNAKE_RE = re.compile(r'\b[a-z0-9]+_[a-z0-9_]+\b')
+
+
+def _norm_tokens(text: str) -> set[str]:
+    """Lower alnum tokens minus generic tokens: generic overlap alone can
+    never be a sufficient relevance signal."""
+    return {tok for tok in re.findall(r'[a-z0-9]+', text.lower())
+            if tok not in GENERIC_TOKENS and len(tok) > 1}
+
+
+def _squash(text: str) -> str:
+    """bundle_writer.py / bundle-writer / BundleWriter -> bundlewriter(+py):
+    deterministic separator/case-insensitive comparison, no fuzzy matcher."""
+    return re.sub(r'[^a-z0-9]', '', text.lower())
+
+
+def _task_entities(task: str) -> list[tuple[str, str]]:
+    """(kind, entity) pairs read straight from the task text: file paths
+    and CamelCase / snake_case identifiers. No AST scan, no deep ORIENT."""
+    entities: list[tuple[str, str]] = []
+    for match in _PATH_RE.findall(task):
+        entities.append(('path', match))
+    for match in _CAMEL_RE.findall(task):
+        entities.append(('symbol', match))
+    for match in _SNAKE_RE.findall(task):
+        entities.append(('symbol', match))
+    return entities
+
+
+def _reject(record: dict[str, Any], reason: str) -> dict[str, Any]:
+    assert reason in REJECT_REASONS, reason  # decisions stay enumerable
+    return {'memory_id': record.get('id', ''),
+            'category': record.get('metadata', {}).get('category'),
+            'accepted': False, 'reason': reason, 'matched_entities': []}
+
+
+def evaluate_candidate(record: dict[str, Any], *, task: str, repo_id: str,
+                       orient: dict[str, Any] | None = None) -> dict[str, Any]:
+    """One deterministic, inspectable accept/reject decision per candidate.
+
+    Hard rejects (in order): repo identity mismatch; explicitly stale
+    repository fact (historical lessons are never killed by staleness);
+    conflict with a current ORIENT fact.  Strong positives: exact target
+    path / symbol.  Medium: >= 2 meaningful task-token overlaps (a
+    repository_fact needs an anchor of one of these two kinds).  Generic
+    token overlap alone -> rejected as generic_token_only.
+    """
+    meta = record.get('metadata', {})
+    category = str(meta.get('category', ''))
+    # hard reject 1 -- repository identity.  A missing repo_id is not a
+    # mismatch: the backend already scopes the fetch to user_id == repo_id.
+    stored_repo = meta.get('repo_id')
+    if stored_repo is not None and stored_repo != repo_id:
+        return _reject(record, 'repo_mismatch')
+    # hard reject 2 -- stale repository facts stay stored/searchable but
+    # never re-enter advisory context; lessons are category-scoped here.
+    if category == 'repository_fact' and meta.get('status') == 'stale':
+        return _reject(record, 'stale_repository_fact')
+    # hard reject 3 -- current-fact conflict gate (facts > memory).
+    if orient is not None and category == 'repository_fact':
+        fact_key = meta.get('fact_key')
+        if fact_key:
+            current = _resolve_current(orient, str(fact_key))
+            if meta.get('fact_value') != current:
+                return _reject(record, 'current_fact_override')
+    haystack = (f"{record.get('content', '')} {meta.get('fact_key', '')} "
+                f"{meta.get('fact_value', '')}")
+    hay_squash = _squash(haystack)
+    task_norm = _norm_tokens(task)
+    hay_norm = _norm_tokens(haystack)
+    entities = _task_entities(task)
+    matched_paths = [entity for kind, entity in entities
+                     if kind == 'path' and _squash(entity) in hay_squash]
+    matched_stems = [entity for kind, entity in entities
+                     if kind == 'path'
+                     and len(_squash(Path(entity).stem)) >= 5
+                     and _squash(Path(entity).stem) in hay_squash]
+    matched_symbols = [entity for kind, entity in entities
+                       if kind == 'symbol' and len(_squash(entity)) >= 5
+                       and _squash(entity) in hay_squash]
+    overlap = sorted(task_norm & hay_norm)
+    if matched_paths or matched_stems:
+        reason, matched = 'target_path_match', matched_paths or matched_stems
+    elif matched_symbols:
+        reason, matched = 'target_symbol_match', matched_symbols
+    elif category == 'repository_fact':
+        # stronger anchor required: repo facts are the stale-prone class.
+        if len(overlap) < 2:
+            return _reject(record, 'repository_fact_without_entity_anchor')
+        reason, matched = 'multi_token_overlap', overlap
+    elif len(overlap) >= 2:
+        reason, matched = 'multi_token_overlap', overlap
+    elif len(overlap) == 1:
+        reason, matched = 'task_token_match', overlap
+    else:
+        generic_shared = (set(re.findall(r'[a-z0-9]+', task.lower()))
+                          & set(re.findall(r'[a-z0-9]+', haystack.lower())))
+        return _reject(record, 'generic_token_only' if generic_shared
+                       else 'no_task_overlap')
+    decision = {'memory_id': record.get('id', ''), 'category': category,
+                'accepted': True, 'reason': reason,
+                'matched_entities': list(matched)[:8]}
+    assert decision['reason'] in ACCEPT_REASONS
+    return decision
+
+
+def select_memory(records: list[dict[str, Any]], *, task: str, repo_id: str,
+                   orient: dict[str, Any] | None = None,
+                   top_k: int = DEFAULT_TOP_K) -> dict[str, Any]:
+    """relevance gate -> conflict gate -> deterministic dedup -> bounded
+    top-k.  Returns accepted records plus a full decision audit; only
+    accepted records are agent-facing, the audit is for debugging/tests."""
+    decisions = [evaluate_candidate(record, task=task, repo_id=repo_id,
+                                    orient=orient) for record in records]
+    by_id = {record['id']: record for record in records}
+    position = {decision['memory_id']: index
+                for index, decision in enumerate(decisions)}
+    ranked = sorted(
+        (decision for decision in decisions if decision['accepted']),
+        key=lambda decision: (
+            -_REASON_RANK[decision['reason']],
+            str(by_id[decision['memory_id']]['metadata']
+                .get('recorded_at') or ''),
+            decision['memory_id']))
+    seen_squash: dict[str, str] = {}
+    accepted: list[dict[str, Any]] = []
+    for decision in ranked:
+        record = by_id[decision['memory_id']]
+        squash = _squash(str(record.get('content', '')))
+        if squash in seen_squash:
+            # near-identical text: expose one representative only
+            # (deterministic squash dedup; no clustering infrastructure).
+            decisions[position[decision['memory_id']]] = {
+                **decision, 'accepted': False, 'reason': 'duplicate_content',
+                'duplicate_of': seen_squash[squash]}
+            continue
+        if len(accepted) >= top_k:
+            # bounded exposure: never dump all candidates into context.
+            decisions[position[decision['memory_id']]] = {
+                **decision, 'accepted': False, 'reason': 'top_k_bound'}
+            continue
+        seen_squash[squash] = decision['memory_id']
+        accepted.append(record)
+    return {'accepted': accepted, 'decisions': decisions}
+
+
+def _fetch_candidates(root: Path, task: str, *, limit: int,
+                      backend: Any | None) -> tuple[Any, str,
+                                                    list[dict[str, Any]]]:
     store = backend if backend is not None else resolve_backend(root)
     repo_id = repo_identity(root)
-    raw = store.search(task, user_id=repo_id, top_k=max(limit * 3, limit))
-    tokens = set(re.findall(r'[a-z0-9_]+', task.lower()))
-    scored: list[tuple[int, dict[str, Any]]] = []
-    for record in raw:
-        if record['metadata'].get('repo_id', repo_id) != repo_id:
-            continue
-        haystack = (record['content'] + ' '
-                    + str(record['metadata'].get('fact_key', ''))).lower()
-        overlap = len(tokens & set(re.findall(r'[a-z0-9_]+', haystack)))
-        if overlap > 0:
-            scored.append((overlap, record))
-    scored.sort(key=lambda pair: (-pair[0],
-                                  pair[1]['metadata'].get('recorded_at', ''),
-                                  pair[1]['id']))
-    return [record for _, record in scored[:limit]]
+    # candidate window stays small and cheap (STEP 16); selection,
+    # not window size, is what bounds what the agent sees.
+    raw = store.search(task, user_id=repo_id,
+                       top_k=max(limit * 6, DEFAULT_TOP_K * 4))
+    return store, repo_id, raw
+
+
+def search_memory(root: Path, task: str, *, limit: int = DEFAULT_TOP_K,
+                  backend: Any | None = None,
+                  orient: dict[str, Any] | None = None
+                  ) -> list[dict[str, Any]]:
+    """Mem0 = candidate retrieval; this gate = selection.  Returns at most
+    ``limit`` (default 3) accepted advisory records; rejected candidates
+    never reach the agent."""
+    _, repo_id, raw = _fetch_candidates(root, task, limit=limit,
+                                        backend=backend)
+    return select_memory(raw, task=task, repo_id=repo_id, orient=orient,
+                         top_k=limit)['accepted']
+
+
+def explain_search(root: Path, task: str, *, limit: int = DEFAULT_TOP_K,
+                   backend: Any | None = None,
+                   orient: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Full accept/reject audit for every candidate (debugging, tests,
+    STEP 12 schema); not part of the agent-facing context."""
+    _, repo_id, raw = _fetch_candidates(root, task, limit=limit,
+                                        backend=backend)
+    return select_memory(raw, task=task, repo_id=repo_id, orient=orient,
+                         top_k=limit)
 
 
 def get_all_memories(root: Path, *,
@@ -426,6 +615,37 @@ def build_context(orient: dict[str, Any],
     }
 
 
+def render_context(context: dict[str, Any]) -> str:
+    """Agent-facing two-layer text: the current-fact layer and the advisory
+    memory layer are rendered as separate sections and never merged, so the
+    precedence rule (CURRENT REPOSITORY FACTS > STORED MEMORY) stays visible
+    in the context itself."""
+    lines = [
+        'CURRENT REPOSITORY FACTS',
+        '------------------------',
+        json.dumps(context.get('current_facts'), ensure_ascii=False,
+                   sort_keys=True, indent=2),
+        '',
+        'HISTORICAL MEMORY (ADVISORY)',
+        '----------------------------',
+    ]
+    grouped = context.get('memory') or {}
+    for bucket in ('repository_facts', 'workflow_preferences',
+                   'historical_lessons', 'decision_records',
+                   'stale_repository_facts'):
+        for record in grouped.get(bucket) or []:
+            lines.append(f"[{bucket} | {record.get('status', 'active')}] "
+                         f"{record.get('content')}")
+    for record in context.get('retrieved_for_task') or []:
+        category = record.get('metadata', {}).get('category')
+        lines.append(f'[task_relevant | {category}] {record.get("content")}')
+    if not any(grouped.get(bucket) or []
+               for bucket in grouped) and not context.get(
+                   'retrieved_for_task'):
+        lines.append('(no stored memories)')
+    return '\n'.join(lines)
+
+
 # --------------------------------------------------------------------------
 # CLI (direct module usability, STEP 10); control.py delegates here.
 # --------------------------------------------------------------------------
@@ -451,7 +671,10 @@ def main(argv: list[str] | None = None) -> int:
 
     p_search = sub.add_parser('search')
     p_search.add_argument('--task', required=True)
-    p_search.add_argument('--limit', type=int, default=8)
+    p_search.add_argument('--limit', type=int, default=DEFAULT_TOP_K,
+                          help='bounded top-k exposed memories (default 3)')
+    p_search.add_argument('--explain', action='store_true',
+                          help='also print the per-candidate decision audit')
 
     sub.add_parser('status')
 
@@ -459,6 +682,10 @@ def main(argv: list[str] | None = None) -> int:
     p_context.add_argument('--task', default='')
     p_context.add_argument('--orient-json', required=True,
                            help="'-' reads ORIENT json from stdin")
+    p_context.add_argument('--format', choices=('json', 'text'),
+                           default='json',
+                           help="text = two-layer agent view "
+                                "(facts / advisory memory)")
 
     args = parser.parse_args(argv)
     root = Path(args.root)
@@ -472,8 +699,14 @@ def main(argv: list[str] | None = None) -> int:
             _print_json(record)
         elif args.command == 'search':
             task = args.task
-            records = search_memory(root, task, limit=args.limit)
-            _print_json({'task': task, 'retrieved': records})
+            if args.explain:
+                selection = explain_search(root, task, limit=args.limit)
+                _print_json({'task': task,
+                             'retrieved': selection['accepted'],
+                             'decisions': selection['decisions']})
+            else:
+                records = search_memory(root, task, limit=args.limit)
+                _print_json({'task': task, 'retrieved': records})
         elif args.command == 'status':
             store = resolve_backend(root)
             if not store.available:
@@ -514,9 +747,16 @@ def main(argv: list[str] | None = None) -> int:
                 'memory': grouped,
             }
             if args.task:
-                context['retrieved_for_task'] = search_memory(
-                    root, args.task, limit=8, backend=store)
-            _print_json(context)
+                # gated selection runs against ORIENT: conflicting
+                # repository facts are hard-rejected here (facts > memory)
+                selection = explain_search(root, args.task,
+                                           backend=store, orient=orient)
+                context['retrieved_for_task'] = selection['accepted']
+                context['retrieval_audit'] = selection['decisions']
+            if args.format == 'text':
+                print(render_context(context))
+            else:
+                _print_json(context)
     except MemoryLayerError as exc:
         print(str(exc), file=sys.stderr)
         return 1

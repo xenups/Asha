@@ -468,3 +468,252 @@ def test_real_mem0_roundtrip_and_cli(tmp_path: Path) -> None:
     assert proc.returncode == 0, proc.stderr
     assert added["id"] in [r["id"] for r in
                            json.loads(proc.stdout)["retrieved"]]
+
+
+# ---- 11. deterministic relevance gate (MEM0_RELEVANCE_GATE_ONLY) ---------
+
+def _record(content: str, *, category: str = "historical_lesson",
+            repo_id: str = "remote:https://fixture/repo.git",
+            **meta) -> dict:
+    """Plain candidate record for pure gate tests (no backend needed)."""
+    metadata = {"category": category, "repo_id": repo_id,
+                "status": "active",
+                "recorded_at": "2026-01-01T00:00:00+00:00"}
+    metadata.update(meta)
+    return {"id": "mem-" + content[:12].replace(" ", "_"),
+            "content": content, "metadata": metadata,
+            "created_at": None, "updated_at": None, "user_id": None}
+
+
+# A. repository mismatch -> hard reject
+def test_gate_repo_mismatch_rejected() -> None:
+    foreign = _record("bundle_writer.py manifest lesson",
+                      repo_id="remote:https://other/repo.git")
+    decision = memory.evaluate_candidate(
+        foreign, task="bundle_writer.py manifest",
+        repo_id="remote:https://this/repo.git")
+    assert decision["accepted"] is False
+    assert decision["reason"] == "repo_mismatch"
+
+
+# B. exact target file match -> accepted (path and stem forms)
+def test_gate_exact_target_file_match() -> None:
+    rec = _record("bundle_writer.py writes the manifest contract")
+    decision = memory.evaluate_candidate(
+        rec, task="fix bundle_writer.py manifest handling",
+        repo_id=rec["metadata"]["repo_id"])
+    assert decision["accepted"] is True
+    assert decision["reason"] == "target_path_match"
+    # separator/case normalization: bundle_writer.py vs BundleWriter
+    camel = _record("BundleWriter class emits the manifest")
+    decision2 = memory.evaluate_candidate(
+        camel, task="fix bundle_writer.py manifest handling",
+        repo_id=camel["metadata"]["repo_id"])
+    assert decision2["accepted"] is True
+    assert decision2["reason"] == "target_path_match"
+
+
+# C. exact symbol match -> accepted
+def test_gate_exact_symbol_match() -> None:
+    rec = _record("ManifestWriter renders page blocks")
+    decision = memory.evaluate_candidate(
+        rec, task="adjust ManifestWriter output format",
+        repo_id=rec["metadata"]["repo_id"])
+    assert decision["accepted"] is True
+    assert decision["reason"] == "target_symbol_match"
+    assert "ManifestWriter" in decision["matched_entities"]
+
+
+# D. generic-token-only candidate -> rejected
+def test_gate_generic_token_only_rejected() -> None:
+    rec = _record("unrelated test error from long ago")
+    decision = memory.evaluate_candidate(
+        rec, task="fix test error",
+        repo_id=rec["metadata"]["repo_id"])
+    assert decision["accepted"] is False
+    assert decision["reason"] == "generic_token_only"
+
+
+# E. current-fact conflict -> hard reject at the gate
+def test_gate_current_fact_conflict_rejected(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    store = DictBackend()
+    memory.add_memory(
+        repo, "early era used unittest", "repository_fact",
+        fact_key="tooling.test_runner", fact_value="unittest",
+        backend=store)
+    memory.add_memory(
+        repo, "manifest serialization round-trip lesson",
+        "historical_lesson", backend=store)
+    orient = _orient(repo)
+    rid = memory.repo_identity(repo)
+    selection = memory.select_memory(
+        list(store.store.values()), task="manifest serialization",
+        repo_id=rid, orient=orient, top_k=3)
+    reasons = {d["memory_id"]: d["reason"]
+               for d in selection["decisions"]}
+    rejected = [d for d in selection["decisions"] if not d["accepted"]]
+    assert any(d["reason"] == "current_fact_override"
+               for d in rejected), reasons
+    accepted_contents = " ".join(r["content"]
+                                 for r in selection["accepted"])
+    assert "manifest serialization" in accepted_contents
+    assert "unittest" not in accepted_contents
+
+
+# F. stale repository fact rejected; historical lesson preserved intact
+def test_gate_stale_fact_rejected_lesson_preserved(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    store = DictBackend()
+    fact = memory.add_memory(
+        repo, "manifest layout documented", "repository_fact",
+        fact_key="layout.packages", fact_value="old",
+        backend=store)
+    lesson_id = memory.add_memory(
+        repo, "manifest schema changed before", "historical_lesson",
+        backend=store)["id"]
+    target = next(r for r in store.store.values()
+                  if r["id"] == fact["id"])
+    memory.mark_stale(repo, target, "old layout", backend=store)
+    hits = memory.search_memory(repo, "manifest schema", backend=store)
+    hit_ids = [h["id"] for h in hits]
+    assert lesson_id in hit_ids
+    assert fact["id"] not in hit_ids
+    # nothing deleted -- stale fact remains stored/searchable historically
+    assert fact["id"] in store.store
+
+
+# G. bounded top-k: 100 candidates -> <= 3 exposed (default limit)
+class FloodBackend(DictBackend):
+    """Returns every candidate regardless of top_k (worst-case retriever)."""
+
+    def search(self, query, *, user_id, top_k):
+        return [dict(r) for r in self.store.values()
+                if r["user_id"] == user_id]
+
+
+def test_gate_top_k_bound(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    store = FloodBackend()
+    rid = memory.repo_identity(repo)
+    for i in range(100):
+        mid = f"flood-{i:03d}"
+        store.store[mid] = {"id": mid,
+                            "content": f"bundle_writer.py manifest "
+                                       f"round-trip lesson {i}",
+                            "metadata": {"category": "historical_lesson",
+                                         "repo_id": rid,
+                                         "status": "active",
+                                         "recorded_at": None},
+                            "created_at": None, "updated_at": None,
+                            "user_id": rid}
+    hits = memory.search_memory(repo, "bundle_writer.py manifest round-trip",
+                                backend=store)
+    assert len(hits) <= 3, "top-k bound must hold against 100 candidates"
+    assert len(hits) == 3  # enough relevant candidates exist to fill it
+
+
+# H. duplicate memories -> one representative
+def test_gate_deduplicates_identical_memories(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    store = DictBackend()
+    rid = memory.repo_identity(repo)
+    for i in range(3):
+        store.store[f"dup-{i}"] = {
+            "id": f"dup-{i}", "content": "manifest schema changed before",
+            "metadata": {"category": "historical_lesson",
+                         "repo_id": rid, "status": "active",
+                         "recorded_at": "2026-01-01T00:00:00+00:00"},
+            "created_at": None, "updated_at": None, "user_id": rid}
+    selection = memory.explain_search(repo, "manifest schema changed",
+                                      backend=store)
+    assert len(selection["accepted"]) == 1
+    dups = [d for d in selection["decisions"]
+            if d["reason"] == "duplicate_content"]
+    assert len(dups) == 2
+    assert all(d["accepted"] is False for d in dups)
+
+
+# I. explainability: every candidate carries an enumerable decision
+def test_gate_every_decision_explainable(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    store = DictBackend()
+    rid = memory.repo_identity(repo)
+    samples = [
+        ("bundle_writer.py manifest lesson", "historical_lesson", {}),
+        ("unrelated test error", "historical_lesson", {}),
+        ("early era unittest", "repository_fact",
+         {"fact_key": "tooling.test_runner", "fact_value": "unittest"}),
+    ]
+    for i, (content, category, meta) in enumerate(samples):
+        store.store[f"m-{i}"] = {
+            "id": f"m-{i}", "content": content,
+            "metadata": {"category": category, "repo_id": rid,
+                         "status": "active", "recorded_at": None,
+                         **meta},
+            "created_at": None, "updated_at": None, "user_id": rid}
+    selection = memory.explain_search(repo,
+                                      "bundle_writer.py manifest work",
+                                      backend=store, limit=3)
+    known = memory.ACCEPT_REASONS | memory.REJECT_REASONS
+    assert len(selection["decisions"]) == len(samples)
+    for decision in selection["decisions"]:
+        assert {"accepted", "reason"} <= set(decision)
+        assert decision["accepted"] in (True, False)
+        assert decision["reason"] in known, decision
+
+
+# J. NullBackend unchanged: gate never hides an unavailable store
+def test_gate_null_backend_unchanged(tmp_path: Path) -> None:
+    memory.set_backend(memory.NullBackend("simulated outage"))
+    try:
+        for op in (lambda: memory.search_memory(tmp_path, "anything"),
+                   lambda: memory.explain_search(tmp_path, "anything")):
+            try:
+                op()
+                raise AssertionError("expected MemoryLayerError")
+            except memory.MemoryLayerError as exc:
+                assert "MEMORY UNAVAILABLE" in str(exc)
+    finally:
+        memory.set_backend(None)
+
+
+# K. precedence: current facts > memory through the full agent context path
+def test_gate_context_path_keeps_two_layers(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    store = DictBackend()
+    memory.add_memory(repo, "early era used unittest", "repository_fact",
+                      fact_key="tooling.test_runner",
+                      fact_value="unittest", backend=store)
+    orient = _orient(repo)
+    selection = memory.explain_search(repo, "test runner tooling",
+                                      backend=store, orient=orient)
+    # conflicted fact never appears in agent-facing accepted list:
+    assert all(d["reason"] != "current_fact_override"
+               or not d["accepted"] for d in selection["decisions"])
+    assert not any(h["metadata"].get("fact_value") == "unittest"
+                   for h in selection["accepted"])
+    context = memory.build_context(orient,
+                                   memory.get_all_memories(repo,
+                                                           backend=store))
+    context["retrieved_for_task"] = selection["accepted"]
+    text = memory.render_context(context)
+    assert "CURRENT REPOSITORY FACTS" in text
+    assert "HISTORICAL MEMORY (ADVISORY)" in text
+    # stale memory text may appear only in the advisory section:
+    facts_part = text.split("HISTORICAL MEMORY (ADVISORY)")[0]
+    assert "unittest" not in facts_part
+    assert context["current_facts"]["tooling"]["test_runner"]["value"] == \
+        "pytest"
+
+
+# ---- metric terminology (retrieval_useful vs judge_useful) ----------------
+
+def test_report_metric_names_explicit() -> None:
+    """run_live keeps the two lenses under canonical, distinct names."""
+    source = (REPO_ROOT / "benchmarks" / "run_live.py").read_text(
+        encoding="utf-8")
+    assert "'retrieval_useful': rule_useful" in source
+    assert "'judge_useful': judged_classes['useful']" in source
+    assert "'useful_memories'" not in source
+    assert "they differ by" in source  # documented, never equated

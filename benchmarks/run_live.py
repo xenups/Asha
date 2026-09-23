@@ -1231,7 +1231,9 @@ def aggregate(runs: list[dict], freeze: dict) -> dict[str, Any]:
     if c_runs:
         tasks = {t['id']: t for t in live_tasks()}
         retrieved_total = 0
-        useful = stale = conflicting = irrelevant = 0
+        # retrieval_useful (rule) and judge_useful (blinded
+        # evaluator) are two lenses -- see render definitions.
+        rule_useful = stale = conflicting = irrelevant = 0
         harmful = 0
         pollution = {k: 0 for k in (
             'retrieved_not_used', 'retrieved_and_ignored',
@@ -1249,7 +1251,7 @@ def aggregate(runs: list[dict], freeze: dict) -> dict[str, Any]:
                 if (item.get('category') == 'historical_lesson'
                         and item.get('content')
                         == own_task.get('historical_lesson')):
-                    useful += 1
+                    rule_useful += 1
                 elif item.get('category') == 'repository_fact':
                     conflicting += 1  # controlled conflict, always shown
                 else:
@@ -1261,15 +1263,23 @@ def aggregate(runs: list[dict], freeze: dict) -> dict[str, Any]:
                     pollution[outcome] += count
                 if outcome.startswith('retrieved_and_caused'):
                     harmful += count
+        judged_classes: dict[str, int] = {
+            cls: sum(
+                1 for run in c_runs
+                for entry in (run.get('evaluation', {})
+                              .get('memory_impact') or [])
+                if entry.get('class') == cls)
+            for cls in ('useful', 'neutral', 'irrelevant',
+                        'harmful', 'stale', 'conflicting')}
         out['mem0_analysis'] = {
             'retrieved_total': retrieved_total,
-            'useful_memories': useful,
+            'retrieval_useful': rule_useful,
             'irrelevant_memories': irrelevant,
             'stale_memories': stale,
             'conflicting_memories': conflicting,
             'harmful_memories': harmful,
             'retrieval_precision': (
-                round(useful / retrieved_total, 3)
+                round(rule_useful / retrieved_total, 3)
                 if retrieved_total else None),
             'pollution_outcomes': pollution,
             'repeated_mistakes': {
@@ -1287,14 +1297,8 @@ def aggregate(runs: list[dict], freeze: dict) -> dict[str, Any]:
             'runs_with_impact_judgement': sum(
                 1 for run in c_runs
                 if run.get('evaluation', {}).get('memory_impact')),
-            'judged_classes': {
-                cls: sum(
-                    1 for run in c_runs
-                    for entry in (run.get('evaluation', {})
-                                  .get('memory_impact') or [])
-                    if entry.get('class') == cls)
-                for cls in ('useful', 'neutral', 'irrelevant', 'harmful',
-                            'stale', 'conflicting')},
+            'judge_useful': judged_classes['useful'],
+            'judged_classes': judged_classes,
             'judged_records': sum(
                 len(run.get('evaluation', {}).get('memory_impact') or [])
                 for run in c_runs),
@@ -1506,7 +1510,8 @@ def render_report(aggregate_data: dict[str, Any],
     mem = aggregate_data.get('mem0_analysis') or {}
     lines += ['', '## 5. Mem0 results (condition C)', '']
     if mem:
-        for key in ('retrieved_total', 'useful_memories',
+        for key in ('retrieved_total', 'retrieval_useful',
+                    'judge_useful',
                     'irrelevant_memories', 'stale_memories',
                     'conflicting_memories', 'harmful_memories',
                     'judged_classes', 'judged_records',
@@ -1514,6 +1519,13 @@ def render_report(aggregate_data: dict[str, Any],
                     'repeated_mistakes'):
             blob = json.dumps(mem.get(key), sort_keys=True)
             lines.append(f'- {key}: `{blob}`')
+        lines.append('- metric definitions: retrieval_useful = '
+                     'deterministic provenance rule (retrieved '
+                     'record content == task historical_lesson; '
+                     'mechanical lens); judge_useful = blinded '
+                     'memory evaluator useful class '
+                     '(judged_classes.useful); they differ by '
+                     'construction and are never equated')
         lines.append('- baseline distractor result stays visible: '
                      + str(mem.get(
                          'baseline_distractor_exclusion_visible')))
