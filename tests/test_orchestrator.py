@@ -704,3 +704,47 @@ def test_unknown_write_set_defers_against_known_empty(tmp_path: Path) -> None:
                            ("unknown_set",))
     assert "unknown" in report["deferral_events"][0]["reason"]
     assert set(report["completed"]) == {"A", "B"}
+
+
+# ---- G2 regression: rename source outside scope cannot hide ---------------
+
+def test_rename_source_outside_scope_fails_verification(
+        tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    workers = [_worker(
+        "A", declared=("tests/",),
+        cmd=[PY, "-c",
+             "import os; os.rename('README.md', 'tests/renamed_readme.md')"])]
+    sched = orchestrator.GovernedScheduler(
+        repo, workers, task_id="g2-rename-out")
+    report = sched.run()
+    assert report["status"] == "failed", report
+    entry = report["states"]["A"]
+    assert entry["state"] == "INVALID_EVIDENCE", entry
+    assert entry["reason"].startswith("scope_violation"), entry
+    # the rename SOURCE must remain in the observed-change set
+    assert "README.md" in entry["reason"]
+    assert report["completed"] == []
+    assert report["evidence"] == {}
+    # isolation: the main tree still has the original file untouched
+    assert _git(repo, "status", "--porcelain") == ""
+    assert (repo / "README.md").exists()
+
+
+def test_rename_within_declared_scope_still_completes(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    workers = [_worker(
+        "A", declared=("tests/",),
+        cmd=[PY, "-c",
+             ("import os; os.rename('tests/test_ok.py', "
+              "'tests/test_moved_ok.py')")])]
+    sched = orchestrator.GovernedScheduler(
+        repo, workers, task_id="g2-rename-in")
+    report = sched.run()
+    _assert_ok(report)
+    payload = orchestrator.verify_worker_evidence(
+        Path(report["evidence"]["A"]))
+    # both sides of an in-scope rename stay visible in observed scope
+    assert set(payload["observed_scope"]) == {
+        "tests/test_ok.py", "tests/test_moved_ok.py"}
+    assert set(report["completed"]) == {"A"}

@@ -96,7 +96,10 @@ def default_base(root: Path) -> str | None:
 def changed_files(root: Path, base: str | None) -> list[str]:
     names: set[str] = set()
     target = f'{base}' if base else 'HEAD'
-    proc = subprocess.run(['git', 'diff', '--name-only', target], cwd=root,
+    # --no-renames: a rename must expose BOTH sides, so a source outside
+    # a declared scope cannot hide behind rename detection (G2).
+    proc = subprocess.run(['git', 'diff', '--no-renames', '--name-only',
+                           target], cwd=root,
                           capture_output=True, text=True, timeout=60)
     if proc.returncode == 0:
         names.update(line for line in proc.stdout.splitlines() if line.strip())
