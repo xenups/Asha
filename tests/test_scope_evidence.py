@@ -42,6 +42,7 @@ BASELINE = {
 
 def _load(name: str):
     spec = importlib.util.spec_from_file_location(name, TOOLS / f"{name}.py")
+    assert spec is not None
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
@@ -103,6 +104,7 @@ def _ready_ledger(repo: Path) -> None:
 
 def test_control_questions_model() -> None:
     spec = importlib.util.spec_from_file_location("control_model", CONTROL)
+    assert spec is not None
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)

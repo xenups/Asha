@@ -509,6 +509,9 @@ def main(argv=None):
                    help='worker graph JSON (absolute, or relative to --root)')
     p.add_argument('--keep-worktrees', action='store_true',
                    help='debug: skip worktree removal (reported in run report)')
+    p.add_argument('--apply', action='store_true',
+                   help='atomically apply verified worker results onto the '
+                        'target branch (default: audit-only)')
 
     p = sub.add_parser('memory')
     p.add_argument('--no-cache', action='store_true',
@@ -662,6 +665,8 @@ def main(argv=None):
                     'run', '--spec', str(spec_path)]
             if ns.keep_worktrees:
                 argv.append('--keep-worktrees')
+            if ns.apply:
+                argv.append('--apply')
             proc = subprocess.run(argv, capture_output=True, text=True,
                                   timeout=1800)
             sys.stdout.write(proc.stdout)

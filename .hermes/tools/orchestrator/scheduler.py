@@ -24,6 +24,7 @@ import graph_state
 import scope_resolver
 
 from .conflict import ConflictManager, covered, scope_status
+from .integrator import IntegrationResult, TreeIntegrator
 from .types import (
     STATES,
     TAIL_CHARS,
@@ -539,6 +540,21 @@ class GovernedScheduler:
 # CLI (direct module usability; control.py delegates to this).
 # ---------------------------------------------------------------------------
 
+def _integration_summary(repo: Path, report: dict[str, Any]
+                         ) -> IntegrationResult:
+    """--apply stage (Phase 4): integrate only a fully-DONE run; a failed
+    run is refused without touching the target (audit semantics hold)."""
+    if report.get('status') != 'ok':
+        return IntegrationResult(
+            status='refused',
+            error='run_not_ok:' + str(report.get('reason')))
+    evidence_paths = report.get('evidence') or {}
+    integrator = TreeIntegrator(
+        repo, [Path(evidence_paths[wid]) for wid in sorted(evidence_paths)],
+        generation=report.get('graph', {}).get('generation'))
+    return integrator.apply()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description='Asha Orchestrator (Phase 1 governed scheduling)')
@@ -553,6 +569,10 @@ def main(argv: list[str] | None = None) -> int:
     run_p.add_argument('--keep-worktrees', action='store_true',
                        help='debug: skip worktree removal (disk cost stays '
                             'until removed manually; reported)')
+    run_p.add_argument('--apply', action='store_true',
+                       help='atomically apply verified worker results onto '
+                            'the target branch after the integration gate '
+                            '(default: audit-only, target untouched)')
     args = parser.parse_args(argv)
     try:
         spec_path = Path(args.spec)
@@ -566,6 +586,9 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.root), spec.get('workers'), task_id=task_id,
             keep_worktrees=args.keep_worktrees)
         report = scheduler.run()
+        if args.apply:
+            report['integration'] = _integration_summary(
+                Path(args.root), report).as_dict()
     except OrchestratorError as exc:
         print(f'ORCHESTRATOR ERROR: {exc}', file=sys.stderr)
         return 1
@@ -581,7 +604,10 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 1
     print(json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False))
-    return 0 if report.get('status') == 'ok' else 1
+    ok = report.get('status') == 'ok'
+    if args.apply:
+        ok = ok and report.get('integration', {}).get('status') == 'applied'
+    return 0 if ok else 1
 
 
 if __name__ == '__main__':

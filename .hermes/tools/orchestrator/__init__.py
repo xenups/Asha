@@ -54,6 +54,7 @@ Exit 0 only when every worker is DONE; every other outcome exits 1.
 """
 
 from .conflict import ConflictManager, _intersection, covered, overlap, scope_status
+from .integrator import IntegrationResult, TreeIntegrator
 from .scheduler import (
                         GovernedScheduler,
                         default_execute,
@@ -79,7 +80,9 @@ __all__ = [
                         "ConflictManager",
                         "ExecuteHook",
                         "GovernedScheduler",
+                        "IntegrationResult",
                         "OrchestratorError",
+                        "TreeIntegrator",
                         "WorktreeDispatcher",
                         "_intersection",
                         "covered",
