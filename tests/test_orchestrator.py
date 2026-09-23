@@ -24,6 +24,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -86,10 +87,10 @@ def _make_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def _worker(wid: str, *, deps: tuple[str, ...] = (),
-            declared: tuple[str, ...] | None = ("tests/",),
-            reads: tuple[str, ...] | None = (),
-            writes: tuple[str, ...] | None = (),
+def _worker(wid: str, *, deps: Sequence[str] = (),
+            declared: Sequence[str] | None = ("tests/",),
+            reads: Sequence[str] | None = (),
+            writes: Sequence[str] | None = (),
             cmd: list[str] | None = None) -> dict:
     """Worker builder. reads/writes default to a KNOWN empty set; pass
     None explicitly to model UNKNOWN (the spec's fail-closed case)."""
