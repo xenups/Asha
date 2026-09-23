@@ -601,7 +601,7 @@ hermes-disciplined-harness/
 │   ├── pre-ship-quality-gate/SKILL.md
 │   └── asha-update/SKILL.md       # /asha update trigger
 ├── scripts/                       # bootstrap, uninstall, update (sh/ps1/py)
-├── tests/                         # 149 regression tests (see §14)
+├── tests/                         # 155 regression tests (see §14)
 ├── benchmarks/                    # measured benchmark runner + results
 ├── ruff.toml                      # centralized lint exceptions
 ├── mypy.ini                       # mypy_path for cross-module imports
@@ -648,12 +648,12 @@ Measured on the current working tree (Windows 11, CPython 3.11.16,
 
 | Gate | Result |
 | --- | --- |
-| `pytest tests/ -q` | **148 passed, 1 skipped** (skip = environment probe in `tests/test_code_search.py:116`) |
+| `pytest tests/ -q` | **154 passed, 1 skipped** (skip = environment probe in `tests/test_code_search.py:116`) |
 | `ruff check .hermes/tools/ tests/` | **All checks passed!** |
 | `ruff check .` (full tree) | 19 known errors, **all inside the generated A/B playground `benchmarks/live_eval/asha_eval/`** (intentionally messy synthetic fixture; not shipped code) |
-| `mypy .hermes/tools/` | **Success: no issues found in 16 source files** (root `mypy.ini` sets `mypy_path = .hermes/tools`; `mem0.*`/`run_eval`/`run_live` marked `ignore_missing_imports`) |
+| `mypy .hermes/tools/` | **Success: no issues found in 19 source files** (root `mypy.ini` sets `mypy_path = .hermes/tools`; `mem0.*`/`run_eval`/`run_live` marked `ignore_missing_imports`) |
 | `mypy .jspace/control.py` | Success: no issues found in 1 source file |
-| `mypy tests/` | **Success: no issues found in 16 source files** |
+| `mypy tests/` | **Success: no issues found in 19 source files** |
 | `code_search.py --self-test` | PASSED |
 | `diff_engine.py --self-test` | PASSED |
 | Ship gate contract | `GATE SHIP: PASS` → exit 0 only after clean-tree scope resolution, checks, sealing and evidence verification (§5) |
