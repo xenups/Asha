@@ -38,8 +38,16 @@ def _commands(root: Path, names: list[str], changed_py: list[str]) -> list[tuple
         elif name == 'pytest':
             commands.append((name, [py, '-m', 'pytest', 'tests/', '-q']))
         elif name == 'mypy':
-            if changed_py:
-                commands.append((name, [py, '-m', 'mypy', *changed_py]))
+            # A .py launcher shadowed by a same-named package cannot
+            # be typed as itself (mypy: 'Duplicate module named ...';
+            # --exclude skips directory scans, not explicit file args).
+            # The package carries the types: drop the launcher, then
+            # fall through so the outcome is a real check, never a skip.
+            targets = [f for f in changed_py
+                       if not ((root / f).with_suffix('')
+                               / '__init__.py').is_file()]
+            if targets:
+                commands.append((name, [py, '-m', 'mypy', *targets]))
             elif (root / '.hermes' / 'tools').is_dir():
                 commands.append((name, [py, '-m', 'mypy', '.hermes/tools']))
             else:
