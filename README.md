@@ -73,7 +73,8 @@ Explicit invariants:
 | `.hermes/tools/evidence.py` | Clean-tree validation, tree binding, canonical hashing, evidence verification |
 | `.hermes/tools/code_search.py` | AST/structural perception and impact tracing |
 | `.hermes/tools/diff_engine.py` | Exact atomic source mutation |
-| `.hermes/tools/orchestrator/` | Governed worker scheduling package (facade in `__init__.py`): conflict-safe dispatch, git worktree isolation, tree-bound evidence, coalesced reconciliation, generation-gated dispatch; `types`/`conflict`/`worktree`/`scheduler`/`runner` modules |
+| `asha/` | **First-class top-level package** (Phase refactor): all core modules promoted here (`types`, `conflict`, `worktree`, `scheduler`, `runner`, `integrator`, `mcp_server`, `dep_index`, `graph_state`, `check_runner`, `evidence`, `scope_resolver`, `metrics`); `pyproject.toml` console scripts `asha` / `asha-mcp` |
+| `.hermes/tools/orchestrator/` | **Backward-compatibility shim layer**: every legacy module re-exports `asha.*` (static star-forwarder for mypy + attribute copy for runtime privates; direct-script guards kept for the hermes MCP registration) |
 | `.hermes/tools/dep_index.py` | Phase-2 dependency fact extraction (stdlib `ast`): normalized facts, UNCERTAIN markers, content-hash cache |
 | `.hermes/tools/graph_state.py` | Phase-2 immutable versioned GraphState: reverse-index affected region, cycle/uncertainty fail-closed reconciliation |
 | `.hermes/tools/orchestrator/integrator.py` | Phase-4 atomic governed tree integration (`--apply`): sealed-evidence binding (commit tree == `target_tree_sha`), single-commit staging, unified-tree verification gate, all-or-nothing rollback with zero debris |
@@ -638,7 +639,9 @@ hermes-disciplined-harness/
 │   ├── pre-ship-quality-gate/SKILL.md
 │   └── asha-update/SKILL.md       # /asha update trigger
 ├── scripts/                       # bootstrap, uninstall, update (sh/ps1/py)
-├── tests/                         # 193 regression tests (see §14)
+├── asha/                         # first-class package (legacy shims under .hermes/tools/orchestrator/)
+├── pyproject.toml                # console scripts asha / asha-mcp
+├── tests/                         # 195 regression tests (see §14)
 ├── benchmarks/                    # measured benchmark runner + results
 ├── ruff.toml                      # centralized lint exceptions
 ├── mypy.ini                       # mypy_path for cross-module imports
@@ -685,7 +688,7 @@ Measured on the current working tree (Windows 11, CPython 3.11.16,
 
 | Gate | Result |
 | --- | --- |
-| `pytest tests/ -q` | **192 passed, 1 skipped** (skip = environment probe in `tests/test_code_search.py:116`) |
+| `pytest tests/ -q` | **194 passed, 1 skipped** (skip = environment probe in `tests/test_code_search.py:116`) |
 | `ruff check .hermes/tools/ tests/` | **All checks passed!** |
 | `ruff check .` (full tree) | 19 known errors, **all inside the generated A/B playground `benchmarks/live_eval/asha_eval/`** (intentionally messy synthetic fixture; not shipped code) |
 | `mypy .hermes/tools/` | **Success: no issues found in 21 source files** (root `mypy.ini` sets `mypy_path = .hermes/tools`; `mem0.*`/`run_eval`/`run_live` marked `ignore_missing_imports`) |

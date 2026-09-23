@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "asha"
+version = "0.1.0"
+description = "Asha: governed multi-agent execution harness (stdlib only)"
+requires-python = ">=3.11"
+
+[project.scripts]
+asha = "asha.__main__:main"
+asha-mcp = "asha.mcp_server:main"
+
+[tool.setuptools.packages.find]
+include = ["asha*"]
+
+[tool.ruff]
+# pyproject.toml outranks ruff.toml in ruff's config discovery -- extend
+# keeps the repo's exact lint rules (the gate's `ruff check` would
+# otherwise silently switch rule sets the moment this file exists).
+extend = "ruff.toml"

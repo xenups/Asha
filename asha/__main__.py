@@ -1,10 +1,11 @@
-"""Package entry shim: `python -m orchestrator` (or directly
-`python orchestrator/__main__.py`) now delegates to asha.scheduler.main.
+"""Package entry: `python -m orchestrator` (or directly
+`python orchestrator/__main__.py`).
 
 `python orchestrator/` (directory form) is NOT supported: CPython
 bootstraps runpy while the package dir itself is sys.path[0], so the
-stdlib `types` import resolves as a shim file before any line of user
-code could intervene (kept from the pre-refactor module)."""
+stdlib `types` import resolves as orchestrator/types.py before any
+line of user code could intervene (the fixed module layout makes this
+un-engineerable from inside)."""
 import sys
 
 if __package__ in (None, ''):
@@ -17,13 +18,6 @@ if __package__ in (None, ''):
     pkg = _norm(__file__).rsplit('/', 1)[0]
     sys.path = [entry for entry in sys.path if _norm(entry) != pkg]
     sys.path.insert(0, pkg.rsplit('/', 1)[0])
-    from pathlib import Path as _Path
-
-    for _root in _Path(__file__).resolve().parents:
-        if (_root / 'pyproject.toml').is_file():
-            if str(_root) not in sys.path:
-                sys.path.insert(0, str(_root))
-            break
     from asha.scheduler import main
 else:
     from .scheduler import main

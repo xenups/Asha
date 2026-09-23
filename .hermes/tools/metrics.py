@@ -1,29 +1,31 @@
-"""In-process metric counters with atomic snapshot (Asha self-upgrade).
-
-Delivered by worker `metrics_core`; consumed lazily by `metrics_cli` --
-the cross-worker binding lives in the union tree, never in a single
-worktree (PASS(A) + PASS(B) != PASS(A U B))."""
+"""Backward-compatibility shim: re-exports `asha.metrics` in place of the
+pre-refactor module (Phase refactor: orchestrator -> top-level asha/)."""
 from __future__ import annotations
 
-import threading
-from collections import Counter
+import importlib as _importlib
+import sys as _sys
+from pathlib import Path as _Path
 
-_LOCK = threading.Lock()
-_COUNTER: Counter[str] = Counter()
+for _root in _Path(__file__).resolve().parents:
+    if (_root / "pyproject.toml").is_file():
+        if str(_root) not in _sys.path:
+            _sys.path.insert(0, str(_root))
+        break
+# Static surface first: mypy and ruff resolve this star-forwarder, while
+# the attribute copy below supplies runtime privates (star skips _names).
+from asha.metrics import *
 
+_real = _importlib.import_module("asha.metrics")
+globals().update({k: v for k, v in vars(_real).items()
+                  if not k.startswith("__")})
+if getattr(_real, "__all__", None):
+    __all__ = list(_real.__all__)
 
-def incr(name: str, value: int = 1) -> None:
-    """Bump a named counter (thread-safe)."""
-    with _LOCK:
-        _COUNTER[name] += value
+# Direct-script execution (`python .hermes/tools/<name>.py --args`) must
+# keep the original CLI semantics: several of these tools are launched as
+# scripts by tests and by control.py, and a silent import-only shim would
+# drop their __main__ block (observed: test_memory asserting `scope=`).
+if __name__ == "__main__":
+    import runpy as _runpy
 
-
-def snapshot() -> dict[str, int]:
-    """Copy of current counts."""
-    with _LOCK:
-        return dict(_COUNTER)
-
-
-def render(name: str, value: int) -> str:
-    """Single-row rendering used by the CLI."""
-    return f"{name}={value}"
+    _runpy.run_module("asha.metrics", run_name="__main__", alter_sys=True)

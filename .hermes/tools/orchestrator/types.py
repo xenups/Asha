@@ -1,46 +1,31 @@
-#!/usr/bin/env python3
-"""Data contracts shared across the orchestrator package: execution
-vocabulary (states), worker-evidence field requirements, timeout/tail
-constants, the hook contract, and the fail-closed base exception."""
+"""Backward-compatibility shim: re-exports `asha.types` in place of the
+pre-refactor module (Phase refactor: orchestrator -> top-level asha/)."""
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+import importlib as _importlib
+import sys as _sys
+from pathlib import Path as _Path
 
-STATES = ('PENDING', 'DEFERRED', 'RUNNING', 'DONE', 'FAILED', 'BLOCKED',
-          'INVALID_EVIDENCE')
-WORKER_TIMEOUT_S = 600
-TAIL_CHARS = 2000
-# Worker-evidence identity fields required by the Phase-1 evidence model.
-WORKER_EVIDENCE_FIELDS = (
-    'task_id', 'worker_id', 'base_tree_sha', 'target_tree_sha',
-    'declared_scope', 'observed_scope', 'read_set', 'write_set', 'diff',
-    'checks', 'exit_status',
-)
+for _root in _Path(__file__).resolve().parents:
+    if (_root / "pyproject.toml").is_file():
+        if str(_root) not in _sys.path:
+            _sys.path.insert(0, str(_root))
+        break
+# Static surface first: mypy and ruff resolve this star-forwarder, while
+# the attribute copy below supplies runtime privates (star skips _names).
+from asha.types import *
 
-ExecuteHook = Callable[[dict[str, Any], Path], Any]
-"""Hook contract: (worker, worktree) -> exit code, or (exit code, tail).
-A hook raising subprocess.TimeoutExpired maps to FAILED/timeout_exceeded."""
+_real = _importlib.import_module("asha.types")
+globals().update({k: v for k, v in vars(_real).items()
+                  if not k.startswith("__")})
+if getattr(_real, "__all__", None):
+    __all__ = list(_real.__all__)
 
+# Direct-script execution (`python .hermes/tools/<name>.py --args`) must
+# keep the original CLI semantics: several of these tools are launched as
+# scripts by tests and by control.py, and a silent import-only shim would
+# drop their __main__ block (observed: test_memory asserting `scope=`).
+if __name__ == "__main__":
+    import runpy as _runpy
 
-class OrchestratorError(Exception):
-    """Structural / governance violation -- fail-closed, never degraded."""
-
-
-@dataclass(frozen=True)
-class RunnerResult:
-    """Phase 2 return contract of BaseAgentRunner.execute(): full
-    stdout/stderr for audit logs, wall time, and runner metadata
-    (worker_id, runner name, cwd, argv0, verify_* facts)."""
-    exit_code: int
-    stdout: str
-    stderr: str
-    duration_s: float
-    audit_metadata: dict[str, Any] = field(default_factory=dict)
-
-
-#: Optional worker-spec fields served by the runner dispatch (Phase 2).
-RUNNER_SPEC_OPTIONAL_FIELDS: tuple[str, ...] = (
-    'prompt', 'agent', 'verify_command', 'runner')
+    _runpy.run_module("asha.types", run_name="__main__", alter_sys=True)
