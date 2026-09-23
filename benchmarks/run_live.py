@@ -1347,6 +1347,7 @@ def render_report(aggregate_data: dict[str, Any],
     per = aggregate_data['per_condition']
     freeze = read_json(FREEZE)
     recon = aggregate_data['reconciliation']
+    integrity = aggregate_data.get('cohort_integrity')
     zero_conds = sorted(
         c for c in CONDITIONS
         if per.get(c, {}).get('attempted')
@@ -1376,9 +1377,9 @@ def render_report(aggregate_data: dict[str, Any],
          'authoritative timestamps); event-based metrics are primary'),
         f"- evaluation: {evaluation_note}",
         '',
-        ('## 2. Reconciliation: protocol '
-         f"{recon['planned_protocol']} vs frozen "
-         f"{recon['planned_frozen']} vs valid {recon['valid']}"),
+        ('## 2. Cohort integrity and reconciliation (protocol '
+         f"{recon['planned_protocol']} / frozen "
+         f"{recon['planned_frozen']} / valid {recon['valid']})"),
         '',
         (f"- planned (protocol): {recon['planned_protocol']} = "
          f"{recon['tasks_planned']} tasks x 3 conditions x 3 "
@@ -1395,8 +1396,11 @@ def render_report(aggregate_data: dict[str, Any],
          + json.dumps(recon.get('failure_classes') or {},
                       sort_keys=True)),
         ("- reconciliation_status: " + recon['status']),
+        ('- cohort integrity: '
+         + (json.dumps(integrity, sort_keys=True)
+            if integrity else 'not computed')),
         '',
-        '## 3. Dataset',
+        '### Dataset',
         '',
         (f"- {recon['tasks_frozen']} live historical tasks from "
          f"task-set {recon['task_set']} (one repository, own history)"),
@@ -1404,7 +1408,7 @@ def render_report(aggregate_data: dict[str, Any],
          "at merge time / maintainer annotation -- never the "
          "agent's own result"),
         '',
-        '## 4. Conditions',
+        '### Conditions',
         '',
         '| Condition | Injected context | Attempted | Invalid | Valid |',
         '| --- | --- | --- | --- | --- |',
@@ -1421,7 +1425,7 @@ def render_report(aggregate_data: dict[str, Any],
          + cell_count('orient_mem0', 'invalid') + ' | '
          + cell_count('orient_mem0', 'trajectories') + ' |'),
         '',
-        '## 5. Final correctness and condition comparison',
+        '## 3. Final correctness and A/B/C results',
         '',
         '| Metric | Baseline | +ORIENT | +ORIENT+MEM0 |',
         '| --- | --- | --- | --- |',
@@ -1464,7 +1468,7 @@ def render_report(aggregate_data: dict[str, Any],
             for cond in CONDITIONS]
         lines.append(f'| {cls} | ' + ' | '.join(cells) + ' |')
 
-    lines += ['', '## 6. ORIENT results', '']
+    lines += ['', '## 4. ORIENT results', '']
     for cond in CONDITIONS:
         block = per.get(cond) or {}
         valid_n = block.get('trajectories', 0)
@@ -1488,7 +1492,7 @@ def render_report(aggregate_data: dict[str, Any],
             f"{_fmt(block.get('recovery_tool_calls'))}")
 
     mem = aggregate_data.get('mem0_analysis') or {}
-    lines += ['', '## 7. Mem0 results (condition C)', '']
+    lines += ['', '## 5. Mem0 results (condition C)', '']
     if mem:
         for key in ('retrieved_total', 'useful_memories',
                     'irrelevant_memories', 'stale_memories',
@@ -1505,7 +1509,7 @@ def render_report(aggregate_data: dict[str, Any],
                      'payloads exist in _payloads/*_memory.json but '
                      'used/useful/harmful behavioral rates are n/a')
 
-    lines += ['', '## 8. Context pollution', '']
+    lines += ['', '## 6. Context pollution', '']
     if mem:
         blob = json.dumps(mem.get('pollution_outcomes'),
                           sort_keys=True)
@@ -1517,7 +1521,7 @@ def render_report(aggregate_data: dict[str, Any],
         lines.append('- n/a (no valid condition-C trajectories); the '
                      'tool-layer 3 / 9 distractor-exclusion result '
                      'remains visible as retrieval behavior only')
-    lines += ['', '## 9. Recovery cost', '']
+    lines += ['', '## 7. Recovery cost', '']
     for cond in CONDITIONS:
         block = per.get(cond) or {}
         if block.get('trajectories'):
@@ -1531,7 +1535,7 @@ def render_report(aggregate_data: dict[str, Any],
         else:
             lines.append(f'- {cond}: n/a (0 valid trajectories)')
 
-    lines += ['', ('## 10. Verification cost (harness-side, separate '
+    lines += ['', ('## 8. Verification cost (harness-side, separate '
               'from agent behavior)'), '']
     for cond in CONDITIONS:
         block = per.get(cond) or {}
@@ -1554,7 +1558,61 @@ def render_report(aggregate_data: dict[str, Any],
                          f"`{json.dumps(block.get('scope_distribution'))}` "
                          '| agent reasoning metrics above')
 
-    lines += ['', '## 11. Limitations', '',
+    previous = freeze.get('previous_cohort')
+    if previous:
+        old = read_json(REPO / str(previous['path']))
+        lines += ['', '## 9. Previous Inconclusive Cohort (not pooled)',
+                  '',
+                  ('- artifact: `' + str(previous['path'])
+                   + '` (sha256 ' + previous['sha256'][:12] + ')'),
+                  ('- status: ' + str(old.get('status')) + ' -- '
+                   + str(old.get('reason'))),
+                  ('- valid: '
+                   + str(old.get('valid_trajectories'))
+                   + ' baseline-only trajectories; '
+                   + str(old.get('failed_trajectories'))
+                   + ' runner failures; B/C cells 0 valid'),
+                  ('- never pooled with this cohort: different '
+                   'runner/model; no combined percentage exists '
+                   '(STEP 17)'),
+                  '']
+
+    lines += ['## 10. Observed facts', '']
+    for cond in CONDITIONS:
+        block = per.get(cond, {})
+        if not block:
+            continue
+        if not block.get('trajectories'):
+            lines.append(
+                f"- {cond}: 0 valid / {block.get('attempted', 0)} "
+                'attempted -- no behavioral observation exists')
+            continue
+        lines.append(
+            f"- {cond} (valid n={block['trajectories']}): "
+            f"final_correct={_fmt(block['final_correctness'])}; "
+            f"first-action={_fmt(block['first_action_correctness'])}; "
+            f"divergence={_fmt(block['source_of_truth_divergence'])}; "
+            f"wasted reads total={block['wasted_reads_total']}")
+    lines.append(f"- runner: {recon['failed']} failures, cause: "
+                 + recon['failure_cause'])
+    if not judged:
+        lines.append('- final correctness cells pending blinded '
+                     'evaluation (never zero-filled)')
+
+    lines += ['', '## 11. Interpretation (non-causal)', '',
+              ('- Counts and distributions only; single model, single '
+               'repository, n per cell as listed. No causal claim about '
+               'Asha improving agents is made beyond "on this sample, '
+               'condition X differed from condition Y by ...".'),
+              ('- Cells with 0 valid trajectories are n/a, never zero; '
+               'whether ORIENT or MEM0 help is read only from the '
+               'k / N counts in sections 3-7 above.'),
+              ('- Verifier numbers reflect the harness-side check '
+               'replay at each workspace, not the agent\'s own '
+               'confidence.'),
+              '']
+
+    lines += ['', '## 12. Limitations', '',
               ('- Missing data: ' + str(recon['failed']) + ' / '
                + str(recon['attempted']) + ' attempted trajectories '
                'invalid (classes: '
@@ -1593,62 +1651,50 @@ def render_report(aggregate_data: dict[str, Any],
               'are stated annotation rules over ground truth, not '
               'ground truth themselves.'),
               '']
-
-    lines += ['## 12. Observed facts', '']
-    for cond in CONDITIONS:
-        block = per.get(cond, {})
-        if not block:
-            continue
-        if not block.get('trajectories'):
-            lines.append(
-                f"- {cond}: 0 valid / {block.get('attempted', 0)} "
-                'attempted -- no behavioral observation exists')
-            continue
-        lines.append(
-            f"- {cond} (valid n={block['trajectories']}): "
-            f"final_correct={_fmt(block['final_correctness'])}; "
-            f"first-action={_fmt(block['first_action_correctness'])}; "
-            f"divergence={_fmt(block['source_of_truth_divergence'])}; "
-            f"wasted reads total={block['wasted_reads_total']}")
-    lines.append(f"- runner: {recon['failed']} failures, cause: "
-                 + recon['failure_cause'])
-    if not judged:
-        lines.append('- final correctness cells pending blinded '
-                     'evaluation (never zero-filled)')
-
-    lines += ['', '## 13. Interpretation (non-causal)', '',
-              ('- Counts and distributions only; single model, single '
-               'repository, n per cell as listed. No causal claim about '
-               'Asha improving agents is made.'),
-              ('- On this frozen run the experiment CANNOT answer '
-               'whether ORIENT or MEM0 help: both cells have 0 valid '
-               'trajectories. The only supportable statements are '
-               'about the baseline-4 sample and about runner '
-               'capacity.'),
-              ('- Verifier numbers reflect the harness-side check '
-               'replay at each workspace, not the agent\'s own '
-               'confidence.'),
-              '']
-
-    previous = freeze.get('previous_cohort')
-    if previous:
-        old = read_json(REPO / str(previous['path']))
-        lines += ['', '## Previous Inconclusive Cohort (not pooled)',
-                  '',
-                  ('- artifact: `' + str(previous['path'])
-                   + '` (sha256 ' + previous['sha256'][:12] + ')'),
-                  ('- status: ' + str(old.get('status')) + ' -- '
-                   + str(old.get('reason'))),
-                  ('- valid: '
-                   + str(old.get('valid_trajectories'))
-                   + ' baseline-only trajectories; '
-                   + str(old.get('failed_trajectories'))
-                   + ' runner failures; B/C cells 0 valid'),
-                  ('- never pooled with this cohort: different '
-                   'runner/model; no combined percentage exists '
-                   '(STEP 17)'),
-                  '']
     return '\n'.join(lines)
+
+
+def cohort_integrity(valid_runs: list[dict],
+                     freeze: dict) -> dict[str, Any]:
+    """STEP 2/3 verification numbers for section 2 of the report:
+    frozen runner/model/commit uniformity plus prompt-semantics audit
+    (template byte-equality, GT paths in baseline, condition labels)."""
+    tasks = {t['id']: t for t in live_tasks()}
+    mismatches = gt_baseline = label_leaks = 0
+    for r in valid_runs:
+        prompt_path = LIVE / 'runs' / r['run_id'] / 'prompt.txt'
+        if not prompt_path.exists():
+            mismatches += 1
+            continue
+        prompt = prompt_path.read_text(encoding='utf-8')
+        task = tasks[r['task_id']]
+        if prompt != build_prompt(task, r['condition']):
+            mismatches += 1
+        gt_paths = (task['ground_truth_source']
+                    + task['ground_truth_tests'])
+        if r['condition'] == 'baseline':
+            if any(g in prompt for g in gt_paths):
+                gt_baseline += 1
+            if 'ASHA ORIENT' in prompt or 'MEMORY' in prompt:
+                label_leaks += 1
+        if any(x in prompt
+               for x in ('orient_mem0', 'condition = baseline')):
+            label_leaks += 1
+    return {
+        'runner_uniform': {r.get('runner')
+                           for r in valid_runs} == {freeze.get('runner')},
+        'model_uniform': {r.get('model')
+                          for r in valid_runs} == {freeze.get('model')},
+        'asha_commit_uniform': {
+            r.get('asha_commit') for r in valid_runs
+        } == {freeze['asha_commit']},
+        'prompt_template_mismatches': mismatches,
+        'baseline_gt_path_prompts': gt_baseline,
+        'condition_label_leaks': label_leaks,
+        'valid_per_condition': {
+            c: sum(1 for r in valid_runs if r['condition'] == c)
+            for c in CONDITIONS},
+    }
 
 
 def cmd_report(args: argparse.Namespace) -> int:
@@ -1661,6 +1707,8 @@ def cmd_report(args: argparse.Namespace) -> int:
     valid_runs = [r for r in runs if not r.get('invalid')]
     judged = sum(1 for r in valid_runs if r.get('evaluation'))
     aggregate_data = aggregate(runs, freeze)
+    aggregate_data['cohort_integrity'] = cohort_integrity(
+        valid_runs, freeze)
     aggregate_data['judged_runs'] = judged
     aggregate_data['judged_total'] = len(valid_runs)
     base = LIVE / aggregate_data['run_id']

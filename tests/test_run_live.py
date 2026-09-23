@@ -219,6 +219,76 @@ def test_normalize_events(tmp_path: Path) -> None:
     assert events[2]["tool_arguments"] == "cat src/a.py"
 
 
+# ---- 10e. report section order (STEP 15) + cohort integrity audit ----------
+
+def test_cohort_integrity_audit(tmp_path: Path,
+                                monkeypatch: pytest.MonkeyPatch) -> None:
+    live_root = tmp_path / "live-v2"
+    monkeypatch.setattr(run_live, "LIVE", live_root)
+    task = next(t for t in run_live.live_tasks()
+                if t["id"] == "task-002")
+    freeze = {"runner": "opencode",
+              "model": "opencode/deepseek-v4-flash",
+              "asha_commit": "abc123"}
+
+    def make_run(anon: str, condition: str, prompt: str,
+                 runner: str = "opencode") -> dict:
+        run_dir = live_root / "runs" / anon
+        run_dir.mkdir(parents=True)
+        (run_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
+        return {"run_id": anon, "task_id": "task-002",
+                "condition": condition, "runner": runner,
+                "model": "opencode/deepseek-v4-flash",
+                "asha_commit": "abc123"}
+
+    good = run_live.build_prompt(task, "baseline")
+    runs = [make_run("a1", "baseline", good),
+            make_run("a2", "orient",
+                     run_live.build_prompt(task, "orient")),
+            # broken: baseline that got the ORIENT block + a GT path
+            make_run("a3", "baseline",
+                     good + "\nASHA ORIENT\n"
+                     + task["ground_truth_source"][0])]
+    integrity = run_live.cohort_integrity(runs, freeze)
+    assert integrity["runner_uniform"] is True
+    assert integrity["model_uniform"] is True
+    assert integrity["asha_commit_uniform"] is True
+    assert integrity["prompt_template_mismatches"] == 1
+    assert integrity["baseline_gt_path_prompts"] == 1
+    assert integrity["condition_label_leaks"] == 1
+    assert integrity["valid_per_condition"]["baseline"] == 2
+    assert integrity["valid_per_condition"]["orient"] == 1
+
+
+def test_report_section_order() -> None:
+    # STEP 15: integrity in 2; previous cohort before observed;
+    # limitations LAST (after interpretation), before the return.
+    with open(run_live.__file__, encoding="utf-8") as handle:
+        source = handle.read()
+
+    def pos(text: str) -> int:
+        found = source.find(text)
+        assert found >= 0, f"missing heading: {text}"
+        return found
+
+    order = [pos("## 1. Experiment configuration"),
+             pos("## 2. Cohort integrity and reconciliation"),
+             pos("### Dataset"),
+             pos("### Conditions"),
+             pos("## 3. Final correctness and A/B/C results"),
+             pos("## 4. ORIENT results"),
+             pos("## 5. Mem0 results"),
+             pos("## 6. Context pollution"),
+             pos("## 7. Recovery cost"),
+             pos("## 8. Verification cost"),
+             pos("## 9. Previous Inconclusive Cohort (not pooled)"),
+             pos("## 10. Observed facts"),
+             pos("## 11. Interpretation (non-causal)"),
+             pos("## 12. Limitations"),
+             pos("return '\\n'.join(lines)")]
+    assert order == sorted(order), f"section order broken: {order}"
+
+
 # ---- 10d. runner recovery (live-v2): opencode path + failure taxonomy -----
 
 def test_classify_failure_taxonomy() -> None:
