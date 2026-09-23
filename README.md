@@ -73,10 +73,11 @@ Explicit invariants:
 | `.hermes/tools/evidence.py` | Clean-tree validation, tree binding, canonical hashing, evidence verification |
 | `.hermes/tools/code_search.py` | AST/structural perception and impact tracing |
 | `.hermes/tools/diff_engine.py` | Exact atomic source mutation |
-| `.hermes/tools/orchestrator/` | Governed worker scheduling package (facade in `__init__.py`): conflict-safe dispatch, git worktree isolation, tree-bound evidence, coalesced reconciliation, generation-gated dispatch; `types`/`conflict`/`worktree`/`scheduler` modules |
+| `.hermes/tools/orchestrator/` | Governed worker scheduling package (facade in `__init__.py`): conflict-safe dispatch, git worktree isolation, tree-bound evidence, coalesced reconciliation, generation-gated dispatch; `types`/`conflict`/`worktree`/`scheduler`/`runner` modules |
 | `.hermes/tools/dep_index.py` | Phase-2 dependency fact extraction (stdlib `ast`): normalized facts, UNCERTAIN markers, content-hash cache |
 | `.hermes/tools/graph_state.py` | Phase-2 immutable versioned GraphState: reverse-index affected region, cycle/uncertainty fail-closed reconciliation |
 | `.hermes/tools/orchestrator/integrator.py` | Phase-4 atomic governed tree integration (`--apply`): sealed-evidence binding (commit tree == `target_tree_sha`), single-commit staging, unified-tree verification gate, all-or-nothing rollback with zero debris |
+| `.hermes/tools/orchestrator/runner.py` | Phase-2 Agent Runners: `BaseAgentRunner.execute` dispatch — `CommandRunner` (default, raw argv, byte-compatible with the old hook) and `AntigravityRunner` (headless `--workspace <worktree> --non-interactive --task <prompt>`, prompt+`writes`+acceptance injected as one argv element); ONE spawn primitive (Popen + G3 `kill_process_tree`), `verify_command` chains only after a zero primary exit, agent/runner spec fields validated fail-closed |
 
 Supporting scripts (documented in §10 and Appendix E): `scripts/update.py`
 (atomic self-update), `scripts/bootstrap.{sh,ps1}`,
@@ -618,6 +619,7 @@ hermes-disciplined-harness/
 │       │   ├── conflict.py        # dispatch safety: scope + R/W matrix
 │       │   ├── worktree.py        # git worktree lifecycle + isolation
 │       │   ├── scheduler.py       # scheduling loop, reconcile, CLI main
+│       │   ├── runner.py          # Phase-2 Agent Runners (command/antigravity)
 │       │   ├── integrator.py      # atomic --apply: evidence gate + rollback
 │       │   └── __main__.py        # python -m orchestrator (dir-form: CPython
 │       │                           # runpy bootstraps before user code)
@@ -636,7 +638,7 @@ hermes-disciplined-harness/
 │   ├── pre-ship-quality-gate/SKILL.md
 │   └── asha-update/SKILL.md       # /asha update trigger
 ├── scripts/                       # bootstrap, uninstall, update (sh/ps1/py)
-├── tests/                         # 188 regression tests (see §14)
+├── tests/                         # 193 regression tests (see §14)
 ├── benchmarks/                    # measured benchmark runner + results
 ├── ruff.toml                      # centralized lint exceptions
 ├── mypy.ini                       # mypy_path for cross-module imports
@@ -683,12 +685,12 @@ Measured on the current working tree (Windows 11, CPython 3.11.16,
 
 | Gate | Result |
 | --- | --- |
-| `pytest tests/ -q` | **187 passed, 1 skipped** (skip = environment probe in `tests/test_code_search.py:116`) |
+| `pytest tests/ -q` | **192 passed, 1 skipped** (skip = environment probe in `tests/test_code_search.py:116`) |
 | `ruff check .hermes/tools/ tests/` | **All checks passed!** |
 | `ruff check .` (full tree) | 19 known errors, **all inside the generated A/B playground `benchmarks/live_eval/asha_eval/`** (intentionally messy synthetic fixture; not shipped code) |
-| `mypy .hermes/tools/` | **Success: no issues found in 20 source files** (root `mypy.ini` sets `mypy_path = .hermes/tools`; `mem0.*`/`run_eval`/`run_live` marked `ignore_missing_imports`) |
+| `mypy .hermes/tools/` | **Success: no issues found in 21 source files** (root `mypy.ini` sets `mypy_path = .hermes/tools`; `mem0.*`/`run_eval`/`run_live` marked `ignore_missing_imports`) |
 | `mypy .jspace/control.py` | Success: no issues found in 1 source file |
-| `mypy tests/` | **Success: no issues found in 21 source files** |
+| `mypy tests/` | **Success: no issues found in 22 source files** |
 | `code_search.py --self-test` | PASSED |
 | `diff_engine.py --self-test` | PASSED |
 | Ship gate contract | `GATE SHIP: PASS` → exit 0 only after clean-tree scope resolution, checks, sealing and evidence verification (§5) |

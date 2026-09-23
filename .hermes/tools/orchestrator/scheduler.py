@@ -25,6 +25,7 @@ import scope_resolver
 
 from .conflict import ConflictManager, covered, scope_status
 from .integrator import IntegrationResult, TreeIntegrator
+from .runner import KNOWN_RUNNERS, dispatch_runner, runner_kind
 from .types import (
     STATES,
     TAIL_CHARS,
@@ -33,7 +34,7 @@ from .types import (
     ExecuteHook,
     OrchestratorError,
 )
-from .worktree import WorktreeDispatcher, _commit_all, _git, _safe_id, kill_process_tree
+from .worktree import WorktreeDispatcher, _commit_all, _git, _safe_id
 
 _SHA_RE = re.compile(r'[0-9a-f]{40}')
 
@@ -106,29 +107,19 @@ def verify_worker_evidence(path: Path,
 
 def default_execute(worker: dict[str, Any], worktree: Path
                     ) -> tuple[int, str]:
-    """Production execution: run the worker's argv in its worktree under
-    the worker's `timeout` (WORKER_TIMEOUT_S when unspecified/None --
-    existing behavior preserved). On timeout the child TREE is killed and
-    TimeoutExpired propagates; _run_one maps it to FAILED/timeout_exceeded."""
+    """Production execution: run the worker's primary action in its
+    worktree under the worker's `timeout` (WORKER_TIMEOUT_S when
+    unspecified/None -- existing behavior preserved). On timeout the
+    child TREE is killed and TimeoutExpired propagates; _run_one maps
+    it to FAILED/timeout_exceeded. Phase 2: the spawn/teardown primitive
+    lives in runner._spawn (shared by every AgentRunner) -- this hook
+    keeps its (rc, tail-of-combined-output) contract byte-for-byte."""
     timeout = worker.get('timeout')
     if timeout is None:
         timeout = WORKER_TIMEOUT_S
-    try:
-        proc = subprocess.Popen(worker['cmd'], cwd=worktree,
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True,
-                                start_new_session=(os.name != 'nt'))
-    except (OSError, subprocess.SubprocessError) as exc:
-        return -1, f'{type(exc).__name__}: {exc}'
-    try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        kill_process_tree(proc)
-        raise
-    except (OSError, subprocess.SubprocessError) as exc:
-        return -1, f'{type(exc).__name__}: {exc}'
-    combined = (out or '') + (err or '')
-    return proc.returncode, combined[-TAIL_CHARS:]
+    result = dispatch_runner(worker).execute(worker, worktree, timeout)
+    combined = (result.stdout or '') + (result.stderr or '')
+    return result.exit_code, combined[-TAIL_CHARS:]
 
 
 # ---------------------------------------------------------------------------
@@ -163,9 +154,18 @@ def validate_workers(workers: Any) -> list[dict[str, Any]]:
                 raise OrchestratorError(
                     f'{wid}.{key} must be a list of paths, or absent '
                     'to mean UNKNOWN (never silently an empty set)')
+        kind = runner_kind(raw)
         cmd = raw.get('cmd')
-        if not isinstance(cmd, list) or not cmd or \
-                not all(isinstance(part, str) for part in cmd):
+        if cmd is not None and (not isinstance(cmd, list)
+                                or not all(isinstance(part, str)
+                                           for part in cmd)):
+            raise OrchestratorError(
+                f'{wid}.cmd must be a non-empty argv list')
+        if kind == 'command' and (not isinstance(cmd, list) or not cmd):
+            # Back-compat gate (Phase 2): pre-Phase-2 specs are command
+            # workers and keep the exact same requirement + message;
+            # agent workers whose primary action is the agent
+            # invocation may omit cmd entirely.
             raise OrchestratorError(
                 f'{wid}.cmd must be a non-empty argv list')
         timeout = raw.get('timeout')
@@ -176,6 +176,42 @@ def validate_workers(workers: Any) -> list[dict[str, Any]]:
             raise OrchestratorError(
                 f'{wid}.timeout must be a positive number of seconds '
                 '(int/float), or absent/None for the default budget')
+        # -- Phase 2: optional agent-runner fields (fail-closed) -------
+        runner_cfg = raw.get('runner')
+        if runner_cfg is not None:
+            if not isinstance(runner_cfg, dict):
+                raise OrchestratorError(
+                    f'{wid}.runner must be an object with a type')
+            rtype = runner_cfg.get('type')
+            if not isinstance(rtype, str) or rtype not in KNOWN_RUNNERS:
+                raise OrchestratorError(
+                    f'{wid}: unknown runner type {rtype!r} '
+                    f'(known: {sorted(KNOWN_RUNNERS)})')
+        agent = raw.get('agent')
+        if agent is not None and (not isinstance(agent, str)
+                                  or not agent.strip()):
+            raise OrchestratorError(
+                f'{wid}.agent must be a non-empty string '
+                f'(known: {sorted(KNOWN_RUNNERS)})')
+        if kind not in KNOWN_RUNNERS:
+            raise OrchestratorError(
+                f'{wid}: unknown agent/runner {kind!r} '
+                f'(known: {sorted(KNOWN_RUNNERS)})')
+        prompt = raw.get('prompt')
+        if prompt is not None and (not isinstance(prompt, str)
+                                   or not prompt.strip()):
+            raise OrchestratorError(
+                f'{wid}.prompt must be a non-empty string when set')
+        if kind == 'antigravity' and prompt is None:
+            raise OrchestratorError(
+                f'{wid}: agent antigravity requires prompt')
+        verify_command = raw.get('verify_command')
+        if verify_command is not None and (
+                not isinstance(verify_command, str)
+                or not verify_command.strip()):
+            raise OrchestratorError(
+                f'{wid}.verify_command must be a non-empty string '
+                'when set')
     for raw in workers:
         for dep in raw.get('deps', []) or []:
             if dep not in ids:

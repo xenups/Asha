@@ -55,6 +55,12 @@ Exit 0 only when every worker is DONE; every other outcome exits 1.
 
 from .conflict import ConflictManager, _intersection, covered, overlap, scope_status
 from .integrator import IntegrationResult, TreeIntegrator
+from .runner import (
+                        AntigravityRunner,
+                        BaseAgentRunner,
+                        CommandRunner,
+                        dispatch_runner,
+)
 from .scheduler import (
                         GovernedScheduler,
                         default_execute,
@@ -69,6 +75,7 @@ from .types import (
                         WORKER_TIMEOUT_S,
                         ExecuteHook,
                         OrchestratorError,
+                        RunnerResult,
 )
 from .worktree import WorktreeDispatcher
 
@@ -77,16 +84,21 @@ __all__ = [
                         "TAIL_CHARS",
                         "WORKER_EVIDENCE_FIELDS",
                         "WORKER_TIMEOUT_S",
+                        "AntigravityRunner",
+                        "BaseAgentRunner",
+                        "CommandRunner",
                         "ConflictManager",
                         "ExecuteHook",
                         "GovernedScheduler",
                         "IntegrationResult",
                         "OrchestratorError",
+                        "RunnerResult",
                         "TreeIntegrator",
                         "WorktreeDispatcher",
                         "_intersection",
                         "covered",
                         "default_execute",
+                        "dispatch_runner",
                         "main",
                         "overlap",
                         "scope_status",
