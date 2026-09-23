@@ -190,13 +190,14 @@ def scope_status(worker: dict[str, Any]) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 def _intersection(label: str, left: Any, right: Any) -> str | None:
-    """None = intersection proven empty. A known-empty side proves it;
-    an unknown (None) side with a non-empty other side defers -- UNKNOWN
-    is never silently treated as an empty set."""
-    if left == [] or right == []:
-        return None  # known-empty side => intersection provably empty
+    """None = intersection proven empty. UNKNOWN (None) on either side is
+    detected BEFORE the known-empty shortcut: UNKNOWN x known-empty defers
+    too -- UNKNOWN != SAFE, absence of evidence never collapses with
+    evidence of absence."""
     if left is None or right is None:
         return f'{label}_unknown_set'
+    if left == [] or right == []:
+        return None  # known-empty side => intersection provably empty
     for litem in left:
         for ritem in right:
             if overlap(str(litem), str(ritem)):

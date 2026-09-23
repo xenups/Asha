@@ -663,3 +663,44 @@ def test_control_cli_delegation_and_bad_spec(tmp_path: Path) -> None:
     assert proc.returncode == 1
     assert "unknown dependency" in proc.stderr
     assert not (repo.parent / (repo.name + ".worktrees")).exists()
+
+
+# ---- G1 regression: UNKNOWN x known-empty must defer (UNKNOWN != SAFE) ----
+
+def test_unknown_times_known_empty_defers() -> None:
+    # left UNKNOWN, right known-empty: absence of evidence must never
+    # collapse with evidence of absence
+    reason = orchestrator._intersection("write_write", None, [])
+    assert reason is not None
+    assert "unknown_set" in reason
+
+
+def test_known_empty_times_unknown_defers() -> None:
+    # symmetric direction
+    reason = orchestrator._intersection("write_write", [], None)
+    assert reason is not None
+    assert "unknown_set" in reason
+    # known-empty x known-empty still proves an empty intersection
+    assert orchestrator._intersection("write_write", [], []) is None
+
+
+def test_unknown_write_set_defers_against_known_empty(tmp_path: Path) -> None:
+    # scheduler-level: A UNKNOWN writes must defer against B's known-empty
+    # writes (one deferral event; both complete, runner first)
+    repo = _make_repo(tmp_path)
+    events: list = []
+    box: dict = {}
+    workers = [
+        _worker("A", writes=None),
+        _worker("B", writes=()),
+    ]
+    sched = orchestrator.GovernedScheduler(
+        repo, workers, task_id="g1-unknown-empty",
+        execute=_conflict_runner_hook(box, events))
+    box["sched"] = sched
+    report = sched.run()
+    _assert_ok(report)
+    _assert_defer_then_run(events, report["deferral_events"],
+                           ("unknown_set",))
+    assert "unknown" in report["deferral_events"][0]["reason"]
+    assert set(report["completed"]) == {"A", "B"}
