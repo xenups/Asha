@@ -73,7 +73,7 @@ Explicit invariants:
 | `.hermes/tools/evidence.py` | Clean-tree validation, tree binding, canonical hashing, evidence verification |
 | `.hermes/tools/code_search.py` | AST/structural perception and impact tracing |
 | `.hermes/tools/diff_engine.py` | Exact atomic source mutation |
-| `.hermes/tools/orchestrator.py` | Dependency-aware worker scheduling: conflict-safe dispatch, git worktree isolation, tree-bound worker evidence, coalesced graph reconciliation, generation-gated dispatch |
+| `.hermes/tools/orchestrator/` | Governed worker scheduling package (facade in `__init__.py`): conflict-safe dispatch, git worktree isolation, tree-bound evidence, coalesced reconciliation, generation-gated dispatch; `types`/`conflict`/`worktree`/`scheduler` modules |
 | `.hermes/tools/dep_index.py` | Phase-2 dependency fact extraction (stdlib `ast`): normalized facts, UNCERTAIN markers, content-hash cache |
 | `.hermes/tools/graph_state.py` | Phase-2 immutable versioned GraphState: reverse-index affected region, cycle/uncertainty fail-closed reconciliation |
 
@@ -575,7 +575,14 @@ hermes-disciplined-harness/
 │       ├── check_runner.py        # isolated check execution
 │       ├── evidence.py            # sealing, tree binding, verification
 │       ├── code_search.py         # AST perception / trace
-│       ├── orchestrator.py        # governed worker scheduling (Phase 1+2)
+│       ├── orchestrator.py        # compat script entry (shim -> package)
+│       ├── orchestrator/          # governed worker scheduling package (1+2)
+│       │   ├── __init__.py        # public facade (re-exports + __all__)
+│       │   ├── types.py           # data contracts: states, hook, error
+│       │   ├── conflict.py        # dispatch safety: scope + R/W matrix
+│       │   ├── worktree.py        # git worktree lifecycle + isolation
+│       │   ├── scheduler.py       # scheduling loop, reconcile, CLI main
+│       │   └── __main__.py        # python orchestrator/ | -m orchestrator
 │       ├── dep_index.py           # Phase 2: dependency facts (stdlib ast)
 │       ├── graph_state.py         # Phase 2: immutable graph + reconciliation
 │       └── diff_engine.py         # atomic SEARCH/REPLACE
@@ -641,7 +648,7 @@ Measured on the current working tree (Windows 11, CPython 3.11.16,
 | `pytest tests/ -q` | **134 passed, 1 skipped** (skip = environment probe in `tests/test_code_search.py:116`) |
 | `ruff check .hermes/tools/ tests/` | **All checks passed!** |
 | `ruff check .` (full tree) | 19 known errors, **all inside the generated A/B playground `benchmarks/live_eval/asha_eval/`** (intentionally messy synthetic fixture; not shipped code) |
-| `mypy .hermes/tools/` | **Success: no issues found in 10 source files** (root `mypy.ini` sets `mypy_path = .hermes/tools`, `mem0.*` marked `ignore_missing_imports`) |
+| `mypy .hermes/tools/` | **Success: no issues found in 15 source files** (root `mypy.ini` sets `mypy_path = .hermes/tools`, `mem0.*` marked `ignore_missing_imports`) |
 | `mypy .jspace/control.py` | Success: no issues found in 1 source file |
 | `code_search.py --self-test` | PASSED |
 | `diff_engine.py --self-test` | PASSED |

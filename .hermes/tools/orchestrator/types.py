@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""Data contracts shared across the orchestrator package: execution
+vocabulary (states), worker-evidence field requirements, timeout/tail
+constants, the hook contract, and the fail-closed base exception."""
+from __future__ import annotations
+
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+STATES = ('PENDING', 'DEFERRED', 'RUNNING', 'DONE', 'FAILED', 'BLOCKED',
+          'INVALID_EVIDENCE')
+WORKER_TIMEOUT_S = 600
+TAIL_CHARS = 2000
+# Worker-evidence identity fields required by the Phase-1 evidence model.
+WORKER_EVIDENCE_FIELDS = (
+    'task_id', 'worker_id', 'base_tree_sha', 'target_tree_sha',
+    'declared_scope', 'observed_scope', 'read_set', 'write_set', 'diff',
+    'checks', 'exit_status',
+)
+
+ExecuteHook = Callable[[dict[str, Any], Path], Any]
+"""Hook contract: (worker, worktree) -> exit code, or (exit code, tail)."""
+
+
+class OrchestratorError(Exception):
+    """Structural / governance violation -- fail-closed, never degraded."""
