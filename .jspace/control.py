@@ -504,6 +504,12 @@ def main(argv=None):
                    choices=['json', 'markdown'])
     p.add_argument('--no-cache', action='store_true')
 
+    p = sub.add_parser('orchestrator')
+    p.add_argument('--spec', required=True,
+                   help='worker graph JSON (absolute, or relative to --root)')
+    p.add_argument('--keep-worktrees', action='store_true',
+                   help='debug: skip worktree removal (reported in run report)')
+
     p = sub.add_parser('memory')
     p.add_argument('--no-cache', action='store_true',
                    help='(accepted for symmetry; memory has no cache)')
@@ -639,6 +645,25 @@ def main(argv=None):
                 stdin_text = orient_json(root)
             proc = subprocess.run(argv, capture_output=True, text=True,
                                   timeout=300, input=stdin_text)
+            sys.stdout.write(proc.stdout)
+            sys.stderr.write(proc.stderr)
+            if proc.returncode != 0:
+                sys.exit(proc.returncode or 1)
+            return 0
+        if ns.command == 'orchestrator':
+            # Ledger-free delegation: the scheduler writes execution state
+            # and worker evidence under .jspace/cache only -- never the
+            # J-Space ledger; ship authorization stays with `check --stage ship`.
+            script = SKILL / '.hermes' / 'tools' / 'orchestrator.py'
+            spec_path = Path(ns.spec)
+            if not spec_path.is_absolute():
+                spec_path = root / spec_path
+            argv = [sys.executable, str(script), '--root', str(root),
+                    'run', '--spec', str(spec_path)]
+            if ns.keep_worktrees:
+                argv.append('--keep-worktrees')
+            proc = subprocess.run(argv, capture_output=True, text=True,
+                                  timeout=1800)
             sys.stdout.write(proc.stdout)
             sys.stderr.write(proc.stderr)
             if proc.returncode != 0:

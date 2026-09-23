@@ -73,6 +73,7 @@ Explicit invariants:
 | `.hermes/tools/evidence.py` | Clean-tree validation, tree binding, canonical hashing, evidence verification |
 | `.hermes/tools/code_search.py` | AST/structural perception and impact tracing |
 | `.hermes/tools/diff_engine.py` | Exact atomic source mutation |
+| `.hermes/tools/orchestrator.py` | Dependency-aware worker scheduling: conflict-safe dispatch, git worktree isolation, tree-bound worker evidence |
 
 Supporting scripts (documented in §10 and Appendix E): `scripts/update.py`
 (atomic self-update), `scripts/bootstrap.{sh,ps1}`,
@@ -547,6 +548,7 @@ Standalone tools (no `--transport`; see Appendix A for flags):
 | `python .jspace/control.py --transport <t> memory search --task "..." [--limit N]` | Bounded task retrieval | retrieved list, exit 0 | unavailable Mem0 → `MEMORY UNAVAILABLE`, exit 1 |
 | `python .jspace/control.py --transport <t> memory status` | Backend availability + counts | status json, exit 0 | — (reports unavailability as data) |
 | `python .jspace/control.py --transport <t> memory context [--task T]` | ORIENT vs memory synthesis (stale conflicts persisted) | context json, exit 0 | unavailable Mem0 / bad ORIENT json → exit 1 |
+| `python .jspace/control.py --transport <t> orchestrator --spec F [--keep-worktrees]` | Governed worker scheduling (delegates; no ledger writes) | report json, exit 0 only when every worker is DONE | missing transport / bad spec / failed run → exit 1 |
 | `python .hermes/tools/code_search.py --outline F` | AST outline (no bodies) | symbol table, exit 0 | missing file → exit 1 |
 | `python .hermes/tools/code_search.py --trace SYM --dir D` | Structural impact map | usage entries, exit 0 | unknown symbol → empty result, exit 0 (structural approximation, see §13) |
 | `python .hermes/tools/code_search.py --verify-env` | ABI pin check (exact versions, never auto-installs) | `ENV CHECK OK`, exit 0 | drift → exit 1 with fix hint |
@@ -571,6 +573,7 @@ hermes-disciplined-harness/
 │       ├── check_runner.py        # isolated check execution
 │       ├── evidence.py            # sealing, tree binding, verification
 │       ├── code_search.py         # AST perception / trace
+│       ├── orchestrator.py        # governed worker scheduling (Phase 1)
 │       └── diff_engine.py         # atomic SEARCH/REPLACE
 ├── .jspace/
 │   ├── control.py                 # ledger + gates + ship authorization
@@ -584,7 +587,7 @@ hermes-disciplined-harness/
 │   ├── pre-ship-quality-gate/SKILL.md
 │   └── asha-update/SKILL.md       # /asha update trigger
 ├── scripts/                       # bootstrap, uninstall, update (sh/ps1/py)
-├── tests/                         # 99 regression tests (see §14)
+├── tests/                         # 114 regression tests (see §14)
 ├── benchmarks/                    # measured benchmark runner + results
 ├── ruff.toml                      # centralized lint exceptions
 ├── mypy.ini                       # mypy_path for cross-module imports
@@ -631,10 +634,10 @@ Measured on the current working tree (Windows 11, CPython 3.11.16,
 
 | Gate | Result |
 | --- | --- |
-| `pytest tests/ -q` | **98 passed, 1 skipped** (skip = environment probe in `tests/test_code_search.py:116`) |
+| `pytest tests/ -q` | **113 passed, 1 skipped** (skip = environment probe in `tests/test_code_search.py:116`) |
 | `ruff check .hermes/tools/ tests/` | **All checks passed!** |
 | `ruff check .` (full tree) | 19 known errors, **all inside the generated A/B playground `benchmarks/live_eval/asha_eval/`** (intentionally messy synthetic fixture; not shipped code) |
-| `mypy .hermes/tools/` | **Success: no issues found in 7 source files** (root `mypy.ini` sets `mypy_path = .hermes/tools`, `mem0.*` marked `ignore_missing_imports`) |
+| `mypy .hermes/tools/` | **Success: no issues found in 8 source files** (root `mypy.ini` sets `mypy_path = .hermes/tools`, `mem0.*` marked `ignore_missing_imports`) |
 | `mypy .jspace/control.py` | Success: no issues found in 1 source file |
 | `code_search.py --self-test` | PASSED |
 | `diff_engine.py --self-test` | PASSED |
