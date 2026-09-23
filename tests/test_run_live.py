@@ -223,6 +223,10 @@ def test_normalize_events(tmp_path: Path) -> None:
 
 def test_cohort_integrity_audit(tmp_path: Path,
                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    if not run_live.PAYLOADS.is_dir():
+        pytest.skip("orient payloads are local-only "
+                    "(benchmarks/results/ is gitignored): this probe only "
+                    "runs where the data exists, e.g. the main work tree")
     live_root = tmp_path / "live-v2"
     monkeypatch.setattr(run_live, "LIVE", live_root)
     task = next(t for t in run_live.live_tasks()
