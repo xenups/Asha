@@ -449,6 +449,21 @@ def apply_transport(state, transport):
     state['transport'] = transport
 
 
+def orient_json(root):
+    """Current repository facts as ORIENT json for the memory delegation
+    (search and context both feed the same conflict gate). ORIENT failure
+    aborts the command: fail closed, never search without current facts."""
+    script = SKILL / '.hermes' / 'tools' / 'project_map.py'
+    orient = subprocess.run(
+        [sys.executable, str(script), '--quick', '--no-cache',
+         '--root', str(root)],
+        capture_output=True, text=True, timeout=120)
+    if orient.returncode != 0:
+        sys.stderr.write(orient.stderr)
+        sys.exit(orient.returncode or 1)
+    return orient.stdout
+
+
 def main(argv=None):
     argv = argv if argv is not None else sys.argv[1:]
     ap = argparse.ArgumentParser(description='J-Space cooperative controller (fail-closed transport gate).')
@@ -616,20 +631,12 @@ def main(argv=None):
                 if ns.tree_hash is not None:
                     argv += ['--tree-hash', ns.tree_hash]
             elif ns.memory_cmd == 'search':
-                argv += ['--task', ns.task, '--limit', str(ns.limit)]
+                argv += ['--task', ns.task, '--limit', str(ns.limit),
+                         '--orient-json', '-']
+                stdin_text = orient_json(root)
             elif ns.memory_cmd == 'context':
-                argv += ['--task', ns.task]
-                # current facts come from ORIENT, injected as data:
-                orient_script = SKILL / '.hermes' / 'tools' / 'project_map.py'
-                orient = subprocess.run(
-                    [sys.executable, str(orient_script), '--quick',
-                     '--no-cache', '--root', str(root)],
-                    capture_output=True, text=True, timeout=120)
-                if orient.returncode != 0:
-                    sys.stderr.write(orient.stderr)
-                    sys.exit(orient.returncode or 1)
-                argv += ['--orient-json', '-']
-                stdin_text = orient.stdout
+                argv += ['--task', ns.task, '--orient-json', '-']
+                stdin_text = orient_json(root)
             proc = subprocess.run(argv, capture_output=True, text=True,
                                   timeout=300, input=stdin_text)
             sys.stdout.write(proc.stdout)

@@ -717,3 +717,134 @@ def test_report_metric_names_explicit() -> None:
     assert "'judge_useful': judged_classes['useful']" in source
     assert "'useful_memories'" not in source
     assert "they differ by" in source  # documented, never equated
+
+
+# ---- 12. search path runs the current-fact conflict gate (regression) ----
+
+def test_search_cli_rejects_contradictory_fact(tmp_path: Path) -> None:
+    """`memory search --orient-json` must hard-reject a repository_fact
+    contradicted by the current ORIENT state while keeping relevant,
+    current memory.  Pre-fix: argparse rejected the flag (exit 2) and
+    control.py search ran with orient=None -> fact injected as context."""
+    repo = _make_repo(tmp_path)
+    store = DictBackend()
+    bad = memory.add_memory(
+        repo, "early era used unittest", "repository_fact",
+        fact_key="tooling.test_runner", fact_value="unittest",
+        backend=store)
+    good = memory.add_memory(
+        repo, "manifest serialization round-trip lesson",
+        "historical_lesson", backend=store)
+    orient_file = tmp_path / "orient.json"
+    orient_file.write_text(json.dumps(_orient(repo)), encoding="utf-8")
+    import contextlib
+    import io
+    out, err = io.StringIO(), io.StringIO()
+    memory.set_backend(store)
+    try:
+        with contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            try:
+                rc = memory.main(
+                    ["--root", str(repo), "search",
+                     "--task", "manifest serialization test runner",
+                     "--explain", "--orient-json", str(orient_file)])
+            except SystemExit as exc:  # pre-fix: argparse rejects the flag
+                rc = exc.code if isinstance(exc.code, int) else 1
+    finally:
+        memory.set_backend(None)
+    assert rc == 0, f"search --orient-json must be accepted: {err.getvalue()}"
+    payload = json.loads(out.getvalue())
+    retrieved_ids = [r["id"] for r in payload["retrieved"]]
+    assert bad["id"] not in retrieved_ids, (
+        "contradictory repository fact must not reach the agent: "
+        f"{payload['retrieved']}")
+    reasons = {d["memory_id"]: d["reason"] for d in payload["decisions"]}
+    assert reasons.get(bad["id"]) == "current_fact_override"
+    assert good["id"] in retrieved_ids, "relevant current memory stays usable"
+
+
+def test_control_search_gates_contradictory_fact(tmp_path: Path) -> None:
+    """End-to-end governed path: control.py memory search now injects
+    ORIENT, so a fact the current repository state contradicts is never
+    returned as trusted context (pre-fix it was: retrieved == the fact)."""
+    repo = _make_repo(tmp_path)
+    backend = memory.resolve_backend(repo)
+    if not backend.available:
+        pytest.skip(f"real mem0 unavailable: {backend.reason}")
+    proc = subprocess.run(
+        [PY, str(CONTROL), "--transport", "local", "--root", str(repo),
+         "memory", "add", "--category", "repository_fact",
+         "--content", "early era used unittest",
+         "--fact-key", "tooling.test_runner",
+         "--fact-value", "unittest"],
+        capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 0, proc.stderr
+    proc = subprocess.run(
+        [PY, str(CONTROL), "--transport", "local", "--root", str(repo),
+         "memory", "search", "--task", "test runner tooling"],
+        capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 0, proc.stderr
+    contents = [r["content"] for r in json.loads(proc.stdout)["retrieved"]]
+    assert not any("unittest" in c for c in contents), (
+        "governed search must reject facts contradicted by ORIENT: "
+        f"{contents}")
+
+
+def test_search_gate_keeps_current_relevant_unrelated(
+        tmp_path: Path) -> None:
+    """Contract pin: matching current fact + relevant memory accepted
+    (age is never a rejection reason); unrelated memory keeps its
+    existing relevance rejection with a supplied ORIENT."""
+    repo = _make_repo(tmp_path)
+    store = DictBackend()
+    current = memory.add_memory(
+        repo, "tests are pytest", "repository_fact",
+        fact_key="tooling.test_runner", fact_value="pytest",
+        backend=store)
+    # age must never be a rejection reason:
+    store.store[current["id"]]["metadata"]["recorded_at"] = \
+        "2019-01-01T00:00:00+00:00"
+    lesson = memory.add_memory(
+        repo, "manifest serialization round-trip lesson",
+        "historical_lesson", backend=store)
+    unrelated = memory.add_memory(
+        repo, "vacation itinerary planning notes", "historical_lesson",
+        backend=store)
+    selection = memory.select_memory(
+        list(store.store.values()),
+        task="test runner tooling manifest serialization",
+        repo_id=memory.repo_identity(repo), orient=_orient(repo), top_k=3)
+    accepted = [r["id"] for r in selection["accepted"]]
+    reasons = {d["memory_id"]: d["reason"] for d in selection["decisions"]}
+    assert current["id"] in accepted, "matching current fact stays usable"
+    assert lesson["id"] in accepted, "relevant memory stays usable"
+    assert unrelated["id"] not in accepted
+    assert reasons[unrelated["id"]] in ("no_task_overlap",
+                                        "generic_token_only"), reasons
+
+
+def test_search_ambiguous_evidence_conservative(tmp_path: Path) -> None:
+    """Insufficient evidence (fact_key absent from ORIENT, or stored
+    value missing) -> the repository_fact is NOT injected as trusted
+    context: pinning the existing fail-closed comparison used by both
+    conflict-gate consumers (evaluate_candidate + group_records)."""
+    repo = _make_repo(tmp_path)
+    store = DictBackend()
+    missing_key = memory.add_memory(
+        repo, "deployment region pinned to legacy zone", "repository_fact",
+        fact_key="deploy.region", fact_value="legacy-zone",
+        backend=store)
+    missing_value = memory.add_memory(
+        repo, "manifest runner recorded without value", "repository_fact",
+        fact_key="tooling.test_runner", backend=store)
+    selection = memory.select_memory(
+        list(store.store.values()),
+        task="deploy region manifest runner",
+        repo_id=memory.repo_identity(repo), orient=_orient(repo), top_k=3)
+    accepted = [r["id"] for r in selection["accepted"]]
+    reasons = {d["memory_id"]: d["reason"] for d in selection["decisions"]}
+    assert reasons[missing_key["id"]] == "current_fact_override"
+    assert reasons[missing_value["id"]] == "current_fact_override"
+    assert missing_key["id"] not in accepted
+    assert missing_value["id"] not in accepted

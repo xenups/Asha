@@ -655,6 +655,13 @@ def _print_json(payload: Any) -> None:
                      indent=2))
 
 
+def _load_orient(spec: str) -> dict[str, Any]:
+    """ORIENT json for the conflict gate: '-' = stdin, else a file."""
+    if spec == '-':
+        return json.load(sys.stdin)
+    return json.loads(Path(spec).read_text(encoding='utf-8'))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description='Asha institutional memory (Mem0 adapter)')
@@ -675,6 +682,10 @@ def main(argv: list[str] | None = None) -> int:
                           help='bounded top-k exposed memories (default 3)')
     p_search.add_argument('--explain', action='store_true',
                           help='also print the per-candidate decision audit')
+    p_search.add_argument('--orient-json',
+                          help="current repository facts (ORIENT json, "
+                               "'-' = stdin): enables the current-fact "
+                               "conflict gate")
 
     sub.add_parser('status')
 
@@ -699,13 +710,19 @@ def main(argv: list[str] | None = None) -> int:
             _print_json(record)
         elif args.command == 'search':
             task = args.task
+            # optional ORIENT: same current-fact conflict gate as context;
+            # omitting the flag keeps the historical search contract.
+            orient = (_load_orient(args.orient_json)
+                      if args.orient_json else None)
             if args.explain:
-                selection = explain_search(root, task, limit=args.limit)
+                selection = explain_search(root, task, limit=args.limit,
+                                           orient=orient)
                 _print_json({'task': task,
                              'retrieved': selection['accepted'],
                              'decisions': selection['decisions']})
             else:
-                records = search_memory(root, task, limit=args.limit)
+                records = search_memory(root, task, limit=args.limit,
+                                        orient=orient)
                 _print_json({'task': task, 'retrieved': records})
         elif args.command == 'status':
             store = resolve_backend(root)
@@ -728,11 +745,7 @@ def main(argv: list[str] | None = None) -> int:
                              'total': len(records), 'categories': counts,
                              'stale': stale})
         elif args.command == 'context':
-            if args.orient_json == '-':
-                orient = json.load(sys.stdin)
-            else:
-                orient = json.loads(
-                    Path(args.orient_json).read_text(encoding='utf-8'))
+            orient = _load_orient(args.orient_json)
             store = resolve_backend(root)
             if not store.available:
                 raise MemoryLayerError(
