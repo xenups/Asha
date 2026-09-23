@@ -1287,6 +1287,17 @@ def aggregate(runs: list[dict], freeze: dict) -> dict[str, Any]:
             'runs_with_impact_judgement': sum(
                 1 for run in c_runs
                 if run.get('evaluation', {}).get('memory_impact')),
+            'judged_classes': {
+                cls: sum(
+                    1 for run in c_runs
+                    for entry in (run.get('evaluation', {})
+                                  .get('memory_impact') or [])
+                    if entry.get('class') == cls)
+                for cls in ('useful', 'neutral', 'irrelevant', 'harmful',
+                            'stale', 'conflicting')},
+            'judged_records': sum(
+                len(run.get('evaluation', {}).get('memory_impact') or [])
+                for run in c_runs),
             'memory_used': sum(
                 c for run in c_runs
                 for outcome, c in (run.get('evaluation', {})
@@ -1373,8 +1384,9 @@ def render_report(aggregate_data: dict[str, Any],
         ('- prompts: byte-identical across conditions except the '
          'injected ORIENT / MEMORY sections; no ground-truth leakage '
          '(asserted by tests and by prompt_sha256 recording)'),
-        ('- event_time = harness arrival time (codex JSONL has no '
-         'authoritative timestamps); event-based metrics are primary'),
+        ('- event_time = harness arrival time (runner event streams '
+         'are not an authoritative cross-event clock); event-based '
+         'metrics are primary'),
         f"- evaluation: {evaluation_note}",
         '',
         ('## 2. Cohort integrity and reconciliation (protocol '
@@ -1497,6 +1509,7 @@ def render_report(aggregate_data: dict[str, Any],
         for key in ('retrieved_total', 'useful_memories',
                     'irrelevant_memories', 'stale_memories',
                     'conflicting_memories', 'harmful_memories',
+                    'judged_classes', 'judged_records',
                     'retrieval_precision', 'pollution_outcomes',
                     'repeated_mistakes'):
             blob = json.dumps(mem.get(key), sort_keys=True)
