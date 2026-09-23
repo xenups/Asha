@@ -563,6 +563,41 @@ Standalone tools (no `--transport`; see Appendix A for flags):
 `check_runner.py` and `evidence.py` are libraries — they have no CLI;
 `control.py` calls them.
 
+### MCP interface (Phases 5.1-5.6)
+
+Asha exposes itself as a stdio JSON-RPC MCP server
+(`.hermes/tools/orchestrator/mcp_server.py`, stdlib only). Both tested
+invocation forms are shown below; the original spec's dotted
+`-m .hermes...` form is invalid Python module syntax and must not be used:
+
+```text
+python .hermes/tools/orchestrator/mcp_server.py
+python -m orchestrator.mcp_server        (with .hermes/tools on PYTHONPATH)
+```
+
+Registration on Hermes (non-interactive: `printf Y` answers the `[Y/n]`
+enable prompt that would otherwise cancel the save):
+
+```text
+hermes mcp add asha-orchestrator --command <venv-python> --args <abs-path>/mcp_server.py
+hermes mcp test asha-orchestrator
+```
+
+| tool | behavior |
+| --- | --- |
+| `asha_status` | read-only repo facts: HEAD, porcelain status, active/orphaned worktrees, `.jspace` lock |
+| `asha_plan_dag` | static pre-flight plan (import edges, generations, conflict matrix, `safe`/`uncertain` flags) - never executes |
+| `asha_run_spec` `apply=false` | planning/simulation: same normalization + DAG, `SIMULATED_DONE` rows, zero subprocesses, zero side effects |
+| `asha_run_spec` `apply=true` | real Asha execution: a thin adapter over `GovernedScheduler.run()` (real worktrees, conflict deferrals, scope verification, checks, sealed evidence, existing state vocabulary) |
+
+`apply=true` does **not** grant ship authority: worker evidence always
+carries `authorized_to_ship=false` (Merge law, section 6), and landing
+work on `main` still goes through the existing ship-gate flow (section 5).
+Protocol negotiation offers `SUPPORTED_PROTOCOL_VERSIONS = [2025-06-18,
+2025-03-26, 2024-11-05]`; an unsupported request (e.g. MCP SDK's newer
+`2025-11-25`) falls back to the default with a one-line stderr warning
+and lets the client decide.
+
 ## 11. Repository Layout
 
 ```text
@@ -601,7 +636,7 @@ hermes-disciplined-harness/
 │   ├── pre-ship-quality-gate/SKILL.md
 │   └── asha-update/SKILL.md       # /asha update trigger
 ├── scripts/                       # bootstrap, uninstall, update (sh/ps1/py)
-├── tests/                         # 155 regression tests (see §14)
+├── tests/                         # 188 regression tests (see §14)
 ├── benchmarks/                    # measured benchmark runner + results
 ├── ruff.toml                      # centralized lint exceptions
 ├── mypy.ini                       # mypy_path for cross-module imports
@@ -648,12 +683,12 @@ Measured on the current working tree (Windows 11, CPython 3.11.16,
 
 | Gate | Result |
 | --- | --- |
-| `pytest tests/ -q` | **154 passed, 1 skipped** (skip = environment probe in `tests/test_code_search.py:116`) |
+| `pytest tests/ -q` | **187 passed, 1 skipped** (skip = environment probe in `tests/test_code_search.py:116`) |
 | `ruff check .hermes/tools/ tests/` | **All checks passed!** |
 | `ruff check .` (full tree) | 19 known errors, **all inside the generated A/B playground `benchmarks/live_eval/asha_eval/`** (intentionally messy synthetic fixture; not shipped code) |
-| `mypy .hermes/tools/` | **Success: no issues found in 19 source files** (root `mypy.ini` sets `mypy_path = .hermes/tools`; `mem0.*`/`run_eval`/`run_live` marked `ignore_missing_imports`) |
+| `mypy .hermes/tools/` | **Success: no issues found in 20 source files** (root `mypy.ini` sets `mypy_path = .hermes/tools`; `mem0.*`/`run_eval`/`run_live` marked `ignore_missing_imports`) |
 | `mypy .jspace/control.py` | Success: no issues found in 1 source file |
-| `mypy tests/` | **Success: no issues found in 19 source files** |
+| `mypy tests/` | **Success: no issues found in 21 source files** |
 | `code_search.py --self-test` | PASSED |
 | `diff_engine.py --self-test` | PASSED |
 | Ship gate contract | `GATE SHIP: PASS` → exit 0 only after clean-tree scope resolution, checks, sealing and evidence verification (§5) |
