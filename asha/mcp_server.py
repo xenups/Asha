@@ -47,7 +47,7 @@ from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
 from typing import Any, TextIO
 
-from . import dep_index, graph_state
+from . import dep_index, graph_state, worker_graph
 from .conflict import ConflictManager, scope_status
 from .scheduler import GovernedScheduler, validate_workers
 from .types import OrchestratorError
@@ -395,11 +395,16 @@ def asha_plan_dag(arguments: dict[str, Any]) -> dict[str, Any]:
              for target in targets),
             key=lambda edge: (edge["source"], edge["target"]))
 
+        worker_candidates: Any = None
         if workers is not None:
             nodes = [str(worker["id"]) for worker in workers]
-            predecessors = {str(worker["id"]): [
-                str(dep) for dep in (worker.get("deps") or [])]
-                for worker in workers}
+            # Section 22: the SAME projection the scheduler publishes
+            # with -- declared deps UNION CodeGraph-derived edges via
+            # worker_graph; no MCP-specific graph or scheduler exists.
+            worker_candidates = worker_graph.derive(
+                workers, file_edges, completed=frozenset())
+            predecessors = {wid: sorted(preds) for wid, preds
+                            in worker_candidates.edges.items()}
         else:
             nodes = list(scope_files)
             predecessors = {src: sorted(targets)
@@ -442,6 +447,13 @@ def asha_plan_dag(arguments: dict[str, Any]) -> dict[str, Any]:
                 scope_ok, scope_why = scope_status(worker)
                 if not scope_ok:
                     reasons.append(scope_why)
+                if (worker_candidates is not None
+                        and wid in worker_candidates.uncertain):
+                    # Sections 6/14: ambiguous live ownership = UNKNOWN,
+                    # never reported as safe (UNKNOWN != SAFE).
+                    reasons.append(
+                        "owner_ambiguous:"
+                        + ",".join(worker_candidates.ambiguous_paths))
                 cells = [matrix.get(wid, {}).get(other)
                          for other in ids if other != wid]
                 clash = [cell for cell in cells

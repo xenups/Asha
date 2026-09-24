@@ -12,12 +12,20 @@ import re
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
 from typing import Any
 
-from . import check_runner, dep_index, evidence, graph_state, scope_resolver
+from . import (
+    check_runner,
+    dep_index,
+    evidence,
+    graph_state,
+    scope_resolver,
+    worker_graph,
+)
 from .conflict import ConflictManager, covered, scope_status
 from .integrator import IntegrationResult, TreeIntegrator
 from .runner import KNOWN_RUNNERS, dispatch_runner, runner_kind
@@ -239,6 +247,12 @@ class GovernedScheduler:
         self.deferral_events: list[dict[str, str]] = []
         self.evidence_paths: dict[str, str] = {}
         self.completed: list[str] = []
+        # Phase 2.1: WorkerGraph rides the SAME publication as self.graph
+        # (sections 3/17): declared deps UNION CodeGraph-derived edges,
+        # owners resolved over LIVE claims -- so it initializes after
+        # `completed` exists. Never published split from GraphState.
+        self.worker_graph: dict[str, Any] = self._derive_worker_graph({}, 0)
+        self.worker_cycle_members: frozenset[str] = frozenset()
         self._deferred_seen: set[tuple[str, str]] = set()
         self.evidence_dir = (self.repo / '.jspace' / 'cache' / 'orchestrator'
                              / _safe_id(task_id))
@@ -256,6 +270,9 @@ class GovernedScheduler:
         """Phase-2 graph summary for the run report (§2.2 / §2.4)."""
         return {
             'generation': self.graph.generation,
+            'worker_generation': self.worker_graph['generation'],
+            'derived': list(self.worker_graph['derived']),
+            'uncertain_owners': sorted(self.worker_graph['uncertain']),
             'reconcile_passes': len(self.reconcile_log),
             'stale_intents_dropped': self.stale_intents_dropped,
             'failures': [entry['reason'] for entry in self.reconcile_log
@@ -266,6 +283,17 @@ class GovernedScheduler:
         ok, why = scope_status(worker)
         if not ok:
             return 'block', why
+        wid = str(worker['id'])
+        if wid in self.worker_graph['uncertain']:
+            # Sections 6/14: ambiguous live ownership = UNKNOWN worker
+            # topology; dispatch is fail-closed blocked, never guessed.
+            return 'block', ('owner_ambiguous:'
+                             + ','.join(
+                                 self.worker_graph['ambiguous_paths']))
+        if wid in self.worker_cycle_members:
+            # Section 16: the candidate WorkerGraph was rejected for a
+            # cycle; its members hold until a valid publication lands.
+            return 'block', 'worker_cycle_member'
         safe, why = self.conflicts.assess(worker)
         if not safe:
             return 'defer', why
@@ -395,32 +423,138 @@ class GovernedScheduler:
             return None
         return proc.stdout.decode('utf-8', errors='replace')
 
-    def _reconcile(self, updates: dict[str, str | None]) -> None:
-        """One reconciliation pass per coalesced batch (§2.3 / §2.4).
+    def _derive_worker_graph(self, file_edges: Mapping[str, Iterable[str]],
+                             generation: int) -> dict[str, Any]:
+        """Pure projection into the report-shaped dict the loop reads."""
+        candidate = worker_graph.derive(
+            self.workers, file_edges,
+            completed=frozenset(self.completed))
+        return {
+            'edges': {wid: set(preds)
+                      for wid, preds in candidate.edges.items()},
+            'declared': {wid: list(preds)
+                         for wid, preds in candidate.declared.items()},
+            'derived': candidate.derived,
+            'uncertain': candidate.uncertain,
+            'ambiguous_paths': candidate.ambiguous_paths,
+            'generation': generation,
+        }
 
-        Failure keeps the previous GraphState by reference (fail-closed);
-        every pass is appended to self.reconcile_log for the run report.
+    def _reconcile_batch(
+            self, items: Sequence[tuple[str, str | None, str, str]]
+            ) -> bool:
+        """One pass per drained completion batch (section 9).
+
+        Two workers producing the SAME path in one batch make the
+        virtual analysis view ambiguous: refuse to choose (section 11 --
+        never last-write-wins) and fail the pass with the old state
+        retained.
+        """
+        updates: dict[str, str | None] = {}
+        providers: dict[str, tuple[str, str]] = {}
+        ambiguous: set[str] = set()
+        for path, content, wid, tree in items:
+            if path in providers:
+                ambiguous.add(path)
+                continue
+            providers[path] = (wid, tree)
+            updates[path] = content
+        if ambiguous:
+            self.reconcile_log.append({
+                'ok': False,
+                'reason': 'virtual_ambiguity:'
+                          + ','.join(sorted(ambiguous)),
+                'generation': self.graph.generation,
+                'files': sorted(updates),
+                'affected': (), 'added': 0, 'removed': 0,
+                'derived': [], 'uncertain': [],
+                'virtual': worker_graph.virtual_fingerprint(
+                    providers, updates),
+            })
+            return False
+        return self._reconcile(updates, providers=providers)
+
+    def _reconcile(self, updates: dict[str, str | None], *,
+                   providers: dict[str, tuple[str, str]] | None = None
+                   ) -> bool:
+        """One pass -> ONE atomic publication (sections 7/17): candidate
+        GraphState, WorkerGraph projection, cycle validation -- only
+        then swap BOTH objects (single thread: adjacent assignments, no
+        half-published state) . Any failure keeps the previous
+        GraphState AND WorkerGraph by reference; the caller rebuilds
+        readiness only when this returns True.
         """
         if not updates:
-            return
-        outcome = graph_state.reconcile(self.graph, self.dep_index, updates)
-        self.graph = outcome.state  # atomic swap (same ref on failure)
+            return False
+        fingerprint = worker_graph.virtual_fingerprint(
+            providers or {}, updates)
+        outcome = graph_state.reconcile(self.graph, self.dep_index,
+                                        updates)
+        if not outcome.ok:
+            self.reconcile_log.append({
+                'ok': False, 'reason': outcome.reason,
+                'generation': outcome.generation,
+                'files': list(outcome.files),
+                'affected': list(outcome.affected),
+                'added': outcome.added, 'removed': outcome.removed,
+                'derived': [], 'uncertain': [], 'virtual': fingerprint,
+            })
+            return False
+        candidate = worker_graph.derive(
+            self.workers, outcome.state.edges,
+            completed=frozenset(self.completed))
+        combined = {wid: set(preds)
+                    for wid, preds in candidate.edges.items()}
+        try:
+            worker_graph.build_sorter(combined)
+        except worker_graph.WorkerCycleError as exc:
+            # Section 16: worker-level cycle -> candidate rejected,
+            # GraphState retained, cycle members held from dispatch.
+            self.worker_cycle_members = frozenset(exc.members)
+            self.reconcile_log.append({
+                'ok': False,
+                'reason': 'worker_cycle:' + ','.join(exc.members),
+                'generation': self.graph.generation,
+                'files': list(outcome.files),
+                'affected': list(outcome.affected),
+                'added': outcome.added, 'removed': outcome.removed,
+                'derived': [], 'uncertain': [], 'virtual': fingerprint,
+            })
+            return False
+        self.graph = outcome.state
+        self.worker_graph = {
+            'edges': {wid: set(preds)
+                      for wid, preds in candidate.edges.items()},
+            'declared': dict(candidate.declared),
+            'derived': candidate.derived,
+            'uncertain': candidate.uncertain,
+            'ambiguous_paths': candidate.ambiguous_paths,
+            'generation': outcome.state.generation,
+        }
+        self.worker_cycle_members = frozenset()  # valid candidate now
         self.reconcile_log.append({
-            'ok': outcome.ok,
-            'reason': outcome.reason,
+            'ok': True, 'reason': None,
             'generation': outcome.generation,
             'files': list(outcome.files),
             'affected': list(outcome.affected),
-            'added': outcome.added,
-            'removed': outcome.removed,
+            'added': outcome.added, 'removed': outcome.removed,
+            'derived': list(candidate.derived),
+            'uncertain': sorted(candidate.uncertain),
+            'virtual': fingerprint,
         })
+        return True
 
     # -- the scheduling loop ------------------------------------------------
 
     def run(self) -> dict[str, Any]:
+        # Generation-0 topology = declared deps (WorkerGraph at publish
+        # generation 0). Every later publication REPLACES this sorter --
+        # build new, validate, replace; never mutate mid-round (§7).
         sorter: TopologicalSorter[str] = TopologicalSorter()
         for worker in self.workers:
-            sorter.add(worker['id'], *(worker.get('deps') or []))
+            sorter.add(worker['id'],
+                       *(self.worker_graph['edges'].get(worker['id'])
+                         or ()))
         report: dict[str, Any] = {
             'task_id': self.task_id, 'status': 'failed', 'reason': None,
             'base_commit': self.dispatcher.base_commit,
@@ -498,39 +632,74 @@ class GovernedScheduler:
                 if futures:
                     finished, _ = wait(futures,
                                        return_when=FIRST_COMPLETED)
-                    # §2.4: coalesce every completion drained in this
-                    # batch into ONE reconciliation pass (+1 generation).
-                    pending: dict[str, str | None] = {}
-                    for fut in finished:
-                        wid = futures.pop(fut)
-                        try:
-                            outcome = fut.result()
-                        except Exception as exc:  # never lose a failure
-                            outcome = {'state': 'INVALID_EVIDENCE',
-                                       'reason': f'internal: {exc}',
-                                       'evidence': None}
-                        self.conflicts.finish(wid)
-                        self._set(wid, str(outcome['state']),
-                                  outcome.get('reason'))
-                        if outcome.get('evidence'):
-                            self.evidence_paths[wid] = str(
-                                outcome['evidence'])
-                        if outcome['state'] == 'DONE':
-                            # done() = completed dependency execution, and
-                            # only after evidence was sealed AND re-verified.
-                            sorter.done(wid)
-                            self.completed.append(wid)
-                            ready.extend(sorter.get_ready())
-                            # Phase-2 input: read each observed path from
-                            # the tree identity this outcome just verified.
-                            for item in outcome.get('observed') or ():
-                                pending[item] = self._read_blob(
-                                    str(outcome['target_tree']), item)
-                        else:
-                            abort = True
-                            fail_reason = fail_reason or (
-                                f'{wid}:{outcome["state"]}')
-                    self._reconcile(pending)
+                    # Section 9: coalesce every completion drained in
+                    # this batch into ONE reconciliation pass (+1
+                    # generation) as (path, content, worker, tree) rows
+                    # so duplicate producers stay detectable.
+                    # Wave union: after the blocking wake, siblings whose
+                    # evidence seal finished DURING this processing are
+                    # collected with pure .done() checks (never blocks on
+                    # a still-running worker) -- overlap in time = one
+                    # affected region = exactly ONE pass.
+                    batch: list[tuple[str, str | None, str, str]] = []
+                    wave = set(finished)
+                    handled: set = set()
+                    while wave:
+                        for fut in wave:
+                            handled.add(fut)
+                            wid = futures.pop(fut)
+                            try:
+                                outcome = fut.result()
+                            except Exception as exc:  # never lose a failure
+                                outcome = {
+                                    'state': 'INVALID_EVIDENCE',
+                                    'reason': f'internal: {exc}',
+                                    'evidence': None}
+                            self.conflicts.finish(wid)
+                            self._set(wid, str(outcome['state']),
+                                      outcome.get('reason'))
+                            if outcome.get('evidence'):
+                                self.evidence_paths[wid] = str(
+                                    outcome['evidence'])
+                            if outcome['state'] == 'DONE':
+                                # done() = completed dependency execution,
+                                # only after evidence was sealed AND
+                                # re-verified.
+                                sorter.done(wid)
+                                self.completed.append(wid)
+                                ready.extend(sorter.get_ready())
+                                # Section 10/11 input: read each observed
+                                # path from the tree identity this outcome
+                                # just verified, tagged with its producer.
+                                tree = str(outcome['target_tree'])
+                                for item in outcome.get('observed') or ():
+                                    batch.append(
+                                        (item,
+                                         self._read_blob(tree, item),
+                                         wid, tree))
+                            else:
+                                abort = True
+                                fail_reason = fail_reason or (
+                                    f'{wid}:{outcome["state"]}')
+                        wave = {f for f in list(futures) if f.done()} \
+                            - handled
+                    if self._reconcile_batch(batch):
+                        # Section 7: build a NEW sorter from the just-
+                        # published WorkerGraph and replace the round's
+                        # readiness wholesale -- stale READY entries are
+                        # discarded; PENDING/DEFERRED re-decide against
+                        # the fresh frontier on the next iteration.
+                        # Acyclicity: completed nodes and their incoming
+                        # edges are removed outright, so the remaining
+                        # graph is an edge-subset of the validated DAG.
+                        remaining = {
+                            str(worker['id']): set(
+                                self.worker_graph['edges'].get(
+                                    worker['id']) or set())
+                            for worker in self.workers
+                            if worker['id'] not in self.completed}
+                        sorter = worker_graph.build_sorter(remaining)
+                        ready = list(dict.fromkeys(sorter.get_ready()))
                     continue
                 break  # nothing dispatched, nothing running: schedule ends
 
@@ -542,7 +711,9 @@ class GovernedScheduler:
         for wid, entry in self.states.items():
             if entry['state'] not in ('PENDING', 'DEFERRED'):
                 continue
-            deps = self.by_id[wid].get('deps') or []
+            # Section 7: blocked-late reasons come from the PUBLISHED
+            # WorkerGraph (declared UNION derived), not declared-only.
+            deps = self.worker_graph['edges'].get(wid) or []
             unfinished = [dep for dep in deps
                           if self.states[dep]['state'] != 'DONE']
             if unfinished:

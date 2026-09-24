@@ -81,6 +81,63 @@ Planning never guesses: overlapping writes within one generation, unknown
 read/write sets, or dependencies without import facts downgrade the
 conflict matrix to `uncertain` instead of a false `safe`.
 
+## Dependency Model: Code Graph → Worker DAG
+
+Two graph layers, deliberately never collapsed into one:
+
+| Layer | Nodes | Edges | Published by |
+| --- | --- | --- | --- |
+| Code Graph | files | AST dependency facts (`dep_index`) | `graph_state.reconcile()` |
+| Worker DAG | workers | declared `deps` ∪ derived worker edges | `asha.worker_graph` projection → `TopologicalSorter` |
+
+**Online reconciliation.** Every drained completion batch is coalesced
+into ONE pass (overlapping completions are unioned first — never one
+topology mutation per worker), analyzed incrementally from the sealed
+evidence trees, and applied as a single atomic publication: GraphState
+candidate, WorkerGraph projection, cycle validation — only then do both
+graphs swap and the generation advance together. Any failure leaves the
+previous GraphState *and* WorkerGraph standing by reference. Cached
+facts and blob fingerprints ensure unaffected sources are never
+reparsed.
+
+**Derived worker dependencies.** For a file edge `src → tgt`, live
+owners are resolved (workers whose `declared_scope` covers the path,
+excluding workers that already completed): two different live owners
+mean the consumer owner depends on the provider owner and must be
+scheduled after it; same owner, missing owner, or no live owner yields
+no worker edge. Declared `deps` survive every publication untouched.
+
+**Generation-based invalidation.** A dispatch decision records the
+generation it was computed against. After each publication the loop
+builds a NEW sorter and replaces the readiness frontier wholesale:
+stale READY entries are discarded, PENDING/DEFERRED workers re-decide
+against dependency readiness + scope checks + ConflictManager, and
+RUNNING workers continue — execution state is permanent, scheduling
+state is not.
+
+**UNKNOWN / fail-closed.** `UNKNOWN != EMPTY != SAFE`. Two live owners
+of a path involved in a topology edge mark those workers
+`owner_ambiguous` (blocked at dispatch, never guessed). A worker-level
+cycle rejects the candidate WorkerGraph with the previous valid state
+retained — a plain code-level import cycle alone never fails worker
+scheduling. A batch where two workers produced the same file refuses to
+choose (no last-write-wins) and fails closed.
+
+**Add / delete / rename invalidation.** Reverse-dependency closure
+reconsiders dependents of every changed file in both directions. A raw
+unresolved import target is promoted to a real edge once the provider
+file enters the known set — without reparsing unchanged sources.
+Deletions pop their nodes; a rename is delete-old + add-new for
+invalidation purposes, with no reliance on Git rename detection.
+
+**Mixed / virtual integration analysis.** Concurrent worker outputs are
+read as a deterministic Virtual Integration View: per pass each file
+comes from the single producer whose sealed tree was just verified,
+identified by a `virtual:` fingerprint in the run report. It is an
+analysis identity only — never labeled a Git tree, never authorizing
+integration or shipping; merge authority stays with the integration
+gate.
+
 ## Task Specification Format (`spec.json`)
 
 ```json
@@ -127,7 +184,7 @@ conflict matrix to `uncertain` instead of a false `safe`.
 | Scope resolution | S0–S4 blast-radius classification of every change set; checks are selected by scope, never skipped. |
 | Evidence sealing | Tamper-resistant `evidence.json`: commit, `HEAD^{tree}`, observed scope, check results; workers always seal `authorized_to_ship: false`. |
 | Merge law | Worker green proves only its own tree; the integration gate re-runs the full matrix against the merged tree. |
-| Verified test baseline | **194 passed, 1 skipped** (CPython 3.11+, stdlib only). |
+| Verified test baseline | **229 passed, 1 skipped** (CPython 3.11+, stdlib only). |
 
 Fail-closed everywhere: a missing fact defers or blocks the run; it never
 unlocks one. `push` is not `done`, and a commit is not ship authorization.

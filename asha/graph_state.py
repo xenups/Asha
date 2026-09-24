@@ -185,6 +185,9 @@ def reconcile(state: GraphState,
     rebuilt) with generation unchanged.
     """
     files = tuple(updates.keys())
+    # Section 12 (add): raw targets live outside the known set; capture
+    # it BEFORE this batch so promotion is detectable afterwards.
+    known_before = frozenset(index.known_paths())
     analyzed: dict[str, tuple[dep_index.DependencyFact, ...] | None] = {}
     uncertain: list[str] = []
     for path, content in updates.items():
@@ -237,6 +240,27 @@ def reconcile(state: GraphState,
             out[path] = new_targets
         else:
             out.pop(path, None)
+
+    # Section 12 (add / rename-as-delete+add): a previously unresolved
+    # RAW target is promoted to a real local edge once the provider file
+    # enters the known set -- only resolution changes, no source is
+    # reparsed (DependencyIndex cache stays authoritative, section 20).
+    deleted = {path for path, facts in analyzed.items() if facts is None}
+    known_now = frozenset(index.known_paths()) - deleted
+    for src, targets in out.items():
+        if src in analyzed:
+            continue  # re-analyzed sources were fully resolved above
+        for target in list(targets):
+            if target in known_before or target in known_now:
+                continue  # resolved local path already: never re-mangled
+            promoted = _resolve(src, target, known_now)
+            if promoted != target:
+                targets.discard(target)
+                targets.add(promoted)
+                added += 1
+                removed += 1
+                if src not in affected_list:
+                    affected_list.append(src)
 
     # Cycle gate (2.3.5): fail-closed, previous state retained.
     sorter: TopologicalSorter[str] = TopologicalSorter()
