@@ -38,14 +38,14 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[1]
-TOOLS = REPO / '.hermes' / 'tools'
-if str(TOOLS) not in sys.path:
-    sys.path.insert(0, str(TOOLS))
+
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 
 CONDITIONS = ('baseline', 'orient', 'orient_mem0')
 RANK = {'S0': 0, 'S1': 1, 'S2': 2, 'S3': 3, 'S4': 4}
@@ -124,7 +124,7 @@ def mem0_probe(task: dict, orient: dict, distractor_lesson: str,
                backend: Any) -> dict[str, Any]:
     """Controlled memory experiment (STEP 14): relevant lesson retrieval,
     distractor exclusion, and CURRENT FACTS > STORED MEMORY precedence."""
-    import memory
+    from asha import memory
 
     root = Path(task['_root'])
     records: list[dict] = []
@@ -443,14 +443,11 @@ def main(argv: list[str] | None = None) -> int:
         print('EVAL REFUSED: empty task set', file=sys.stderr)
         return 1
 
-    date = datetime.now(timezone.utc).isoformat(timespec='seconds')
-    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    date = datetime.now(UTC).isoformat(timespec='seconds')
+    stamp = datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')
     base_id = f'{stamp}_{head[:7]}_{task_sha}'
 
-    import check_runner
-    import memory
-    import project_map
-    import scope_resolver
+    from asha import check_runner, memory, project_map, scope_resolver
 
     work = Path(tempfile.mkdtemp(prefix='asha-eval-'))
     run_by_condition: dict[str, dict] = {}

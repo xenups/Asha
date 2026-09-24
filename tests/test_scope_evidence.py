@@ -15,7 +15,6 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONTROL = REPO_ROOT / ".jspace" / "control.py"
-TOOLS = REPO_ROOT / ".hermes" / "tools"
 PY = sys.executable
 
 GITIGNORE = (
@@ -41,7 +40,7 @@ BASELINE = {
 
 
 def _load(name: str):
-    spec = importlib.util.spec_from_file_location(name, TOOLS / f"{name}.py")
+    spec = importlib.util.find_spec("asha." + name)
     assert spec is not None
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

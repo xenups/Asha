@@ -1,6 +1,6 @@
 """Phase 4 TDD: governed tree integration & atomic `--apply`.
 
-Pre-implementation failure demonstrated: `orchestrator.TreeIntegrator` /
+Pre-implementation failure demonstrated: `asha.TreeIntegrator` /
 `IntegrationResult` do not exist yet (AttributeError) and the CLI does not
 know `--apply` (argparse exit 2). After implementation: dry-run must leave
 the target untouched, apply must be ONE atomic commit, and the golden
@@ -19,13 +19,12 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 CONTROL = REPO / ".jspace" / "control.py"
-TOOLS = REPO / ".hermes" / "tools"
 
-if str(TOOLS) not in sys.path:
-    sys.path.insert(0, str(TOOLS))
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 
-import evidence  # (TOOLS must be on sys.path before these imports)
-import orchestrator
+import asha
+from asha import evidence
 
 PY = sys.executable
 
@@ -170,7 +169,7 @@ def test_integration_failure_rolls_back_completely(tmp_path: Path,
                 cmd=_write_cmd("tests/b_marker.txt", "present\n")),
     ])
 
-    rc = orchestrator.main(["--root", str(repo), "run", "--spec", str(spec),
+    rc = asha.main(["--root", str(repo), "run", "--spec", str(spec),
                             "--apply"])
     report = json.loads(capsys.readouterr().out)
 
@@ -232,7 +231,7 @@ def test_invalid_evidence_aborts_before_any_mutation(tmp_path: Path) -> None:
 
     for label, paths in (("tampered", [good, tampered]),
                          ("missing", [good, missing])):
-        integrator = orchestrator.TreeIntegrator(repo, paths, generation=3)
+        integrator = asha.TreeIntegrator(repo, paths, generation=3)
         result = integrator.apply()
         assert result.status == "invalid_evidence", (label, result)
         assert result.error
@@ -257,7 +256,7 @@ def test_merge_collision_aborts_cleanly(tmp_path: Path,
                 cmd=_write_cmd("tests/shared.txt", "B-version\n")),
     ])
 
-    rc = orchestrator.main(["--root", str(repo), "run", "--spec", str(spec),
+    rc = asha.main(["--root", str(repo), "run", "--spec", str(spec),
                             "--apply"])
     report = json.loads(capsys.readouterr().out)
 

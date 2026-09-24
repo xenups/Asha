@@ -30,7 +30,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEPS = ROOT / ".jspace" / "dependencies.json"
-CODE_SEARCH = ROOT / ".hermes" / "tools" / "code_search.py"
+CODE_SEARCH = ROOT / "asha" / "code_search.py"
 VENV_PY = Path(sys.executable)
 
 RUFF_ARGS = ["-m", "ruff", "check", "."]
@@ -200,7 +200,7 @@ def main() -> int:
         # tests: repoint the module globals at the scratch root
         ROOT = Path(args.root).resolve()
         DEPS = ROOT / ".jspace" / "dependencies.json"
-        CODE_SEARCH = ROOT / ".hermes" / "tools" / "code_search.py"
+        CODE_SEARCH = ROOT / "asha" / "code_search.py"
 
     changed = False
     try:

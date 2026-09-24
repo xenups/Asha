@@ -14,20 +14,19 @@ import uuid
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-TOOLS = REPO_ROOT / ".hermes" / "tools"
 BENCH = REPO_ROOT / "benchmarks"
 RUN_EVAL = BENCH / "run_eval.py"
 TASKS = BENCH / "tasks.jsonl"
 PY = sys.executable
 
-if str(TOOLS) not in sys.path:
-    sys.path.insert(0, str(TOOLS))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 if str(BENCH) not in sys.path:
     sys.path.insert(0, str(BENCH))
 
-import memory  # (TOOLS must be on sys.path before this import)
 import run_eval
-import scope_resolver
+
+from asha import memory, scope_resolver
 
 REQUIRED_FIELDS = {
     "id", "repository", "base_commit", "task_commit", "task_description",
@@ -195,7 +194,7 @@ def test_run_refuses_dirty_tree(tmp_path: Path, capsys) -> None:
 # ---- 6. ORIENT exposure logic ---------------------------------------------
 
 def test_orient_exposure(tmp_path: Path) -> None:
-    import project_map
+    from asha import project_map
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -246,7 +245,7 @@ def test_mem0_probe_retrieval_and_precedence(tmp_path: Path) -> None:
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "base")
 
-    import project_map
+    from asha import project_map
 
     orient = project_map.build(repo, "quick", use_cache=False)
     assert orient["stack"]["language"]["value"] == "python"
@@ -294,7 +293,7 @@ def test_mem0_probe_store_isolation(tmp_path: Path) -> None:
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "base")
 
-    import project_map
+    from asha import project_map
 
     orient = project_map.build(repo, "quick", use_cache=False)
     task_a = {

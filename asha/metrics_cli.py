@@ -24,8 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    metrics = importlib.import_module("metrics")
-    table = importlib.import_module("report_format")
+    metrics = importlib.import_module(f"{__package__}.metrics" if __package__ else "metrics")
+    table = importlib.import_module(f"{__package__}.report_format" if __package__ else "report_format")
     if args.command == "record":
         metrics.incr(args.name)
     print(table.format_table(metrics.snapshot()))

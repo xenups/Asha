@@ -42,12 +42,12 @@ echo "[asha] installing pinned toolchain (tree-sitter 0.21.3 / 1.10.2 / ast-grep
 
 # --- 3. Fail-closed pin verification --------------------------------------
 echo "[asha] verifying pinned ABI matrix"
-"$PY" .hermes/tools/code_search.py --verify-env || {
+"$PY" asha/code_search.py --verify-env || {
   echo "[asha] FATAL: --verify-env failed; toolchain is not the pinned matrix" >&2
   exit 1
 }
-"$PY" .hermes/tools/code_search.py --self-test
-"$PY" .hermes/tools/diff_engine.py --self-test
+"$PY" asha/code_search.py --self-test
+"$PY" asha/diff_engine.py --self-test
 
 # --- 4. MCP servers over stdio (optional, skip with ASHA_SKIP_MCP=1) ------
 if [ "$MCP_FLAG" = "1" ]; then
@@ -76,7 +76,7 @@ fi
 # --- 5. Gate assertion ----------------------------------------------------
 echo "[asha] running gates"
 "$PY" -m ruff check . >/dev/null
-"$PY" -m mypy .hermes/tools/ .jspace/control.py tests/ >/dev/null
+"$PY" -m mypy asha/ .jspace/control.py tests/ >/dev/null
 "$PY" -m pytest tests/ -q >/dev/null
 
 echo "[asha] BOOTSTRAP OK: venv=$VENV, pins verified, gates green"

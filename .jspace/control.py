@@ -453,7 +453,7 @@ def orient_json(root):
     """Current repository facts as ORIENT json for the memory delegation
     (search and context both feed the same conflict gate). ORIENT failure
     aborts the command: fail closed, never search without current facts."""
-    script = SKILL / '.hermes' / 'tools' / 'project_map.py'
+    script = SKILL / 'asha' / 'project_map.py'
     orient = subprocess.run(
         [sys.executable, str(script), '--quick', '--no-cache',
          '--root', str(root)],
@@ -626,7 +626,7 @@ def main(argv=None):
         if ns.command == 'memory':
             # Ledger-free: delegate to memory.py (Mem0 isolated behind its
             # adapter; control.py never imports mem0 itself).
-            script = SKILL / '.hermes' / 'tools' / 'memory.py'
+            script = SKILL / 'asha' / 'memory.py'
             argv = [sys.executable, str(script), '--root', str(root),
                     ns.memory_cmd]
             stdin_text = None
@@ -657,7 +657,7 @@ def main(argv=None):
             # Ledger-free delegation: the scheduler writes execution state
             # and worker evidence under .jspace/cache only -- never the
             # J-Space ledger; ship authorization stays with `check --stage ship`.
-            script = SKILL / '.hermes' / 'tools' / 'orchestrator.py'
+            script = SKILL / 'asha' / '__main__.py'
             spec_path = Path(ns.spec)
             if not spec_path.is_absolute():
                 spec_path = root / spec_path
@@ -677,7 +677,7 @@ def main(argv=None):
         if ns.command == 'orient':
             # Ledger-free read-only perception: delegates to project_map.py
             # (facts + provenance). Transport still declared; no state write.
-            script = SKILL / '.hermes' / 'tools' / 'project_map.py'
+            script = SKILL / 'asha' / 'project_map.py'
             argv = [sys.executable, str(script), '--' + ns.mode,
                     '--format', ns.fmt, '--root', str(root)]
             if ns.no_cache:
@@ -741,12 +741,11 @@ def main(argv=None):
             gate(root, state, ns.agent if hasattr(ns, 'agent') else 'root', ns.stage)
             if ns.stage == 'ship':
                 # Scoped evidence gate: delegate to the toolchain modules.
-                tools_dir = SKILL / '.hermes' / 'tools'
-                if tools_dir.is_dir() and str(tools_dir) not in sys.path:
-                    sys.path.insert(0, str(tools_dir))
-                import check_runner
-                import evidence as evidence_engine
-                import scope_resolver
+                pkg_root = SKILL
+                if str(pkg_root) not in sys.path:
+                    sys.path.insert(0, str(pkg_root))
+                from asha import check_runner, scope_resolver
+                from asha import evidence as evidence_engine
                 try:
                     # Tamper check on any prior artifact BEFORE anything else.
                     evidence_engine.verify(root)

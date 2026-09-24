@@ -1,4 +1,4 @@
-"""Phase 2 TDD: governed Agent Runners (orchestrator/runner.py).
+"""Phase 2 TDD: governed Agent Runners (asha/runner.py).
 
 Contracts: CommandRunner = byte-compatible with the pre-Phase-2
 default_execute spawn behavior; AntigravityRunner = headless argv with
@@ -14,11 +14,11 @@ from typing import Any
 
 import pytest
 
-TOOLS = Path(__file__).resolve().parents[1] / ".hermes" / "tools"
-if str(TOOLS) not in sys.path:
-    sys.path.insert(0, str(TOOLS))
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-from orchestrator import (
+from asha import (
     AntigravityRunner,
     BaseAgentRunner,
     CommandRunner,

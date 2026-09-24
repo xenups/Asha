@@ -17,15 +17,14 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-TOOLS = REPO_ROOT / ".hermes" / "tools"
+ASHA_DIR = REPO_ROOT / "asha"
 CONTROL = REPO_ROOT / ".jspace" / "control.py"
 PY = sys.executable
 
-if str(TOOLS) not in sys.path:
-    sys.path.insert(0, str(TOOLS))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-import memory  # (TOOLS must be on sys.path before this import)
-import project_map
+from asha import memory, project_map
 
 GITIGNORE = (".jspace/\n__pycache__/\n*.pyc\n.pytest_cache/\n"
              ".mypy_cache/\n.ruff_cache/\n")
@@ -331,7 +330,7 @@ def test_memory_failure_non_fatal(tmp_path: Path) -> None:
         capture_output=True, text=True, timeout=180)
     assert proc.returncode == 0, proc.stderr
     proc = subprocess.run(
-        [PY, str(TOOLS / "scope_resolver.py"), "--root", str(repo)],
+        [PY, str(ASHA_DIR / "scope_resolver.py"), "--root", str(repo)],
         capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr
     assert "scope=" in proc.stdout
@@ -454,7 +453,7 @@ def test_real_mem0_roundtrip_and_cli(tmp_path: Path) -> None:
 
     # CLI smoke (separate process, resolves the real backend itself):
     proc = subprocess.run(
-        [PY, str(TOOLS / "memory.py"), "--root", str(repo), "add",
+        [PY, str(ASHA_DIR / "memory.py"), "--root", str(repo), "add",
          "--category", "decision_record",
          "--content", "writer remains source of truth"],
         capture_output=True, text=True, timeout=300)
@@ -462,7 +461,7 @@ def test_real_mem0_roundtrip_and_cli(tmp_path: Path) -> None:
     added = json.loads(proc.stdout)
     assert added["metadata"]["category"] == "decision_record"
     proc = subprocess.run(
-        [PY, str(TOOLS / "memory.py"), "--root", str(repo), "search",
+        [PY, str(ASHA_DIR / "memory.py"), "--root", str(repo), "search",
          "--task", "writer source of truth"],
         capture_output=True, text=True, timeout=300)
     assert proc.returncode == 0, proc.stderr

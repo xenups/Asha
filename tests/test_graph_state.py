@@ -14,14 +14,13 @@ from typing import Any
 
 import pytest
 
-TOOLS = Path(__file__).resolve().parents[1] / ".hermes" / "tools"
+ROOT = Path(__file__).resolve().parents[1]
 
-if str(TOOLS) not in sys.path:
-    sys.path.insert(0, str(TOOLS))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-import dep_index  # (TOOLS must be on sys.path before these imports)
-import graph_state
-import orchestrator
+import asha
+from asha import dep_index, graph_state
 
 # -- fixtures (house style: real scratch git repo) --------------------------
 
@@ -200,7 +199,7 @@ def test_multi_worker_completion_reconciles_batch(
         return 0
 
     workers = [_worker(wid) for wid in "ABCD"]
-    sched = orchestrator.GovernedScheduler(
+    sched = asha.GovernedScheduler(
         repo, workers, task_id="p2-coalesce", execute=execute)
     report = sched.run()
     assert report["status"] == "ok", report

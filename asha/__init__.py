@@ -49,7 +49,7 @@ States (execution vocabulary, deliberately NOT ledger keys):
     PENDING, DEFERRED, RUNNING, DONE, FAILED, BLOCKED, INVALID_EVIDENCE
 
 CLI:
-    python .hermes/tools/orchestrator.py --root R run --spec spec.json
+    asha --root R run --spec spec.json [--apply]
 Exit 0 only when every worker is DONE; every other outcome exits 1.
 """
 

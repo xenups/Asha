@@ -1,6 +1,6 @@
 """Phase 5.1 TDD: MCP stdio handshake + protocol version negotiation.
 
-Red first: `orchestrator.mcp_server` does not exist yet, so collection
+Red first: `asha.mcp_server` does not exist yet, so collection
 dies with ModuleNotFoundError (the pre-implementation failure proof).
 
 Contract under test:
@@ -23,11 +23,10 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[1]
-TOOLS = REPO / ".hermes" / "tools"
-if str(TOOLS) not in sys.path:
-    sys.path.insert(0, str(TOOLS))
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 
-import orchestrator.mcp_server as server  # RED: ModuleNotFoundError pre-impl
+import asha.mcp_server as server
 
 
 def test_initialize_echoes_supported_version() -> None:

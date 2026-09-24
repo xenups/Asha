@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CODE_SEARCH = REPO_ROOT / ".hermes" / "tools" / "code_search.py"
+CODE_SEARCH = REPO_ROOT / "asha" / "code_search.py"
 PY = sys.executable
 
 

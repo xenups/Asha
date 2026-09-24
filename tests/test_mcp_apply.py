@@ -3,7 +3,7 @@ governed engine control.py delegates to (GovernedScheduler.run()).
 
 The MCP layer must add zero execution logic: worktrees, conflict gating,
 scope verification, checks, and sealed evidence all come from the existing
-orchestrator. `authorized_to_ship` stays False -- exposing a run is not a
+asha. `authorized_to_ship` stays False -- exposing a run is not a
 ship authority (Merge law, scheduler._collect).
 """
 from __future__ import annotations
@@ -16,12 +16,11 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[1]
-TOOLS = REPO / ".hermes" / "tools"
 
-if str(TOOLS) not in sys.path:
-    sys.path.insert(0, str(TOOLS))
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 
-import orchestrator.mcp_server as server  # TOOLS must be on sys.path first
+import asha.mcp_server as server
 
 PY = sys.executable
 

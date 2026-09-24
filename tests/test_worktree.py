@@ -15,12 +15,12 @@ from typing import Any
 
 import pytest
 
-TOOLS = Path(__file__).resolve().parents[1] / ".hermes" / "tools"
+ROOT = Path(__file__).resolve().parents[1]
 
-if str(TOOLS) not in sys.path:
-    sys.path.insert(0, str(TOOLS))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-import orchestrator  # (TOOLS must be on sys.path before this import)
+import asha
 
 # -- fixtures (house style: real scratch git repo) --------------------------
 
@@ -67,7 +67,7 @@ def test_worker_timeout_fails_closed(tmp_path: Path) -> None:
     )
 
     started = time.monotonic()
-    report = orchestrator.GovernedScheduler(
+    report = asha.GovernedScheduler(
         repo, [worker], task_id="g3-timeout").run()
     elapsed = time.monotonic() - started
 
@@ -89,12 +89,12 @@ def test_worker_timeout_fails_closed(tmp_path: Path) -> None:
 def test_timeout_spec_validation(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     for bad in (0, -1, True, "1"):
-        with pytest.raises(orchestrator.OrchestratorError, match="timeout"):
-            orchestrator.GovernedScheduler(
+        with pytest.raises(asha.OrchestratorError, match="timeout"):
+            asha.GovernedScheduler(
                 repo, [_worker(id="W", timeout=bad)],
                 task_id=f"bad-{bad!r}")
     # unspecified and None keep the existing no-override behavior
-    orchestrator.GovernedScheduler(
+    asha.GovernedScheduler(
         repo, [_worker(id="W")], task_id="absent")
-    orchestrator.GovernedScheduler(
+    asha.GovernedScheduler(
         repo, [_worker(id="W", timeout=None)], task_id="none")

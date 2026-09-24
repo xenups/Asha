@@ -13,16 +13,15 @@ warning -- the handshake is never failed by version mismatch.
 
 Stdlib only: json/sys/typing. No `mcp`, `anyio` or `pydantic`.
 
-Runnable as `python .hermes/tools/orchestrator/mcp_server.py` or
-`python -m orchestrator.mcp_server` (tools dir on path). The literal
-`python -m .hermes.tools.orchestrator.mcp_server` from the spec is not
+Runnable as `python -m asha.mcp_server` (or the `asha-mcp` console
+script). A literal `python -m .<dotted.path>` invocation is never
 valid module syntax -- a module component cannot start with a dot.
 """
 from __future__ import annotations
 
 if __package__ in (None, ""):
     # Direct-script spawn: drop the package dir from sys.path BEFORE any
-    # stdlib import -- otherwise orchestrator/types.py shadows stdlib
+    # stdlib import -- otherwise the sibling types.py shadows stdlib
     # `types` and `import json` dies in the enum chain (circular). Pure
     # string ops only: pathlib/json are unsafe while the shadow sits on
     # the path. Same proven guard as orchestrator/__main__.py.
@@ -733,7 +732,7 @@ def serve(stdin: TextIO | None = None, stdout: TextIO | None = None,
 
 
 def main() -> int:
-    """Entry point (script or `python -m orchestrator.mcp_server`)."""
+    """Entry point (script or `python -m asha.mcp_server`)."""
     return serve()
 
 

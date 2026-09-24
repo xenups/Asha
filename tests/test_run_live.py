@@ -15,10 +15,9 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-TOOLS = REPO_ROOT / ".hermes" / "tools"
 BENCH = REPO_ROOT / "benchmarks"
-if str(TOOLS) not in sys.path:
-    sys.path.insert(0, str(TOOLS))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 if str(BENCH) not in sys.path:
     sys.path.insert(0, str(BENCH))
 

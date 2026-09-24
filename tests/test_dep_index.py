@@ -9,10 +9,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-TOOLS = Path(__file__).resolve().parents[1] / ".hermes" / "tools"
-sys.path.insert(0, str(TOOLS))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
-import dep_index
+from asha import dep_index
 
 
 def test_import_extraction_basic() -> None:

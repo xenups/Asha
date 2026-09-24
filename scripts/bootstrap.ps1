@@ -46,11 +46,11 @@ Write-Host "[asha] installing pinned toolchain"
 
 # --- 3. Fail-closed pin verification --------------------------------------
 Write-Host "[asha] verifying pinned ABI matrix"
-& $Py .hermes\tools\code_search.py --verify-env
+& $Py asha\code_search.py --verify-env
 if ($LASTEXITCODE -ne 0) { throw "FATAL: --verify-env failed; toolchain is not the pinned matrix" }
-& $Py .hermes\tools\code_search.py --self-test
+& $Py asha\code_search.py --self-test
 if ($LASTEXITCODE -ne 0) { throw "FATAL: code_search self-test failed" }
-& $Py .hermes\tools\diff_engine.py --self-test
+& $Py asha\diff_engine.py --self-test
 if ($LASTEXITCODE -ne 0) { throw "FATAL: diff_engine self-test failed" }
 
 # --- 4. MCP servers over stdio (optional) ---------------------------------
@@ -76,7 +76,7 @@ if ($SkipMcp) {
 # --- 5. Gate assertion -----------------------------------------------------
 Write-Host "[asha] running gates"
 & $Py -m ruff check .;  if ($LASTEXITCODE -ne 0) { throw "GATE FAIL: ruff" }
-& $Py -m mypy .hermes\tools\ .jspace\control.py tests\; if ($LASTEXITCODE -ne 0) { throw "GATE FAIL: mypy" }
+& $Py -m mypy asha\ .jspace\control.py tests\; if ($LASTEXITCODE -ne 0) { throw "GATE FAIL: mypy" }
 & $Py -m pytest tests\ -q; if ($LASTEXITCODE -ne 0) { throw "GATE FAIL: pytest" }
 
 Write-Host "[asha] BOOTSTRAP OK: venv=$Venv, pins verified, gates green"

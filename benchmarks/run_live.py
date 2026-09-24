@@ -38,9 +38,9 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[1]
-TOOLS = REPO / '.hermes' / 'tools'
-if str(TOOLS) not in sys.path:
-    sys.path.insert(0, str(TOOLS))
+
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 
 RESULTS = REPO / 'benchmarks' / 'results'
 # Cohorts never pool (STEP 17): live-v1 = codex/gpt-5.6-terra (inconclusive),
@@ -563,7 +563,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     }
     PAYLOADS.mkdir(parents=True, exist_ok=True)
 
-    import project_map  # reuse: orientation payloads (STEP 2)
+    from asha import project_map  # reuse: orientation payloads (STEP 2)
 
     for task in live:
         template = LIVE / '_templates' / task['id']
@@ -615,7 +615,7 @@ def seed_mem0(live: list[dict], orient_payloads: bool) -> None:
     """Frozen benchmark store, rebuilt from the dataset every prepare:
     all historical lessons (useful for their own task) + one deliberate
     distractor + one stale repository fact (precedence probe)."""
-    import memory
+    from asha import memory
 
     if STORE.exists():
         shutil.rmtree(STORE, ignore_errors=True)
@@ -647,7 +647,7 @@ def seed_mem0(live: list[dict], orient_payloads: bool) -> None:
 
 def memory_payload(task: dict, orient: dict) -> dict:
     """Condition-C context, produced by the current Asha memory adapter."""
-    import memory
+    from asha import memory
 
     backend = memory.resolve_backend(STORE)
     root = LIVE / '_templates' / task['id']
@@ -867,8 +867,7 @@ def classify_failure(record: dict[str, Any]) -> str:
 def verify_workspace(workspace: Path, base: str) -> dict[str, Any]:
     """STEP 16: harness-side verification, measured separately from the
     agent's reasoning phase (reuse Asha's own engines)."""
-    import check_runner
-    import scope_resolver
+    from asha import check_runner, scope_resolver
 
     started = time.time()
     resolved = scope_resolver.resolve(workspace, base=base)

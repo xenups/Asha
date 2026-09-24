@@ -48,8 +48,8 @@ def _commands(root: Path, names: list[str], changed_py: list[str]) -> list[tuple
                                / '__init__.py').is_file()]
             if targets:
                 commands.append((name, [py, '-m', 'mypy', *targets]))
-            elif (root / '.hermes' / 'tools').is_dir():
-                commands.append((name, [py, '-m', 'mypy', '.hermes/tools']))
+            elif (root / 'asha').is_dir():
+                commands.append((name, [py, '-m', 'mypy', 'asha']))
             else:
                 # No python changed and no toolchain present: nothing to type
                 # check. Recorded as skipped, never as a silent pass.

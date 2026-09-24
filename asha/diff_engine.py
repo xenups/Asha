@@ -19,9 +19,22 @@ Local disk only. No remote/SSH patching.
 
 from __future__ import annotations
 
+import sys
+
+if __package__ in (None, ""):
+    # Direct-script mode: drop this directory from sys.path BEFORE any
+    # stdlib import -- the sibling types.py would otherwise shadow stdlib
+    # `types` and kill the import chain on GenericAlias (same guard as
+    # asha/__main__.py and asha/mcp_server.py).
+    def _asha_norm(entry: str) -> str:
+        return (entry or ".").replace(chr(92), "/").rstrip("/").lower()
+
+    _asha_pkg = _asha_norm(__file__).rsplit("/", 1)[0]
+    sys.path = [entry for entry in sys.path if _asha_norm(entry) != _asha_pkg]
+    sys.path.insert(0, _asha_pkg.rsplit("/", 1)[0])
+
 import argparse
 import os
-import sys
 import tempfile
 from pathlib import Path
 

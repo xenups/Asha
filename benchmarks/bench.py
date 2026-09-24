@@ -29,8 +29,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 VENV_PY = sys.executable  # run me with the harness venv interpreter
-CODE_SEARCH = ROOT / ".hermes" / "tools" / "code_search.py"
-DIFF_ENGINE = ROOT / ".hermes" / "tools" / "diff_engine.py"
+CODE_SEARCH = ROOT / "asha" / "code_search.py"
+DIFF_ENGINE = ROOT / "asha" / "diff_engine.py"
 CONTROL = ROOT / ".jspace" / "control.py"
 TARGET_FILE = ROOT / ".jspace" / "control.py"  # 875-line real sca file
 
@@ -47,7 +47,7 @@ def run(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=120)
 
 
-def median_ms(fn, n: int = 5) -> float:
+def median_ms(fn, n: int = 5) -> tuple[float, list[float]]:
     samples = []
     for _ in range(n):
         start = time.perf_counter()

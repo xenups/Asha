@@ -30,16 +30,15 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-TOOLS = REPO_ROOT / ".hermes" / "tools"
 CONTROL = REPO_ROOT / ".jspace" / "control.py"
-ORCHESTRATOR = TOOLS / "orchestrator.py"
+ORCHESTRATOR = REPO_ROOT / "asha" / "__main__.py"
 PY = sys.executable
 
-if str(TOOLS) not in sys.path:
-    sys.path.insert(0, str(TOOLS))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-import evidence  # (TOOLS must be on sys.path before these imports)
-import orchestrator
+import asha
+from asha import evidence
 
 GITIGNORE = (".jspace/\n__pycache__/\n*.pyc\n.pytest_cache/\n"
              ".mypy_cache/\n.ruff_cache/\n")
@@ -185,7 +184,7 @@ def test_independent_workers_dispatch_concurrently(tmp_path: Path) -> None:
         _worker("A", writes=["tests/a_probe.py"]),
         _worker("B", writes=["tests/b_probe.py"]),
     ]
-    sched = orchestrator.GovernedScheduler(
+    sched = asha.GovernedScheduler(
         repo, workers, task_id="t-concurrent",
         execute=lambda w, p: 0 if barrier.arrive(w["id"]) else 1)
     report = sched.run()
@@ -222,7 +221,7 @@ def test_dependent_worker_waits_for_evidence_completion(
 
     workers = [_worker("A", writes=["tests/a.py"]),
                _worker("C", deps=["A"], writes=["tests/c.py"])]
-    sched = orchestrator.GovernedScheduler(repo, workers, task_id="t-dep",
+    sched = asha.GovernedScheduler(repo, workers, task_id="t-dep",
                                            execute=execute)
     box["sched"] = sched
     report = sched.run()
@@ -241,7 +240,7 @@ def test_write_write_conflict_defers_then_runs(tmp_path: Path) -> None:
         _worker("A", writes=["tests/shared.py"], reads=["tests/shared.py"]),
         _worker("B", writes=["tests/shared.py"]),
     ]
-    sched = orchestrator.GovernedScheduler(
+    sched = asha.GovernedScheduler(
         repo, workers, task_id="t-ww",
         execute=_conflict_runner_hook(box, events))
     box["sched"] = sched
@@ -265,7 +264,7 @@ def test_write_read_conflict_defers(tmp_path: Path) -> None:
         _worker("A", writes=["tests/x.py"]),
         _worker("B", reads=["tests/x.py"], writes=["tests/y.py"]),
     ]
-    sched = orchestrator.GovernedScheduler(
+    sched = asha.GovernedScheduler(
         repo, workers, task_id="t-wr",
         execute=_conflict_runner_hook(box, events))
     box["sched"] = sched
@@ -287,7 +286,7 @@ def test_read_read_never_conflicts(tmp_path: Path) -> None:
         _worker("B", reads=["tests/shared_spec.py"],
                 writes=["tests/b_out.py"]),
     ]
-    sched = orchestrator.GovernedScheduler(
+    sched = asha.GovernedScheduler(
         repo, workers, task_id="t-rr",
         execute=lambda w, p: 0 if barrier.arrive(w["id"]) else 1)
     report = sched.run()
@@ -308,7 +307,7 @@ def test_unknown_read_set_never_treated_safe(tmp_path: Path) -> None:
         # B writes a concrete file: safety vs A's reads is unprovable
         _worker("B", writes=["tests/y.py"]),
     ]
-    sched = orchestrator.GovernedScheduler(
+    sched = asha.GovernedScheduler(
         repo, workers, task_id="t-unknown",
         execute=_conflict_runner_hook(box, events))
     box["sched"] = sched
@@ -354,7 +353,7 @@ def test_deferred_reconsidered_and_scheduler_stays_live(
         _worker("B", writes=["tests/shared.py"]),
         _worker("C", writes=["tests/c_independent.py"]),
     ]
-    sched = orchestrator.GovernedScheduler(repo, workers, task_id="t-reconsider",
+    sched = asha.GovernedScheduler(repo, workers, task_id="t-reconsider",
                                            execute=execute)
     box["sched"] = sched
     report = sched.run()
@@ -383,7 +382,7 @@ def test_failed_worker_blocks_dependents_without_done(
         return 1 if worker["id"] == "A" else 0
 
     workers = [_worker("A"), _worker("C", deps=["A"])]
-    sched = orchestrator.GovernedScheduler(repo, workers, task_id="t-fail",
+    sched = asha.GovernedScheduler(repo, workers, task_id="t-fail",
                                            execute=execute)
     report = sched.run()
     assert report["status"] == "failed", report
@@ -404,7 +403,7 @@ def test_evidence_tree_identity_binding(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     workers = [_worker("A", writes=["tests/ev.py"],
                        cmd=_write_cmd("tests/ev.py"))]
-    sched = orchestrator.GovernedScheduler(repo, workers, task_id="t-evidence",
+    sched = asha.GovernedScheduler(repo, workers, task_id="t-evidence",
                                            keep_worktrees=True)
     report = sched.run()
     _assert_ok(report)
@@ -413,7 +412,7 @@ def test_evidence_tree_identity_binding(tmp_path: Path) -> None:
     original = evi.read_text(encoding="utf-8")
     try:
         # baseline: freshly sealed evidence verifies against the live tree
-        payload = orchestrator.verify_worker_evidence(evi,
+        payload = asha.verify_worker_evidence(evi,
                                                       worktree=worktree)
         assert payload["target_tree_sha"] == payload["tree_hash"]
         assert payload["authorized_to_ship"] is False
@@ -423,9 +422,9 @@ def test_evidence_tree_identity_binding(tmp_path: Path) -> None:
         obj["observed_scope"] = ["evil.py"]
         evi.write_text(json.dumps(obj, indent=2, sort_keys=True),
                        encoding="utf-8")
-        with pytest.raises(orchestrator.OrchestratorError,
+        with pytest.raises(asha.OrchestratorError,
                            match="digest mismatch"):
-            orchestrator.verify_worker_evidence(evi, worktree=worktree)
+            asha.verify_worker_evidence(evi, worktree=worktree)
 
         # (b) VALID digest but wrong tree identity -> live re-binding fails
         obj = json.loads(original)
@@ -433,27 +432,27 @@ def test_evidence_tree_identity_binding(tmp_path: Path) -> None:
         obj["target_tree_sha"] = "0" * 40
         evi.write_text(json.dumps(evidence.seal(obj), indent=2,
                                   sort_keys=True), encoding="utf-8")
-        with pytest.raises(orchestrator.OrchestratorError,
+        with pytest.raises(asha.OrchestratorError,
                            match="tree identity mismatch"):
-            orchestrator.verify_worker_evidence(evi, worktree=worktree)
+            asha.verify_worker_evidence(evi, worktree=worktree)
 
         # (c) missing tree identity field -> invalid regardless of digest
         obj = json.loads(original)
         obj.pop("target_tree_sha")
         evi.write_text(json.dumps(evidence.seal(obj), indent=2,
                                   sort_keys=True), encoding="utf-8")
-        with pytest.raises(orchestrator.OrchestratorError,
+        with pytest.raises(asha.OrchestratorError,
                            match="missing fields"):
-            orchestrator.verify_worker_evidence(evi)
+            asha.verify_worker_evidence(evi)
 
         # (d) worker evidence claiming ship authorization -> rejected
         obj = json.loads(original)
         obj["authorized_to_ship"] = True
         evi.write_text(json.dumps(evidence.seal(obj), indent=2,
                                   sort_keys=True), encoding="utf-8")
-        with pytest.raises(orchestrator.OrchestratorError,
+        with pytest.raises(asha.OrchestratorError,
                            match="authorized_to_ship"):
-            orchestrator.verify_worker_evidence(evi)
+            asha.verify_worker_evidence(evi)
     finally:
         subprocess.run(["git", "worktree", "remove", "--force",
                         str(worktree)], cwd=repo, capture_output=True,
@@ -467,7 +466,7 @@ def test_evidence_tree_identity_binding(tmp_path: Path) -> None:
 def test_cycle_fails_closed(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     workers = [_worker("A", deps=("B",)), _worker("B", deps=("A",))]
-    sched = orchestrator.GovernedScheduler(repo, workers, task_id="t-cycle")
+    sched = asha.GovernedScheduler(repo, workers, task_id="t-cycle")
     report = sched.run()
     assert report["status"] == "failed"
     assert report["reason"] == "cycle"
@@ -486,7 +485,7 @@ def test_scope_violation_fails_verification(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     workers = [_worker("A", declared=("tests/",),
                        cmd=_write_cmd("pkg/leaf.py"))]
-    sched = orchestrator.GovernedScheduler(repo, workers, task_id="t-scope")
+    sched = asha.GovernedScheduler(repo, workers, task_id="t-scope")
     report = sched.run()
     assert report["status"] == "failed", report
     entry = report["states"]["A"]
@@ -511,7 +510,7 @@ def test_unknown_declared_scope_blocks_dispatch(tmp_path: Path) -> None:
         return 0
 
     workers = [_worker("A", declared=None), _worker("C", deps=("A",))]
-    sched = orchestrator.GovernedScheduler(repo, workers, task_id="t-noscope",
+    sched = asha.GovernedScheduler(repo, workers, task_id="t-noscope",
                                            execute=execute)
     report = sched.run()
     assert report["status"] == "failed"
@@ -531,7 +530,7 @@ def test_worktree_lifecycle_real_git(tmp_path: Path) -> None:
     ok_content = (repo / "tests" / "test_ok.py").read_text(encoding="utf-8")
     workers = [_worker("A", writes=["tests/wt_probe.py"],
                        cmd=_write_cmd("tests/wt_probe.py"))]
-    sched = orchestrator.GovernedScheduler(repo, workers, task_id="t-wt")
+    sched = asha.GovernedScheduler(repo, workers, task_id="t-wt")
     report = sched.run()
     _assert_ok(report)
 
@@ -542,7 +541,7 @@ def test_worktree_lifecycle_real_git(tmp_path: Path) -> None:
         encoding="utf-8") == ok_content
 
     # execute + diff/tree + evidence collection
-    payload = orchestrator.verify_worker_evidence(
+    payload = asha.verify_worker_evidence(
         Path(report["evidence"]["A"]))  # worktree already gone: digest mode
     assert payload["observed_scope"] == ["tests/wt_probe.py"]
     assert payload["declared_scope"] == ["tests/"]
@@ -581,7 +580,7 @@ def test_integration_ab_c_evidence_ordering(tmp_path: Path) -> None:
             events.append(f"{wid}_run")
             if not barrier.arrive(wid):
                 return 1
-            return orchestrator.default_execute(worker, worktree)
+            return asha.default_execute(worker, worktree)
         # C: both parents must be DONE and their evidence sealed on disk
         for dep in ("A", "B"):
             assert box["sched"].states[dep]["state"] == "DONE", \
@@ -589,7 +588,7 @@ def test_integration_ab_c_evidence_ordering(tmp_path: Path) -> None:
             evi = box["sched"].evidence_paths.get(dep)
             assert evi and Path(evi).is_file(), box["sched"].evidence_paths
         events.append("C_run")
-        return orchestrator.default_execute(worker, worktree)
+        return asha.default_execute(worker, worktree)
 
     workers = [
         _worker("A", writes=["tests/worker_a.py"],
@@ -599,7 +598,7 @@ def test_integration_ab_c_evidence_ordering(tmp_path: Path) -> None:
         _worker("C", deps=("A", "B"), writes=["tests/worker_c.py"],
                 cmd=_write_cmd("tests/worker_c.py")),
     ]
-    sched = orchestrator.GovernedScheduler(repo, workers, task_id="t-abc",
+    sched = asha.GovernedScheduler(repo, workers, task_id="t-abc",
                                            execute=execute)
     box["sched"] = sched
     report = sched.run()
@@ -670,18 +669,18 @@ def test_control_cli_delegation_and_bad_spec(tmp_path: Path) -> None:
 def test_unknown_times_known_empty_defers() -> None:
     # left UNKNOWN, right known-empty: absence of evidence must never
     # collapse with evidence of absence
-    reason = orchestrator._intersection("write_write", None, [])
+    reason = asha._intersection("write_write", None, [])
     assert reason is not None
     assert "unknown_set" in reason
 
 
 def test_known_empty_times_unknown_defers() -> None:
     # symmetric direction
-    reason = orchestrator._intersection("write_write", [], None)
+    reason = asha._intersection("write_write", [], None)
     assert reason is not None
     assert "unknown_set" in reason
     # known-empty x known-empty still proves an empty intersection
-    assert orchestrator._intersection("write_write", [], []) is None
+    assert asha._intersection("write_write", [], []) is None
 
 
 def test_unknown_write_set_defers_against_known_empty(tmp_path: Path) -> None:
@@ -694,7 +693,7 @@ def test_unknown_write_set_defers_against_known_empty(tmp_path: Path) -> None:
         _worker("A", writes=None),
         _worker("B", writes=()),
     ]
-    sched = orchestrator.GovernedScheduler(
+    sched = asha.GovernedScheduler(
         repo, workers, task_id="g1-unknown-empty",
         execute=_conflict_runner_hook(box, events))
     box["sched"] = sched
@@ -715,7 +714,7 @@ def test_rename_source_outside_scope_fails_verification(
         "A", declared=("tests/",),
         cmd=[PY, "-c",
              "import os; os.rename('README.md', 'tests/renamed_readme.md')"])]
-    sched = orchestrator.GovernedScheduler(
+    sched = asha.GovernedScheduler(
         repo, workers, task_id="g2-rename-out")
     report = sched.run()
     assert report["status"] == "failed", report
@@ -738,11 +737,11 @@ def test_rename_within_declared_scope_still_completes(tmp_path: Path) -> None:
         cmd=[PY, "-c",
              ("import os; os.rename('tests/test_ok.py', "
               "'tests/test_moved_ok.py')")])]
-    sched = orchestrator.GovernedScheduler(
+    sched = asha.GovernedScheduler(
         repo, workers, task_id="g2-rename-in")
     report = sched.run()
     _assert_ok(report)
-    payload = orchestrator.verify_worker_evidence(
+    payload = asha.verify_worker_evidence(
         Path(report["evidence"]["A"]))
     # both sides of an in-scope rename stay visible in observed scope
     assert set(payload["observed_scope"]) == {

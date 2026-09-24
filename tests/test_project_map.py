@@ -12,14 +12,13 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-TOOLS = REPO_ROOT / ".hermes" / "tools"
 CONTROL = REPO_ROOT / ".jspace" / "control.py"
 PY = sys.executable
 
-if str(TOOLS) not in sys.path:
-    sys.path.insert(0, str(TOOLS))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-import project_map  # (TOOLS must be on sys.path before this import)
+from asha import project_map
 
 CONFIDENCES = ("direct", "detected", "inferred")
 TOP_KEYS = {"schema", "cache_key", "repo", "stack", "layout", "tooling",

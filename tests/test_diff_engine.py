@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DIFF_ENGINE = REPO_ROOT / ".hermes" / "tools" / "diff_engine.py"
+DIFF_ENGINE = REPO_ROOT / "asha" / "diff_engine.py"
 PY = sys.executable
 
 VALID_PATCH = (
