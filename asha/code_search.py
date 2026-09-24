@@ -29,7 +29,7 @@ from pathlib import Path
 
 
 def _tree_sitter_parser(lang: str):
-    from tree_sitter_languages import get_parser  # type: ignore[import-untyped]
+    from tree_sitter_languages import get_parser  # type: ignore
 
     return get_parser(lang)
 
@@ -74,7 +74,7 @@ def outline_file(file_path: str, lang: str = "python") -> list[str]:
 
 def find_pattern(pattern: str, file_path: str, lang: str = "python") -> list[dict]:
     """AST pattern match returning line ranges + matched snippets."""
-    from ast_grep_py import SgRoot  # type: ignore[import-untyped]
+    from ast_grep_py import SgRoot  # type: ignore[import-untyped, import-not-found]
 
     src = Path(file_path).read_text(encoding="utf-8")
     root = SgRoot(src, lang)
@@ -95,7 +95,7 @@ def find_pattern(pattern: str, file_path: str, lang: str = "python") -> list[dic
 
 def _classify_usage(src: str, path: Path, symbol: str) -> list[dict]:
     """Classify import/call/inherit use sites with tree-sitter + ast-grep."""
-    from ast_grep_py import SgRoot  # type: ignore[import-untyped]
+    from ast_grep_py import SgRoot  # type: ignore[import-untyped, import-not-found]
 
     results: list[dict] = []
     try:
