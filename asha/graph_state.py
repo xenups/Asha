@@ -110,6 +110,12 @@ class DispatchIntent:
         return self.generation == state.generation
 
 
+# Rejection reason for a mismatched DispatchIntent (§2.5 runtime
+# contract): the scheduler records it on every discarded intent so the
+# stale-generation boundary is observable, not silent.
+STALE_GRAPH_GENERATION = "STALE_GRAPH_GENERATION"
+
+
 @dataclass(frozen=True)
 class ReconcileOutcome:
     """Result of one reconciliation attempt (success or fail-closed)."""
@@ -288,8 +294,8 @@ def reconcile(state: GraphState,
 
 
 __all__ = [
-    "DispatchIntent", "GraphState", "ReconcileOutcome",
-    "build_state", "reconcile",
+    "STALE_GRAPH_GENERATION", "DispatchIntent", "GraphState",
+    "ReconcileOutcome", "build_state", "reconcile",
 ]
 
 _ = field  # keep dataclasses.field import honest for future payload states

@@ -241,6 +241,13 @@ class GovernedScheduler:
         self.graph = graph_state.GraphState.empty()
         self.reconcile_log: list[dict[str, Any]] = []
         self.stale_intents_dropped = 0
+        # §2.5 observable ledger: every discarded intent with its
+        # rejection reason (STALE_GRAPH_GENERATION) and both generations.
+        self.stale_intents: list[dict[str, Any]] = []
+        # §2.3 eviction set: read targets that LEFT the published graph
+        # (popped by a deletion/removal pass); cleared again if a later
+        # publication brings the path back.
+        self.orphaned_reads: set[str] = set()
         self.states: dict[str, dict[str, Any]] = {
             wid: {'state': 'PENDING', 'reason': None} for wid in self.by_id}
         self.deferral_events: list[dict[str, str]] = []
@@ -283,6 +290,16 @@ class GovernedScheduler:
         if not ok:
             return 'block', why
         wid = str(worker['id'])
+        # Section 2.3: a declared read target that LEFT the published
+        # graph (deleted/repurposed) severs the dependency -- evict the
+        # worker from readiness fail-closed (existing BLOCKED label),
+        # never dispatch against an orphaned dependency.
+        reads = worker.get('reads') or []
+        orphans = sorted(
+            node for node in self.orphaned_reads
+            if any(covered(node, str(entry)) for entry in reads))
+        if orphans:
+            return 'block', 'orphaned_dependency:' + ','.join(orphans)
         if wid in self.worker_graph['uncertain']:
             # Sections 6/14: ambiguous live ownership = UNKNOWN worker
             # topology; dispatch is fail-closed blocked, never guessed.
@@ -520,7 +537,12 @@ class GovernedScheduler:
                 'derived': [], 'uncertain': [], 'virtual': fingerprint,
             })
             return False
+        vanished = set(self.graph.nodes) - set(outcome.state.nodes)
         self.graph = outcome.state
+        # Paths popped by THIS publication become orphaned reads until
+        # (unless) a later publication brings them back.
+        self.orphaned_reads = ((self.orphaned_reads | vanished)
+                               - set(outcome.state.nodes))
         self.worker_graph = {
             'edges': {wid: set(preds)
                       for wid, preds in candidate.edges.items()},
@@ -586,6 +608,7 @@ class GovernedScheduler:
         with ThreadPoolExecutor(max_workers=max(1, len(self.workers))) as pool:
             while True:
                 dispatched = 0
+                stale_before = self.stale_intents_dropped
                 if not abort:
                     for wid in list(ready):  # deferred nodes re-enter here
                         state = self.state_of(wid)
@@ -612,6 +635,13 @@ class GovernedScheduler:
                             wid, decided_against)
                         if not intent.matches(self.graph):
                             self.stale_intents_dropped += 1
+                            self.stale_intents.append({
+                                'worker': wid,
+                                'reason': graph_state
+                                          .STALE_GRAPH_GENERATION,
+                                'intent_generation': intent.generation,
+                                'current_generation':
+                                    self.graph.generation})
                             continue
                         try:
                             path = self.dispatcher.create(wid)
@@ -708,6 +738,12 @@ class GovernedScheduler:
                             if worker['id'] not in self.completed}
                         sorter = worker_graph.build_sorter(remaining)
                         ready = list(dict.fromkeys(sorter.get_ready()))
+                    continue
+                if self.stale_intents_dropped != stale_before:
+                    # §2.5: a discarded intent re-decides against the
+                    # CURRENT generation on the next iteration -- stale
+                    # intents never resurrect AND never end the round
+                    # while their node is still pending work.
                     continue
                 break  # nothing dispatched, nothing running: schedule ends
 
