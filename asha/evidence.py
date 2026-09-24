@@ -308,3 +308,76 @@ def canonicalize_evidence(
         },
     }
     return canonical(payload).encode('utf-8')
+
+
+# ------------------------------------------- Phase 3.0-b: in-memory ledger
+
+
+@dataclass(frozen=True)
+class LedgerEvent:
+    """One discrete runtime milestone; payload pairs are strictly sorted."""
+    event_type: str
+    payload: tuple[tuple[str, str], ...]
+
+
+class ExecutionLedger:
+    """In-memory execution event ledger (no disk I/O).
+
+    Bridge/derivation abstraction only: events accumulate here and are
+    never injected into AuthoritativeEvidence or the canonical wire
+    format -- derive_authoritative() delegates to
+    AuthoritativeEvidence.create() with context + explicit arguments.
+    """
+
+    def __init__(self, *, worker_id: str, generation: int,
+                 base_tree_sha: str) -> None:
+        self._worker_id = worker_id
+        self._generation = generation
+        self._base_tree_sha = base_tree_sha
+        self._events: list[LedgerEvent] = []
+
+    @property
+    def worker_id(self) -> str:
+        return self._worker_id
+
+    @property
+    def generation(self) -> int:
+        return self._generation
+
+    @property
+    def base_tree_sha(self) -> str:
+        return self._base_tree_sha
+
+    @property
+    def events(self) -> tuple[LedgerEvent, ...]:
+        return tuple(self._events)
+
+    def record(self, event_type: str, **attributes: str) -> None:
+        """Defensive snapshot: kwargs copied into a sorted frozen payload."""
+        self._events.append(LedgerEvent(
+            event_type=event_type,
+            payload=tuple(sorted(attributes.items()))))
+
+    def derive_authoritative(
+            self, *,
+            target_tree_sha: str,
+            observed_scope: ObservedScope,
+            normalized_facts: tuple[NormalizedFact, ...] = (),
+            verdict: GovernanceVerdict,
+            schema_version: int = 1,
+    ) -> AuthoritativeEvidence:
+        """Bridge raw milestones to the authoritative contract.
+
+        self._events is deliberately never passed: ledger events stay
+        ledger-only by construction.
+        """
+        return AuthoritativeEvidence.create(
+            worker_id=self._worker_id,
+            generation=self._generation,
+            base_tree_sha=self._base_tree_sha,
+            target_tree_sha=target_tree_sha,
+            observed_scope=observed_scope,
+            normalized_facts=normalized_facts,
+            verdict=verdict,
+            schema_version=schema_version,
+        )

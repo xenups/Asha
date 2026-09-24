@@ -19,8 +19,10 @@ from asha.evidence import (
     AuditMetadata,
     AuthoritativeEvidence,
     EvidencePolicy,
+    ExecutionLedger,
     GovernanceVerdict,
     IndependenceClassification,
+    LedgerEvent,
     NormalizedFact,
     ObservedScope,
     ScopeCaptureMode,
@@ -210,3 +212,126 @@ def test_immutability_and_type_safety() -> None:
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         audit.t_engine_ms = 999.0  # type: ignore[misc]
+
+
+def _ledger(worker_id: str = 'worker_b', generation: int = 7,
+            base_tree_sha: str = 'base42base42base42') -> ExecutionLedger:
+    return ExecutionLedger(worker_id=worker_id, generation=generation,
+                           base_tree_sha=base_tree_sha)
+
+
+def test_ledger_event_immutability_and_sorting() -> None:
+    event = LedgerEvent(event_type='SCOPE_OBSERVED',
+                        payload=(('kind', 'read'),))
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        event.event_type = 'MUTATED'  # type: ignore[misc]
+    with pytest.raises(TypeError):
+        event.payload[0] = ('kind', 'write')  # type: ignore[index]
+    ledger = _ledger()
+    ledger.record('SCOPE_OBSERVED', zebra='1', alpha='2', mid='3')
+    stored = ledger.events[0]
+    assert stored.event_type == 'SCOPE_OBSERVED'
+    assert stored.payload == (('alpha', '2'), ('mid', '3'),
+                              ('zebra', '1'))
+    assert [pair[0] for pair in stored.payload] == sorted(
+        pair[0] for pair in stored.payload)
+
+
+def test_ledger_accumulation_and_order_preservation() -> None:
+    ledger = _ledger()
+    ledger.record('WORKER_DISPATCHED', wave='1')
+    ledger.record('SCOPE_OBSERVED', mode='STRICT')
+    ledger.record('FACT_DERIVED', category='ast_dependency')
+    events = ledger.events
+    assert isinstance(events, tuple)
+    assert len(events) == 3
+    assert [e.event_type for e in events] == [
+        'WORKER_DISPATCHED', 'SCOPE_OBSERVED', 'FACT_DERIVED']
+    with pytest.raises(TypeError):
+        events[0] = LedgerEvent(event_type='X', payload=())  # type: ignore[index]
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        events[0].payload = ()  # type: ignore[misc]
+    assert len(ledger.events) == 3
+
+
+def test_ledger_derive_authoritative_determinism() -> None:
+    ledger = _ledger(generation=11, base_tree_sha='base-base-base')
+    ledger.record('WORKER_DISPATCHED', attempt='1')
+    scope = _scope()
+    facts = (_fact(),)
+    verdict = _verdict(status=VerdictStatus.BLOCKED,
+                       reason_code='cycle_detected')
+    derived = ledger.derive_authoritative(
+        target_tree_sha='target-target-target',
+        observed_scope=scope,
+        normalized_facts=facts,
+        verdict=verdict,
+    )
+    assert derived.worker_id == ledger.worker_id == 'worker_b'
+    assert derived.generation == ledger.generation == 11
+    assert derived.base_tree_sha == ledger.base_tree_sha == 'base-base-base'
+    assert derived.target_tree_sha == 'target-target-target'
+    assert derived.observed_scope == scope
+    assert derived.normalized_facts == facts
+    assert derived.verdict == verdict
+    assert derived.schema_version == 1
+    expected = AuthoritativeEvidence.create(
+        worker_id='worker_b',
+        generation=11,
+        base_tree_sha='base-base-base',
+        target_tree_sha='target-target-target',
+        observed_scope=scope,
+        normalized_facts=facts,
+        verdict=verdict,
+    )
+    assert (derived.execution_identity_key
+            == expected.execution_identity_key)
+
+
+def test_ledger_events_excluded_from_canonical_wire_format() -> None:
+    bare = _ledger()
+    derived_bare = bare.derive_authoritative(
+        target_tree_sha='target-target-target',
+        observed_scope=_scope(),
+        verdict=_verdict(),
+    )
+    noisy = _ledger()
+    for index in range(5):
+        noisy.record('WORKER_DISPATCHED', step=str(index),
+                     note='ledger-only ' + str(index))
+    assert len(noisy.events) == 5
+    derived_noisy = noisy.derive_authoritative(
+        target_tree_sha='target-target-target',
+        observed_scope=_scope(),
+        verdict=_verdict(),
+    )
+    bytes_bare = canonicalize_evidence(derived_bare)
+    bytes_noisy = canonicalize_evidence(derived_noisy)
+    assert bytes_bare == bytes_noisy
+    assert b'"events"' not in bytes_bare
+    assert b'WORKER_DISPATCHED' not in bytes_bare
+    assert b'ledger-only' not in bytes_bare
+
+
+def test_ledger_context_is_immutable_from_event_payload() -> None:
+    ledger = _ledger()
+    # hostile attribute names colliding with ledger context
+    ledger.record('SCOPE_OBSERVED', worker_id='evil',
+                  generation='999', base_tree_sha='evil-tree')
+    assert ledger.worker_id == 'worker_b'
+    assert ledger.generation == 7
+    assert ledger.base_tree_sha == 'base42base42base42'
+    snapshot = ledger.events
+    assert snapshot[0].payload  # snapshot entry readable, payload frozen
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        snapshot[0].payload = (('worker_id', 'evil'),)  # type: ignore[misc]
+    ledger.record('FACT_DERIVED', extra='later')
+    assert ledger.worker_id == 'worker_b'
+    assert ledger.generation == 7
+    assert ledger.base_tree_sha == 'base42base42base42'
+    assert snapshot[0].payload == (
+        ('base_tree_sha', 'evil-tree'),
+        ('generation', '999'),
+        ('worker_id', 'evil'),
+    )
+    assert len(ledger.events) == 2
