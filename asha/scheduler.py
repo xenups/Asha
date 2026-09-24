@@ -682,6 +682,15 @@ class GovernedScheduler:
                                     f'{wid}:{outcome["state"]}')
                         wave = {f for f in list(futures) if f.done()} \
                             - handled
+                        if not wave and futures:
+                            # Section 9: bounded overlap window -- evidence
+                            # seals run in parallel, so a sibling can
+                            # resolve just after the .done() sweep above;
+                            # wait briefly (worst case one timeout only
+                            # while OTHER work is still in flight) so
+                            # overlapping completion events join THIS pass.
+                            extra, _ = wait(futures, timeout=0.5)
+                            wave = set(extra) - handled
                     if self._reconcile_batch(batch):
                         # Section 7: build a NEW sorter from the just-
                         # published WorkerGraph and replace the round's
