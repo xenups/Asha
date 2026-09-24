@@ -11,10 +11,12 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
+from time import perf_counter_ns
 from typing import Any
 
 from . import (
@@ -25,8 +27,10 @@ from . import (
     scope_resolver,
     worker_graph,
 )
+from .classifier import classify_task, governance_profile
 from .conflict import ConflictManager, covered, scope_status
 from .integrator import IntegrationResult, TreeIntegrator
+from .router import RuntimeMode, route
 from .runner import KNOWN_RUNNERS, dispatch_runner, runner_kind
 from .types import (
     STATES,
@@ -227,13 +231,23 @@ class GovernedScheduler:
 
     def __init__(self, repo: Path | str, workers: Any, *,
                  task_id: str = 'task', keep_worktrees: bool = False,
-                 execute: ExecuteHook | None = None) -> None:
+                 execute: ExecuteHook | None = None,
+                 fast_path_enabled: bool = False) -> None:
         # workers is Any at the boundary: validate_workers() is the gate.
         self.workers: list[dict[str, Any]] = validate_workers(workers)
         self.repo = Path(repo).resolve()
         self.by_id = {worker['id']: worker for worker in self.workers}
         self.task_id = task_id
         self.execute: ExecuteHook = execute or default_execute
+        # Phase 4.2: Fast Path is flag-gated (default OFF = the legacy
+        # dispatch path, byte-for-byte). The flag controls ROUTING
+        # only -- classification and every governance contract are
+        # untouched. Direct-repo fast executions are serialized by a
+        # lock so each one binds evidence to its OWN start revision
+        # (no shared-base contamination between fast workers).
+        self.fast_path_enabled = bool(fast_path_enabled)
+        self.routes: dict[str, dict[str, Any]] = {}
+        self._fast_lock = threading.Lock()
         self.dispatcher = WorktreeDispatcher(self.repo, keep=keep_worktrees)
         self.conflicts = ConflictManager()
         # Phase 2: in-memory dependency facts + versioned graph state.
@@ -353,11 +367,73 @@ class GovernedScheduler:
                 return evidence.IndependenceClassification.PROVEN_SHARED
         return evidence.IndependenceClassification.PROVEN_DISJOINT
 
+    # -- Phase 4.2 fast-path routing ---------------------------------------
+    @staticmethod
+    def _task_payload(worker: dict[str, Any]) -> dict[str, Any]:
+        """Classifier-shaped payload from a validated worker spec.
+
+        ``deps`` is a KNOWN list (validate_workers guarantees every
+        entry resolves); unknown/absent reads/writes pass through as
+        None, which the classifier treats as a missing signal.
+        """
+        return {
+            'id': str(worker.get('id')),
+            'reads': worker.get('reads'),
+            'writes': worker.get('writes'),
+            'declared_scope': worker.get('declared_scope'),
+            'deps': [str(dep) for dep in (worker.get('deps') or [])],
+        }
+
+    def _route_for(self, worker: dict[str, Any]) -> dict[str, Any]:
+        """Phase 4.0 classification -> profile -> fail-closed router.
+
+        A classifier error NEVER crashes dispatch and NEVER enables
+        Fast Path: the worker records as routed FULL_GOVERNANCE with
+        the error noted (absence of a valid profile is not proof).
+        """
+        wid = str(worker['id'])
+        task = self._task_payload(worker)
+        context = tuple(
+            self._task_payload(other) for other in self.workers
+            if str(other.get('id')) != wid)
+        started = perf_counter_ns()
+        profile: object
+        error: str | None = None
+        try:
+            profile = governance_profile(classify_task(task, context))
+        except Exception as exc:  # fail-closed, not fail-crash
+            profile = None
+            error = f'{type(exc).__name__}: {exc}'
+        classified_ns = perf_counter_ns() - started
+        routed_started = perf_counter_ns()
+        decision = route(profile, fast_path_enabled=True)
+        routed_ns = perf_counter_ns() - routed_started
+        record: dict[str, Any] = {
+            'mode': decision.mode.value,
+            'reason': decision.reason_code,
+            'classification': decision.classification,
+            't_classify_ns': classified_ns,
+            't_route_ns': routed_ns,
+        }
+        if error is not None:
+            record['classification_error'] = error
+        self.routes[wid] = record
+        return record
+
     # -- post-execution lifecycle (runs inside pool threads) ----------------
 
     def _collect(self, worker: dict[str, Any], path: Path, rc: int,
-                 tail: str) -> dict[str, Any]:
+                 tail: str, *, base: str | None = None,
+                 base_tree: str | None = None) -> dict[str, Any]:
         wid = worker['id']
+        # Phase 4.2: full-governance calls bind to the run-level base;
+        # fast-path calls bind to the worker's OWN start revision
+        # (captured under the fast lock) so evidence never observes
+        # another worker's commits. Defaults preserve legacy exactly.
+        effective_base = (base if base is not None
+                          else self.dispatcher.base_commit)
+        effective_base_tree = (base_tree if base_tree is not None
+                               else self.dispatcher.base_tree)
         if rc != 0:
             return {'state': 'FAILED', 'reason': f'worker_exit_{rc}',
                     'evidence': None}
@@ -383,7 +459,7 @@ class GovernedScheduler:
                                           'HEAD^{tree}').split()
             target_commit, target_tree = commit_line, tree_line
             observed = scope_resolver.changed_files(
-                path, base=self.dispatcher.base_commit)
+                path, base=effective_base)
             declared = worker.get('declared_scope') or []
             violations = [item for item in observed
                           if not any(covered(item, entry)
@@ -394,7 +470,7 @@ class GovernedScheduler:
                         + ','.join(violations[:5]),
                         'evidence': None}
             resolved = scope_resolver.resolve(
-                path, base=self.dispatcher.base_commit, paths=observed)
+                path, base=effective_base, paths=observed)
             checks = check_runner.run(path, resolved)
             failed = [entry['name'] for entry in checks
                       if entry['status'] == 'failed']
@@ -406,7 +482,7 @@ class GovernedScheduler:
                               for entry in checks):
                 return {'state': 'INVALID_EVIDENCE',
                         'reason': 'no_verification_ran', 'evidence': None}
-            diff = _git(path, 'diff', self.dispatcher.base_commit,
+            diff = _git(path, 'diff', effective_base,
                         target_commit, strip=False)
             payload: dict[str, Any] = {
                 'schema': evidence.SCHEMA,
@@ -420,8 +496,8 @@ class GovernedScheduler:
                 'authorized_to_ship': False,
                 'task_id': self.task_id,
                 'worker_id': wid,
-                'base_commit': self.dispatcher.base_commit,
-                'base_tree_sha': self.dispatcher.base_tree,
+                'base_commit': effective_base,
+                'base_tree_sha': effective_base_tree,
                 'target_tree_sha': target_tree,
                 'declared_scope': list(declared),
                 'observed_scope': observed,
@@ -448,7 +524,7 @@ class GovernedScheduler:
             ledger = evidence.ExecutionLedger(
                 worker_id=str(wid),
                 generation=self.graph.generation,
-                base_tree_sha=self.dispatcher.base_tree)
+                base_tree_sha=effective_base_tree)
             ledger.record('STATE_ACQUIRED', commit=target_commit,
                           tree=target_tree)
             ledger.record('SCOPE_OBSERVED', status=resolved['status'],
@@ -486,8 +562,9 @@ class GovernedScheduler:
                 # the same target_tree identity the sealed evidence carries.
                 'observed': list(observed), 'target_tree': target_tree}
 
-    def _run_one(self, worker: dict[str, Any], path: Path
-                 ) -> dict[str, Any]:
+    def _run_one(self, worker: dict[str, Any], path: Path, *,
+                 base: str | None = None,
+                 base_tree: str | None = None) -> dict[str, Any]:
         try:
             result = self.execute(worker, path)
         except subprocess.TimeoutExpired:
@@ -503,7 +580,27 @@ class GovernedScheduler:
             rc, tail = int(result[0]), str(result[1])
         else:
             rc, tail = int(result), ''
-        return self._collect(worker, path, rc, tail)
+        if base is None and base_tree is None:
+            # legacy call shape preserved exactly (existing tests wrap
+            # _collect positionally); the kwargs branch is fast-path only
+            return self._collect(worker, path, rc, tail)
+        return self._collect(worker, path, rc, tail, base=base,
+                             base_tree=base_tree)
+
+    def _run_one_fast(self, worker: dict[str, Any]) -> dict[str, Any]:
+        """Fast Path execution: NO isolated worktree -- direct execution
+        against the repository, serialized by ``_fast_lock`` so the
+        evidence of every fast worker binds to that worker's OWN start
+        revision. The evidence contract itself (scope resolution,
+        checks, seal, digest verification, ledger, authoritative
+        derivation) is the same code the full path runs.
+        """
+        with self._fast_lock:
+            base = _git(self.repo, 'rev-parse', 'HEAD').strip()
+            base_tree = _git(self.repo, 'rev-parse',
+                             'HEAD^{tree}').strip()
+            return self._run_one(worker, self.repo, base=base,
+                                 base_tree=base_tree)
 
     # -- Phase-2 online reconciliation --------------------------------------
 
@@ -666,6 +763,9 @@ class GovernedScheduler:
             'evidence': self.evidence_paths, 'cleanup_errors': [],
             'worktrees': {},
         }
+        if self.fast_path_enabled:
+            # live dict: filled during the loop, read when run() returns
+            report['routing'] = self.routes
         try:
             sorter.prepare()
         except CycleError as exc:
@@ -723,6 +823,21 @@ class GovernedScheduler:
                                 'intent_generation': intent.generation,
                                 'current_generation':
                                     self.graph.generation})
+                            continue
+                        fast_routed = False
+                        if self.fast_path_enabled:
+                            # Phase 4.2: deterministic fail-closed routing.
+                            # FULL_GOVERNANCE keeps the exact legacy
+                            # worktree path below.
+                            fast_routed = (
+                                self._route_for(worker)['mode']
+                                == RuntimeMode.FAST_PATH.value)
+                        if fast_routed:
+                            self._set(wid, 'RUNNING', None)
+                            self.conflicts.start(wid, worker)
+                            futures[pool.submit(
+                                self._run_one_fast, worker)] = wid
+                            dispatched += 1
                             continue
                         try:
                             path = self.dispatcher.create(wid)
