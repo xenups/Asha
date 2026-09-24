@@ -203,16 +203,19 @@ class Metrics:
     def union_busy(self) -> float:
         """Union length of the work intervals (no double counting)."""
         busy = sorted((t0, t1) for _, t0, t1 in self.intervals)
-        total, cur0, cur1 = 0.0, None, None
+        total = 0.0
+        cur0: float = 0.0
+        cur1: float = 0.0
+        seen = False
         for t0, t1 in busy:
-            if cur0 is None:
-                cur0, cur1 = t0, t1
+            if not seen:
+                cur0, cur1, seen = t0, t1, True
             elif t0 <= cur1:
                 cur1 = max(cur1, t1)
             else:
                 total += cur1 - cur0
                 cur0, cur1 = t0, t1
-        if cur0 is not None:
+        if seen:
             total += cur1 - cur0
         return total
 
@@ -271,18 +274,18 @@ class ToolSpy:
             return proc
 
         subprocess.run = run          # type: ignore[assignment]
-        subprocess.Popen = popen      # type: ignore[assignment]
+        subprocess.Popen = popen      # type: ignore[misc, assignment]
         return self
 
     def __exit__(self, *exc) -> None:
         subprocess.run = self._real_run
-        subprocess.Popen = self._real_popen
+        subprocess.Popen = self._real_popen   # type: ignore[misc]
 
 
 # -------------------------------------------------------- repo + verify
 
 
-def make_repo(parent: Path, task: dict) -> Path:
+def make_repo(parent: Path, task: dict) -> tuple[Path, float]:
     t0 = time.perf_counter()
     repo = parent / REPO_NAME
     repo.mkdir(parents=True)
@@ -364,10 +367,8 @@ def verify(task: dict, repo: Path, mode: str, m: Metrics,
     if not checks["no_unauthorized"]:
         failures.append(f"touched={sorted(touched)}")
 
-    evidence_ok = None
     if mode == "asha":
-        evidence_ok = bool(asha_report) and asha_report["status"] == "ok"
-        if not evidence_ok:
+        if asha_report is None or asha_report["status"] != "ok":
             failures.append(
                 f"asha status {asha_report and asha_report['status']}")
         else:
@@ -619,8 +620,8 @@ def stats(values: list[float]) -> dict:
 
 
 def aggregate(task_name: str, mode: str, runs: list[dict]) -> dict:
-    cell = {"n": len(runs),
-            "correct": sum(1 for r in runs if r["correct"])}
+    cell: dict = {"n": len(runs),
+                  "correct": sum(1 for r in runs if r["correct"])}
     for key in NUMERIC:
         cell[key] = stats([r[key] for r in runs])
     cell["tool_calls"] = runs[-1]["tool_calls"]
