@@ -6,7 +6,6 @@ dispatch contract, or the annotated signatures must fail here.
 """
 from __future__ import annotations
 
-
 import inspect
 import sys
 from pathlib import Path
@@ -15,9 +14,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import asha_eval.core as core
-from asha_eval.core import Event, Context, EventCore, Result, calculate_metrics, validate_window
-
+from asha_eval import core
+from asha_eval.core import Context, Event, EventCore, calculate_metrics, validate_window
 
 # --- behavior: exact metric values (Trial C target) ----------------------
 

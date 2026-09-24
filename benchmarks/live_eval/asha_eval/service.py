@@ -1,8 +1,7 @@
 """Downstream consumer of asha_eval.core — 5 calculate_metrics call sites."""
 from __future__ import annotations
 
-
-import asha_eval.core as core
+from asha_eval import core
 from asha_eval.core import calculate_metrics
 
 

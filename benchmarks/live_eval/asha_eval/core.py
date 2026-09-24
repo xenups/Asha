@@ -5,15 +5,13 @@ benchmarks/live_eval/AB_RESULTS.md for the trials that exploit this.
 """
 from __future__ import annotations
 
-
 import json
 import logging
 import math
 import statistics
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Optional
-
+from typing import Any
 
 log = logging.getLogger("asha_eval")
 
@@ -36,15 +34,15 @@ class Context:
 @dataclass(frozen=True)
 class Result:
     ok: bool
-    payload: Optional[dict[str, Any]] = None
-    error: Optional[str] = None
+    payload: dict[str, Any] | None = None
+    error: str | None = None
 
     @classmethod
-    def success(cls, payload: dict[str, Any]) -> "Result":
+    def success(cls, payload: dict[str, Any]) -> Result:
         return cls(ok=True, payload=payload, error=None)
 
     @classmethod
-    def failure(cls, error: str) -> "Result":
+    def failure(cls, error: str) -> Result:
         return cls(ok=False, payload=None, error=error)
 
 
@@ -515,7 +513,7 @@ def interleave_events(first: list[Event], second: list[Event]) -> list[Event]:
 class EventCore:
     """Event processing core with identical retry boilerplate per handler."""
 
-    def _normalize(self, event: Event) -> Optional[dict[str, Any]]:
+    def _normalize(self, event: Event) -> dict[str, Any] | None:
         """Sanitize the event payload into a dispatchable dict.
 
         Returns None when the payload cannot be normalized.
@@ -568,7 +566,7 @@ class EventCore:
                 self._backoff(ctx)
                 time.sleep(_RETRY_DELAY * 0.0)
                 retries += 1
-            except Exception as exc:  # noqa: BLE001 - harness boundary
+            except Exception as exc:
                 log.warning("retry failure: %s", exc)
                 retries += 1
         return Result.failure("exhausted")
@@ -593,7 +591,7 @@ class EventCore:
                 self._backoff(ctx)
                 time.sleep(_RETRY_DELAY * 0.0)
                 retries += 1
-            except Exception as exc:  # noqa: BLE001 - harness boundary
+            except Exception as exc:
                 log.warning("retry failure: %s", exc)
                 retries += 1
         return Result.failure("exhausted")
@@ -618,7 +616,7 @@ class EventCore:
                 self._backoff(ctx)
                 time.sleep(_RETRY_DELAY * 0.0)
                 retries += 1
-            except Exception as exc:  # noqa: BLE001 - harness boundary
+            except Exception as exc:
                 log.warning("retry failure: %s", exc)
                 retries += 1
         return Result.failure("exhausted")
