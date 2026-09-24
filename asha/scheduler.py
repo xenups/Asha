@@ -252,6 +252,13 @@ class GovernedScheduler:
             wid: {'state': 'PENDING', 'reason': None} for wid in self.by_id}
         self.deferral_events: list[dict[str, str]] = []
         self.evidence_paths: dict[str, str] = {}
+        # Phase 3.1: in-memory execution ledger + fast-path authoritative
+        # outputs. Ledger events are never serialized (3.0-b invariant);
+        # these dicts are read only by tests/future phases, so existing
+        # result payloads and disk artifacts are untouched.
+        self.ledgers: dict[str, evidence.ExecutionLedger] = {}
+        self.authoritative: dict[str, bytes] = {}
+        self.evidence_policy: dict[str, str] = {}
         self.completed: list[str] = []
         # Phase 2.1: WorkerGraph rides the SAME publication as self.graph
         # (sections 3/17): declared deps UNION CodeGraph-derived edges,
@@ -315,6 +322,37 @@ class GovernedScheduler:
             return 'defer', why
         return 'dispatch', 'proven_safe'
 
+    def _classify_independence(
+            self, wid: str, resolved: dict[str, Any]
+    ) -> evidence.IndependenceClassification:
+        """Phase 3.1 adaptive-policy hook (3.4).
+
+        Classifies ONLY from information the scheduler already holds
+        authoritatively: certain scope capture, declared read/write sets,
+        and the graph's own uncertainty verdict. Any gap fails closed to
+        UNKNOWN, which resolve_evidence_policy maps to COMPLETE -- MINIMAL
+        is reachable only when disjointness is proven.
+        """
+        if resolved.get('status') != 'certain':
+            return evidence.IndependenceClassification.UNKNOWN
+        if wid in self.worker_graph['uncertain']:
+            return evidence.IndependenceClassification.UNKNOWN
+        mine = self.by_id[wid]
+        my_reads = {str(entry) for entry in (mine.get('reads') or [])}
+        my_writes = {str(entry) for entry in (mine.get('writes') or [])}
+        for other in self.workers:
+            if str(other['id']) == wid:
+                continue
+            other_reads = {str(entry)
+                           for entry in (other.get('reads') or [])}
+            other_writes = {str(entry)
+                            for entry in (other.get('writes') or [])}
+            if (my_writes & other_writes
+                    or my_writes & other_reads
+                    or my_reads & other_writes):
+                return evidence.IndependenceClassification.PROVEN_SHARED
+        return evidence.IndependenceClassification.PROVEN_DISJOINT
+
     # -- post-execution lifecycle (runs inside pool threads) ----------------
 
     def _collect(self, worker: dict[str, Any], path: Path, rc: int,
@@ -331,14 +369,19 @@ class GovernedScheduler:
                 # A tree identity only exists for committed state: commit
                 # the worker's result (or fail closed if that is impossible).
                 _commit_all(path, f'orchestrator: worker {wid}')
-                dirty = [line for line in
-                         _git(path, 'status', '--porcelain').splitlines()
-                         if line.strip()]
-            if dirty:
-                return {'state': 'INVALID_EVIDENCE',
-                        'reason': 'missing_tree_identity', 'evidence': None}
-            target_commit = _git(path, 'rev-parse', 'HEAD')
-            target_tree = _git(path, 'rev-parse', 'HEAD^{tree}')
+                # Phase 3.1 equivalence (proven): add -A stages every
+                # non-ignored change, the worker process has already exited,
+                # and nothing writes the worktree before check_runner runs,
+                # so a successful commit implies an empty porcelain status.
+                # The former post-commit status re-check re-derived that
+                # same fact in a second subprocess (its missing_tree_identity
+                # guard was unreachable by the same argument).
+            # Phase 3.1 OPT: one rev-parse for both refs returns the same
+            # two values the former separate calls did -- no worktree
+            # mutation can occur between them (single-threaded section).
+            commit_line, tree_line = _git(path, 'rev-parse', 'HEAD',
+                                          'HEAD^{tree}').split()
+            target_commit, target_tree = commit_line, tree_line
             observed = scope_resolver.changed_files(
                 path, base=self.dispatcher.base_commit)
             declared = worker.get('declared_scope') or []
@@ -351,7 +394,7 @@ class GovernedScheduler:
                         + ','.join(violations[:5]),
                         'evidence': None}
             resolved = scope_resolver.resolve(
-                path, base=self.dispatcher.base_commit)
+                path, base=self.dispatcher.base_commit, paths=observed)
             checks = check_runner.run(path, resolved)
             failed = [entry['name'] for entry in checks
                       if entry['status'] == 'failed']
@@ -395,6 +438,44 @@ class GovernedScheduler:
             # Governed completion requires the sealed identity to re-bind
             # to the live tree -- digest alone is not proof.
             verify_worker_evidence(evi_path, worktree=path)
+            # Phase 3.1 fast path: in-memory milestones -> authoritative
+            # derivation through the ledger (3.3). Ledger events never
+            # reach the canonical wire format; nothing new hits disk.
+            classification = self._classify_independence(
+                str(wid), resolved)
+            policy = evidence.resolve_evidence_policy(classification)
+            self.evidence_policy[str(wid)] = policy.value
+            ledger = evidence.ExecutionLedger(
+                worker_id=str(wid),
+                generation=self.graph.generation,
+                base_tree_sha=self.dispatcher.base_tree)
+            ledger.record('STATE_ACQUIRED', commit=target_commit,
+                          tree=target_tree)
+            ledger.record('SCOPE_OBSERVED', status=resolved['status'],
+                          files=str(len(observed)))
+            ledger.record('VALIDATION_PASSED', checks=str(len(checks)))
+            ledger.record('EVIDENCE_SEALED',
+                          digest=sealed['evidence_sha256'])
+            ledger.record('POLICY_RESOLVED',
+                          classification=classification.value,
+                          policy=policy.value)
+            authoritative = ledger.derive_authoritative(
+                target_tree_sha=target_tree,
+                observed_scope=evidence.ObservedScope(
+                    reads=frozenset(str(entry) for entry in
+                                    (worker.get('reads') or [])),
+                    writes=frozenset(str(entry) for entry in observed),
+                    capture_mode=(
+                        evidence.ScopeCaptureMode.STRICT
+                        if resolved['status'] == 'certain'
+                        else evidence.ScopeCaptureMode.BEST_EFFORT)),
+                verdict=evidence.GovernanceVerdict(
+                    status=evidence.VerdictStatus.PASS,
+                    reason_code='evidence_sealed'),
+            )
+            self.ledgers[str(wid)] = ledger
+            self.authoritative[str(wid)] = evidence.canonicalize_evidence(
+                authoritative)
         except (OrchestratorError, scope_resolver.ScopeError,
                 evidence.EvidenceError, OSError) as exc:
             return {'state': 'INVALID_EVIDENCE',

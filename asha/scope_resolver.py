@@ -317,10 +317,16 @@ def _classify_python(root: Path, base: str | None, path: str,
     return 'S2', False
 
 
-def resolve(root: Path | str, base: str | None = None) -> dict:
+def resolve(root: Path | str, base: str | None = None,
+            *, paths: list[str] | None = None) -> dict:
     root = Path(root).resolve()
     base = base if base is not None else default_base(root)
-    paths = changed_files(root, base)
+    # Phase 3.1 fast path: callers that already ran changed_files() on the
+    # same (root, base) with no worktree mutation in between pass the
+    # result through -- the recomputation was byte-identical (equivalence
+    # proven in tests/test_evidence_optimization.py).
+    if paths is None:
+        paths = changed_files(root, base)
     per_file: dict[str, str] = {}
     reasons: list[str] = []
     uncertain = False
