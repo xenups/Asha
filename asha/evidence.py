@@ -22,7 +22,9 @@ import json
 import os
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
 
 SCHEMA = 1
@@ -143,3 +145,166 @@ def verify(root: Path) -> dict | None:
     if not isinstance(payload.get('authorized_to_ship'), bool):
         raise EvidenceError('authorized_to_ship must be a boolean')
     return payload
+
+
+# ------------------------------------------------ Phase 3.0: authoritative
+# Contract-only section. Data models + canonicalization rules; no scheduler,
+# worktree, or execution-routing code depends on anything below.
+
+
+class IndependenceClassification(Enum):
+    """Total fail-closed classification of cross-worker overlap."""
+    PROVEN_DISJOINT = 'PROVEN_DISJOINT'
+    PROVEN_SHARED = 'PROVEN_SHARED'
+    UNKNOWN = 'UNKNOWN'
+
+
+class EvidencePolicy(Enum):
+    MINIMAL = 'MINIMAL'
+    COMPLETE = 'COMPLETE'
+
+
+class ScopeCaptureMode(Enum):
+    STRICT = 'STRICT'
+    BEST_EFFORT = 'BEST_EFFORT'
+    DECLARED = 'DECLARED'
+
+
+class VerdictStatus(Enum):
+    PASS = 'PASS'
+    FAIL = 'FAIL'
+    BLOCKED = 'BLOCKED'
+
+
+def resolve_evidence_policy(
+        classification: IndependenceClassification) -> EvidencePolicy:
+    """Disjoint proves minimal capture is sound; everything else must be
+    COMPLETE (fail-closed default for PROVEN_SHARED and UNKNOWN)."""
+    if classification == IndependenceClassification.PROVEN_DISJOINT:
+        return EvidencePolicy.MINIMAL
+    return EvidencePolicy.COMPLETE
+
+
+@dataclass(frozen=True)
+class ObservedScope:
+    reads: frozenset[str]
+    writes: frozenset[str]
+    capture_mode: ScopeCaptureMode
+
+
+@dataclass(frozen=True)
+class NormalizedFact:
+    category: str
+    source: str
+    target: str
+    status: str
+    attributes: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class GovernanceVerdict:
+    status: VerdictStatus
+    reason_code: str
+
+
+@dataclass(frozen=True)
+class AuthoritativeEvidence:
+    schema_version: int
+    execution_identity_key: str
+    worker_id: str
+    generation: int
+    base_tree_sha: str
+    target_tree_sha: str
+    observed_scope: ObservedScope
+    normalized_facts: tuple[NormalizedFact, ...]
+    verdict: GovernanceVerdict
+
+    @classmethod
+    def create(
+            cls, *,
+            worker_id: str,
+            generation: int,
+            base_tree_sha: str,
+            target_tree_sha: str,
+            observed_scope: ObservedScope,
+            normalized_facts: tuple[NormalizedFact, ...] = (),
+            verdict: GovernanceVerdict,
+            schema_version: int = 1,
+    ) -> AuthoritativeEvidence:
+        """Derive the identity key internally; callers cannot supply one."""
+        material = f'{base_tree_sha}:{worker_id}:{generation}'
+        key = hashlib.sha256(material.encode('utf-8')).hexdigest()
+        return cls(
+            schema_version=schema_version,
+            execution_identity_key=key,
+            worker_id=worker_id,
+            generation=generation,
+            base_tree_sha=base_tree_sha,
+            target_tree_sha=target_tree_sha,
+            observed_scope=observed_scope,
+            normalized_facts=normalized_facts,
+            verdict=verdict,
+        )
+
+
+@dataclass(frozen=True)
+class AuditMetadata:
+    ephemeral_execution_id: str
+    wall_start_iso: str
+    wall_end_iso: str
+    t_engine_ms: float
+    t_workload_ms: float
+    raw_stdout_sample: str = ''
+    raw_stderr_sample: str = ''
+    host_metadata: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def gor_ratio(self) -> float:
+        if self.t_workload_ms <= 0:
+            raise ValueError('t_workload_ms must be positive to compute GOR')
+        return self.t_engine_ms / self.t_workload_ms
+
+
+def canonicalize_evidence(
+        evidence: AuthoritativeEvidence) -> bytes:
+    """Deterministic, bit-for-bit identical UTF-8 compact-JSON bytes.
+
+    Rules: sort_keys + compact separators + ensure_ascii=False (via
+    canonical()); frozensets -> lexicographically sorted arrays; facts
+    sorted by (category, source, target, status, attributes) with each
+    fact's attribute pairs sorted lexicographically. AuditMetadata is
+    intentionally not part of this contract.
+    """
+    facts = [
+        {
+            'category': fact.category,
+            'source': fact.source,
+            'target': fact.target,
+            'status': fact.status,
+            'attributes': [list(pair)
+                           for pair in sorted(fact.attributes)],
+        }
+        for fact in evidence.normalized_facts
+    ]
+    facts.sort(key=lambda fact: (
+        fact['category'], fact['source'], fact['target'], fact['status'],
+        tuple(tuple(pair) for pair in fact['attributes'])))
+    payload = {
+        'schema_version': evidence.schema_version,
+        'execution_identity_key': evidence.execution_identity_key,
+        'worker_id': evidence.worker_id,
+        'generation': evidence.generation,
+        'base_tree_sha': evidence.base_tree_sha,
+        'target_tree_sha': evidence.target_tree_sha,
+        'observed_scope': {
+            'reads': sorted(evidence.observed_scope.reads),
+            'writes': sorted(evidence.observed_scope.writes),
+            'capture_mode': evidence.observed_scope.capture_mode.value,
+        },
+        'normalized_facts': facts,
+        'verdict': {
+            'status': evidence.verdict.status.value,
+            'reason_code': evidence.verdict.reason_code,
+        },
+    }
+    return canonical(payload).encode('utf-8')
