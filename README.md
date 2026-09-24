@@ -567,22 +567,44 @@ Standalone tools (no `--transport`; see Appendix A for flags):
 
 ### MCP interface (Phases 5.1-5.6)
 
-Asha exposes itself as a stdio JSON-RPC MCP server
-(`.hermes/tools/orchestrator/mcp_server.py`, stdlib only). Both tested
-invocation forms are shown below; the original spec's dotted
-`-m .hermes...` form is invalid Python module syntax and must not be used:
+Asha exposes itself as a stdio JSON-RPC MCP server (stdlib only), now
+from the top-level `asha/` package. Canonical invocation; the two shim
+forms remain supported for existing registrations:
 
 ```text
-python .hermes/tools/orchestrator/mcp_server.py
-python -m orchestrator.mcp_server        (with .hermes/tools on PYTHONPATH)
+python -m asha.mcp_server                              (canonical)
+python .hermes/tools/orchestrator/mcp_server.py        (legacy shim)
+python -m orchestrator.mcp_server                      (shim + .hermes/tools on PYTHONPATH)
 ```
 
 Registration on Hermes (non-interactive: `printf Y` answers the `[Y/n]`
 enable prompt that would otherwise cancel the save):
 
 ```text
-hermes mcp add asha-orchestrator --command <venv-python> --args <abs-path>/mcp_server.py
-hermes mcp test asha-orchestrator
+hermes mcp add asha --command python --args -m asha.mcp_server
+hermes mcp test asha
+```
+
+Registered CLI entrypoints (console scripts from `pyproject.toml`):
+
+```text
+asha --root <git-root> run --spec S.json [--apply]    # scheduler CLI (--help-verified)
+   asha --root <git-root> run --spec S.json --apply   # governed run
+asha-mcp                                             # stdio MCP server (= -m asha.mcp_server)
+```
+
+Google Antigravity (any MCP client) connects through the same stdio
+entry point; drop this into its `mcpServers` configuration:
+
+```json
+{
+  "mcpServers": {
+    "asha": {
+      "command": "python",
+      "args": ["-m", "asha.mcp_server"]
+    }
+  }
+}
 ```
 
 | tool | behavior |
