@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Asha Phase 2 -- normalized dependency fact extraction (stdlib ast only).
 
 One provider only: Python's built-in `ast`. NO tree-sitter, NO external

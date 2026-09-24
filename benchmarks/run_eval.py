@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Empirical A/B/C evaluation harness for the Asha architecture.
 
 Conditions (identical task set, identical tool binaries; the only intended

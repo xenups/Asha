@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Asha Phase 2 -- immutable versioned GraphState + online reconciliation.
 
 Two layers, one state object (task 2.2/2.3):

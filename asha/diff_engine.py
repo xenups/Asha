@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Aider-style atomic SEARCH/REPLACE diff engine.
 
 Strict block parser:

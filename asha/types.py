@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Data contracts shared across the orchestrator package: execution
 vocabulary (states), worker-evidence field requirements, timeout/tail
 constants, the hook contract, and the fail-closed base exception."""

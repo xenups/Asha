@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """AST-based structural code navigator (tree-sitter).
 
 - outline_file(path)  -> list[str]: symbol declarations (classes, defs, async

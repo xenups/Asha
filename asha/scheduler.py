@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Governed scheduling loop: dependency readiness -> dispatch-safety
 gates -> worktree dispatch -> evidence -> generational reconciliation
 (Phase 2). The CLI entrypoint lives here and is re-exported by the

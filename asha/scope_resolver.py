@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Deterministic semantic blast-radius scope resolver (S0-S4).
 
 Zero-daemon, stdlib-only. Inspects a git diff (base..worktree by default),

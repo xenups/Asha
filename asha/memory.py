@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Institutional memory layer: thin Mem0 adapter + context synthesis.
 
 Architecture:

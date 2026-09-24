@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Asha Phase 2.1 -- dependency projection: CodeGraph -> WorkerGraph.
 
 Two-layer model preserved (task section 4):

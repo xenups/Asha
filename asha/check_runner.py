@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Isolated subprocess check runner for the ship gate.
 
 Runs the mandatory check matrix resolved by scope_resolver.SCOPE_CHECKS in

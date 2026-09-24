@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Project orientation: deterministic facts + provenance, zero-daemon.
 
 A thin SYNTHESIS layer over existing capabilities (git, config files,

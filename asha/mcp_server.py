@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Asha native MCP server -- stdio JSON-RPC, protocol handshake phase.
 
 Transport contract: stdout carries ONLY JSON-RPC response frames (one

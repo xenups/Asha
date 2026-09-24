@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Governed tree integration: atomically apply sealed worker results
 onto the target branch under the golden invariant.
 

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Live behavioral benchmark: A/B/C agent trajectories over the frozen
 historical task set, executed by one pinned model, scored and reported
 blinded.

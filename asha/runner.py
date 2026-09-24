@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Phase 2 -- governed Agent Runners: the dispatch seam between a
 worker's spec and the subprocess that performs it. Stdlib only.
 

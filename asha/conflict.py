@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Dispatch-safety primitives: structural path coverage, declared-scope
 status, and the read/write collision matrix (UNKNOWN != SAFE).
 

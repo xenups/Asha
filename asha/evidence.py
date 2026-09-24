@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Tamper-resistant ship evidence engine.
 
 Clean-tree invariant: ship evidence may only be produced (or consumed) when
