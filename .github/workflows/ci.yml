@@ -30,6 +30,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pytest ruff mypy
+          # dev-env pins: code_search CLI tests execute these optional
+          # native tools directly (matches the local venv exactly)
+          pip install tree-sitter==0.21.3 tree-sitter-languages==1.10.2 ast-grep-py==0.45.3
           pip install -e .
 
       # Step 1: static analysis
