@@ -33,6 +33,9 @@ jobs:
           # dev-env pins: code_search CLI tests execute these optional
           # native tools directly (matches the local venv exactly)
           pip install tree-sitter==0.21.3 tree-sitter-languages==1.10.2 ast-grep-py==0.45.3
+          # offline memory backend: mem0 with mock embedder + local chroma
+          # store (dummy LLM key, infer=False) -- no keys, no downloads
+          pip install mem0ai==2.1.0 chromadb==1.5.9
           pip install -e .
 
       # Step 1: static analysis
