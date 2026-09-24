@@ -525,7 +525,7 @@ def run_m3(task: dict, parent: Path) -> dict:
             m.span("worktree", t0, time.perf_counter())
 
     sched.execute = execute                       # type: ignore[method-assign]
-    sched._run_one = run_one                      # type: ignore[method-assign]
+    sched._run_one = run_one                      # type: ignore[assignment]
     sched._decide = decide                        # type: ignore[method-assign]
     sched._reconcile = reconcile                  # type: ignore[method-assign]
     sched.dispatcher.create = create              # type: ignore[assignment]
