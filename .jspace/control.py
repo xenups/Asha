@@ -126,17 +126,38 @@ def atomic(path, data):
             os.unlink(tmp)
 
 
+def _stale_lock(lock):
+    """True only when the lock's recorded owner is GONE and the lock is
+    older than the retry window: the owner was killed before its
+    ``finally`` could unlink. A live owner -- including a reused PID
+    that some other process now holds -- is never treated as stale."""
+    try:
+        if time.time() - lock.stat().st_mtime < 5.0:
+            return False
+        owner = int(lock.read_text('ascii').strip())
+    except (OSError, ValueError):
+        return False
+    try:
+        os.kill(owner, 0)
+    except OSError:
+        return True      # owner process no longer exists: safe recovery
+    return False
+
+
 @contextlib.contextmanager
 def locked(root):
     directory = safe_path(root, '.jspace', exists=False)
     directory.mkdir(parents=True, exist_ok=True)
+    lock = directory / 'lock'
     handle = None
     for attempt in range(50):
         try:
-            handle = os.open(str(directory / 'lock'), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            handle = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             os.write(handle, str(os.getpid()).encode('ascii'))
             break
         except FileExistsError:
+            if _stale_lock(lock):
+                lock.unlink(missing_ok=True)
             time.sleep(0.05)
     require(handle is not None, 'Control ledger is locked by another process.')
     try:
