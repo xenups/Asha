@@ -27,9 +27,37 @@ pip install -e .          # editable install; registers the console scripts
 Registered CLI commands:
 
 ```text
+asha [--root <path>] [--paths <file>...] [--json] [--no-execute]
+                                              # governance CLI (schema v1)
 asha --root <path> run --spec <spec.json> [--apply]   # scheduler CLI
 asha-mcp                                              # stdio JSON-RPC MCP server
 ```
+
+`asha` (the default command) is a thin adapter over the existing engine:
+git state -> scope resolver -> classifier -> eligibility engine, then the
+existing execution authority: one synthesized validation worker through
+the orchestrator against a committed target (Spec 6.5.5 -- only the
+scheduler may take the SCOPED runtime path, so an uncommitted target is
+evaluated but never executed). It never re-decides anything: every
+semantic field in its output is the engine's own.
+
+CLI contract (schema_version 1):
+
+* stdout: human result block, or exactly one JSON document with `--json`
+  (no progress logs; diagnostics go to stderr).
+* JSON fields: `schema_version`, `repository`, `change_set`,
+  `changed_files`, `decision`, `eligible`, `fallback_reason`,
+  `execution_mode` (`targeted`|`canonical`), `validation_result`
+  (`PASS`|`FAIL`), `duration_ms`, `evidence_id`, `evidence_verification`,
+  `replay_verification`, `error`, `status` (`NO_CHANGES`). Missing data
+  is explicit `null`; no absolute local paths; deterministic apart from
+  `duration_ms`.
+* exit codes: `0` validation completed (SCOPED or canonical COMPLETE) or
+  `NO_CHANGES` / `--no-execute` evaluation success; `1` validation
+  failed; `2` operational or engine error (including canonical
+  execution refused on an uncommitted target and evidence verification
+  failure); `130` interrupted (never reported as PASS).
+* `COMPLETE` is not a failure: a canonical run that passes exits `0`.
 
 `asha-mcp` and `python -m asha.mcp_server` are the same server. `--apply`
 runs the governed integration path: single-commit staging, unified-tree

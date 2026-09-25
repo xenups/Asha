@@ -1,4 +1,6 @@
-"""Package entry: `python -m orchestrator` (or directly
+"""Package entry: `python -m asha` / `asha` (Phase 5.2.2 CLI; the
+legacy scheduler form `asha run --spec ...` passes through unchanged
+via asha.cli). Originally: `python -m orchestrator` (or directly
 `python orchestrator/__main__.py`).
 
 `python orchestrator/` (directory form) is NOT supported: CPython
@@ -18,8 +20,8 @@ if __package__ in (None, ''):
     pkg = _norm(__file__).rsplit('/', 1)[0]
     sys.path = [entry for entry in sys.path if _norm(entry) != pkg]
     sys.path.insert(0, pkg.rsplit('/', 1)[0])
-    from asha.scheduler import main
+    from asha.cli import main
 else:
-    from .scheduler import main
+    from .cli import main
 
 raise SystemExit(main(sys.argv[1:]))
