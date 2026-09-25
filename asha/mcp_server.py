@@ -965,7 +965,8 @@ def _dispatch_context(root: Path) -> tuple[dict[str, Any], ...]:
     peers: dict[str, dict[str, Any]] = {}
     if not cache.is_dir():
         return ()
-    for path in sorted(cache.glob("*.json")):
+    # records live one level deeper: cache/orchestrator/<task>/<wid>.json
+    for path in sorted(cache.rglob("*.json")):
         peer_id = f"record:{path.stem}"
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))

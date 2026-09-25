@@ -25,7 +25,6 @@ import asha.mcp_server as server
 PY = sys.executable
 REPO = Path(__file__).resolve().parent.parent
 ENV = server.FAST_PATH_ENV
-PROBES = [f'.jspace/dogfood_probe_{index}.txt' for index in range(1, 6)]
 
 
 def _dispatch(wid: str, *, scope: list[str], reads: list[str] | None,
@@ -61,30 +60,43 @@ def main() -> int:
     if _status():
         print('REFUSED: working tree is not clean before dogfooding')
         return 1
-    # hand-written expectations (checked, never derived from output)
+    offset = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+    probes = [f'.jspace/dogfood_probe_{offset + index}.txt'
+              for index in range(5)]
+    # hand-written expectations (checked, never derived from output).
+    # Two tables: a fresh envelope (no recorded executions -> prime is
+    # a natural UNKNOWN) versus an envelope with history (prime
+    # classifies against real recorded surfaces)
+    has_history = bool(list(
+        (REPO / '.jspace' / 'cache' / 'orchestrator')
+        .rglob('*.json')))
+    prime_expectation = ('UNKNOWN', 'full_governance') \
+        if not has_history else ('PROVEN_DISJOINT', 'full_governance')
     expected: dict[str, tuple[str, str]] = {
-        'prime': ('UNKNOWN', 'full_governance'),
+        'prime': prime_expectation,
         'dogfood-a0': ('PROVEN_DISJOINT', 'full_governance'),
         'dogfood-a1': ('PROVEN_DISJOINT', 'fast_path'),
         'dogfood-b': ('PROVEN_SHARED', 'full_governance'),
         'dogfood-c': ('UNKNOWN', 'full_governance'),
     }
+    print(f'history_records={has_history} probe_offset={offset}')
     results: dict[str, dict[str, Any]] = {}
     plan: list[tuple[str, dict[str, Any]]] = [
-        # prime: no recorded executions yet -> missing_context -> UNKNOWN
-        ('prime', {'scope': [PROBES[0]], 'reads': [PROBES[0]],
-                   'writes': [PROBES[0]], 'env_on': False}),
+        # prime: fresh envelope -> missing_context -> UNKNOWN expected
+        # (or DISJOINT when history exists; table picked above)
+        ('prime', {'scope': [probes[0]], 'reads': [probes[0]],
+                   'writes': [probes[0]], 'env_on': False}),
         # A: disjoint from every recorded surface, flag OFF then ON
-        ('dogfood-a0', {'scope': [PROBES[1]], 'reads': [PROBES[1]],
-                        'writes': [PROBES[1]], 'env_on': False}),
-        ('dogfood-a1', {'scope': [PROBES[2]], 'reads': [PROBES[2]],
-                        'writes': [PROBES[2]], 'env_on': True}),
+        ('dogfood-a0', {'scope': [probes[1]], 'reads': [probes[1]],
+                        'writes': [probes[1]], 'env_on': False}),
+        ('dogfood-a1', {'scope': [probes[2]], 'reads': [probes[2]],
+                        'writes': [probes[2]], 'env_on': True}),
         # B: real overlap with prime's recorded surface, flag ON
-        ('dogfood-b', {'scope': [PROBES[0]], 'reads': [PROBES[0]],
-                       'writes': [PROBES[0]], 'env_on': True}),
+        ('dogfood-b', {'scope': [probes[0]], 'reads': [probes[0]],
+                       'writes': [probes[0]], 'env_on': True}),
         # C: undeclared read surface -> natural UNKNOWN, flag ON
-        ('dogfood-c', {'scope': [PROBES[3]], 'reads': None,
-                       'writes': [PROBES[3]], 'env_on': True}),
+        ('dogfood-c', {'scope': [probes[3]], 'reads': None,
+                       'writes': [probes[3]], 'env_on': True}),
     ]
     for wid, kwargs in plan:
         print(f'-- dispatch {wid} (env={"1" if kwargs["env_on"] else "0"})',
@@ -155,7 +167,7 @@ def main() -> int:
 
     # cleanup: probes are ignored, tree was clean before and must be
     # clean after
-    for probe in PROBES:
+    for probe in probes:
         path = REPO / probe
         if path.exists():
             path.unlink()

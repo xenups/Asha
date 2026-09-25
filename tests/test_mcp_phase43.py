@@ -112,7 +112,9 @@ def _seed_record(repo: Path, worker_id: str,
     if tamper:
         payload = dict(payload)
         payload['write_set'] = ['tampered.py']
-    cache = repo / '.jspace' / 'cache' / 'orchestrator'
+    # real scheduler layout: evidence_dir = cache/<orchestrator>/<task_id>
+    cache = (repo / '.jspace' / 'cache' / 'orchestrator'
+             / 'seed-task')
     cache.mkdir(parents=True, exist_ok=True)
     path = cache / (name or f'{worker_id}.json')
     path.write_text(json.dumps(payload), encoding='utf-8')
@@ -176,9 +178,8 @@ def test_client_cannot_supply_runtime_config(tmp_path) -> None:
     assert result.get('isError') is True
     assert 'unknown field' in str(result['payload'])
     # nothing executed, nothing recorded
-    assert not (repo / '.jspace' / 'cache' / 'orchestrator').exists() or \
-        list((repo / '.jspace' / 'cache' / 'orchestrator').glob('*.json')) \
-        == []
+    cache = repo / '.jspace' / 'cache' / 'orchestrator'
+    assert not cache.exists() or list(cache.rglob('*.json')) == []
 
 
 # ---------------------------------------------------------------------
@@ -299,7 +300,7 @@ def test_dispatch_invalid_inputs_structured_error(tmp_path) -> None:
         assert result.get('isError') is True, arguments
     # no execution side effects from any rejected call
     cache = repo / '.jspace' / 'cache' / 'orchestrator'
-    assert not cache.exists() or list(cache.glob('*.json')) == []
+    assert not cache.exists() or list(cache.rglob('*.json')) == []
 
 
 def test_dispatch_unknown_never_fast(tmp_path, monkeypatch) -> None:
@@ -395,7 +396,7 @@ def test_dispatch_classifier_exception_no_execution(tmp_path,
     assert 'fail-closed' in str(result['payload'])
     assert 'nothing executed' in str(result['payload'])
     cache = repo / '.jspace' / 'cache' / 'orchestrator'
-    assert not cache.exists() or list(cache.glob('*.json')) == []
+    assert not cache.exists() or list(cache.rglob('*.json')) == []
 
 
 def test_dispatch_result_contract(tmp_path, monkeypatch) -> None:
@@ -414,6 +415,28 @@ def test_dispatch_result_contract(tmp_path, monkeypatch) -> None:
                             'evidence_ms', 'total_ms'}
     for value in timings.values():
         assert isinstance(value, (int, float)) and value >= 0.0
+
+
+def test_dispatch_classifies_against_real_recorded_envelope(
+        tmp_path, monkeypatch) -> None:
+    """The real->real chain (regression caught by Phase 4.3 dogfooding):
+    a dispatch's SECOND task must classify against the evidence the
+    scheduler ACTUALLY sealed for the first one -- at the real
+    evidence_dir layout (cache/orchestrator/<task_id>/<wid>.json) --
+    not only against hand-seeded files."""
+    monkeypatch.delenv(server.FAST_PATH_ENV, raising=False)
+    repo = _make_repo(tmp_path)
+    first = _payload(_dispatch(repo, 'rr1', writes=['probe_rr1.py']))
+    assert first['classification'] == 'UNKNOWN'  # no records yet
+    second = _payload(_dispatch(repo, 'rr2', writes=['probe_rr2.py']))
+    # discovered real record of rr1 -> proven disjoint against it
+    assert second['classification'] == 'PROVEN_DISJOINT'
+    assert second['runtime_mode'] == 'full_governance'
+    third = _dispatch(repo, 'rr3', writes=['probe_rr1.py'],
+                      reads=['probe_rr1.py'])
+    payload = _payload(third)                    # real overlap with rr1
+    assert payload['classification'] == 'PROVEN_SHARED'
+    assert payload['runtime_mode'] == 'full_governance'
 
 
 # ---------------------------------------------------------------------
