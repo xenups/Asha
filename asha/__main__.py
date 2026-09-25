@@ -24,4 +24,8 @@ if __package__ in (None, ''):
 else:
     from .cli import main
 
-raise SystemExit(main(sys.argv[1:]))
+if __name__ == '__main__':
+    # `python -m asha` executes this module; the console-script shim
+    # imports `main` and calls it itself -- importing this module for
+    # any other reason must never run the CLI or raise SystemExit.
+    raise SystemExit(main(sys.argv[1:]))

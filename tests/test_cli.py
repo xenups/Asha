@@ -397,6 +397,21 @@ def test_committed_target_executes_via_scheduler_authority(
 
 # ------------------------------------------------------- legacy + schema
 
+def test_main_module_import_has_no_side_effect(tmp_path: Path) -> None:
+    """Regression: an unguarded SystemExit(main()) in asha/__main__.py
+    ran the whole CLI (417s canonical execution) on plain import and
+    killed any importing process with exit 0."""
+    import sys as _sys
+    proc = subprocess.run(
+        [_sys.executable, '-c',
+         'import asha.__main__; print("IMPORT_OK")'],
+        cwd=tmp_path, capture_output=True, text=True, check=False,
+        encoding='utf-8', errors='replace', timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == 'IMPORT_OK\n'   # nothing else may be emitted
+    assert 'Asha' not in proc.stdout
+
+
 def test_legacy_run_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[list[str]] = []
 
