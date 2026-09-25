@@ -146,12 +146,21 @@ def main() -> int:
     payload = _dispatch(
         'scoped-e1', scope=[PROBE1], writes=[PROBE1],
         cmd_code=_write_cmd(PROBE1, PROBE_CODE), env_on=True)
-    # eligibility measured standalone on the same repo state via the
-    # real engine (the dispatch embeds it; timing read here):
-    t0 = time.perf_counter()
-    decision = scoping.assess_scoping_eligibility(
-        REPO, [PROBE1], 'PROVEN_DISJOINT', 'S1')
-    eligibility_ms = (time.perf_counter() - t0) * 1000
+    # eligibility measured standalone via the real engine on the same
+    # change (the dispatch embeds it; timing read here). The dispatched
+    # run executes in an isolated worktree that is removed afterwards,
+    # so the probe change is materialized on the main repo root for the
+    # measurement and immediately removed -- the tree stays clean.
+    probe_main = REPO / PROBE1
+    probe_main.parent.mkdir(parents=True, exist_ok=True)
+    probe_main.write_text(PROBE_CODE, encoding='utf-8')
+    try:
+        t0 = time.perf_counter()
+        decision = scoping.assess_scoping_eligibility(
+            REPO, [PROBE1], 'PROVEN_DISJOINT', 'S1')
+        eligibility_ms = (time.perf_counter() - t0) * 1000
+    finally:
+        probe_main.unlink(missing_ok=True)
     ev1 = _evidence(payload.get('task_id', 'dispatch-scoped-e1'),
                     'scoped-e1')
     mode1 = ev1.get('validation_mode')
