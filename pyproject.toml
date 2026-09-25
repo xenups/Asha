@@ -9,7 +9,7 @@ description = "Asha: governed multi-agent execution harness (stdlib only)"
 requires-python = ">=3.11"
 
 [project.scripts]
-asha = "asha.__main__:main"
+asha = "asha.cli:main"
 asha-mcp = "asha.mcp_server:main"
 
 [tool.setuptools.packages.find]
