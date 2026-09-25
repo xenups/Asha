@@ -42,7 +42,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import git_context, scope_resolver, scoping, ui
+from . import git_context, scope_resolver, scoping, ui, watcher
 from .classifier import classify_task, governance_profile
 from .mcp_server import _dispatch_context, _fast_path_enabled
 from .replay import parse_evidence, verify_bytes, verify_record
@@ -416,6 +416,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--ui-out', metavar='PATH', default=None,
                         help='destination for the --ui report '
                              '(default: .jspace/reports/inspector.html)')
+    parser.add_argument('--watch', action='store_true',
+                        help='observe filesystem changes (LIVE/PREVIEW '
+                             'only, non-authoritative): Enter/r runs the '
+                             'existing authoritative pipeline, q quits')
     args = parser.parse_args(argv)
 
     started = time.monotonic()
@@ -427,6 +431,17 @@ def main(argv: list[str] | None = None) -> int:
     payload: dict[str, Any] | None = None
     exit_code = EXIT_OK
     try:
+        if args.watch:
+            if as_json:
+                raise CliError(
+                    'INVALID_ARGUMENTS',
+                    '--watch cannot be combined with --json (watch is a '
+                    'terminal session; the schema v1 contract belongs to '
+                    'runs)')
+            root = _require_git_root(root)
+            return watcher.run_watch(
+                root, ui=bool(args.ui),
+                ui_out=(Path(args.ui_out) if args.ui_out else None))
         root = _require_git_root(root)
         # ONE coherent snapshot of the working state; conflicts are an
         # operational repository condition (exit 2), never a verdict

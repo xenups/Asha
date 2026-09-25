@@ -245,11 +245,71 @@ def _checks_table(payload: Mapping[str, Any]) -> str:
             + ''.join(rows) + '</table>')
 
 
+def _render_watch(data: Mapping[str, Any]) -> str:
+    """LIVE / PREVIEW layout (watch mode): observation facts plus the
+    recorded LAST SEALED RUN. Renders NO verdict section at all -- a
+    preview must never look like a current governance result."""
+    watch = data.get('watch')
+    if not isinstance(watch, Mapping):
+        watch = {}
+    sealed = data.get('last_sealed_run')
+    if not isinstance(sealed, Mapping):
+        sealed = {}
+    state = str(watch.get('state') or 'UNKNOWN')
+    files = watch.get('files')
+    file_items = ''
+    if isinstance(files, Sequence) and not isinstance(files, (str, bytes)):
+        file_items = ''.join(f'<li>{_esc(item)}</li>' for item in files)
+    states = watch.get('states')
+    state_rows = ''
+    if isinstance(states, Mapping):
+        state_rows = ''.join(
+            f'<tr><td><code>{_esc(path)}</code></td>'
+            f'<td><code>{_esc(", ".join(str(t) for t in tags))}</code></td>'
+            '</tr>'
+            for path, tags in sorted(states.items()))
+    sealed_rows = ''.join(
+        f'<tr><td><code>{_esc(key)}</code></td>'
+        f'<td>{_esc(value)}</td></tr>'
+        for key, value in sealed.items()) or (
+        '<tr><td colspan="2" class="note">No sealed run recorded'
+        '</td></tr>')
+    parts = [
+        '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">',
+        ('<meta http-equiv="refresh" content="1">'
+         '<title>Asha watch (LIVE / PREVIEW)</title>'),
+        f'<style>{_STYLE}</style></head><body><main>',
+        '<h1>Asha Watch</h1>',
+        ('<p class="meta">LIVE / PREVIEW &mdash; '
+         '<strong>non-authoritative</strong> &middot; '
+         'filesystem observation only; no governance evaluation has run. '
+         'A run happens only on an explicit user trigger.</p>'),
+        '<h2>Observation (LIVE)</h2><p>',
+        _badge(state, 'b-none'),
+        f' &nbsp; branch: <code>{_esc(watch.get("branch") or _NOT_RECORDED)}</code>',
+        '</p>',
+        '<h3>Observed files (preview)</h3>',
+        f'<ul class="files">{file_items}</ul>' if file_items
+        else '<p class="note">no observed changes</p>',
+        '<h3>Per-path states (observed)</h3>' if state_rows else '',
+        f'<table><tr><th>Path</th><th>States</th></tr>{state_rows}</table>'
+        if state_rows else '',
+        '<h2>LAST SEALED RUN (recorded, previous)</h2>',
+        '<table class="kv">'
+        '<tr><th>Recorded field</th><th>Value</th></tr>'
+        + sealed_rows + '</table>',
+        '</main></body></html>',
+    ]
+    return ''.join(part for part in parts if part)
+
+
 def render_report(payload: Mapping[str, Any]) -> str:
     """Pure renderer: payload in, self-contained HTML out. No mutation."""
     if not isinstance(payload, Mapping):
         raise TypeError('render_report expects a mapping payload')
     data: Mapping[str, Any] = copy.deepcopy(payload)
+    if 'watch' in data:
+        return _render_watch(data)
 
     repository = data.get('repository')
     header = [
