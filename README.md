@@ -76,10 +76,36 @@ negotiated verbatim when the client requests it.
 | `asha_status(root)` | Git repository cleanliness, current HEAD SHA, active worktree tracking, and lock detection. |
 | `asha_plan_dag(root, spec_content)` | Static AST dependency inspection, topological generations, write/read collision analysis, and safety classification (`safe` vs `uncertain`). Never executes anything. |
 | `asha_run_spec(root, spec_content, apply)` | `apply=false`: simulation only — DAG rows as `SIMULATED_DONE`, zero subprocesses, zero side effects. `apply=true`: isolated execution in dedicated Git worktrees, cryptographic evidence collection (`HEAD^{tree}`), per-worker states and evidence paths. Atomic branch integration is a separate governed step (`asha --root … run --apply`) so execution evidence never doubles as ship authorization; failure rolls back with zero residue. |
+| `asha_get_surgical_context(target_file, target_symbol, repo_path)` | Read-only Phase 4.1 pipeline: AST index → code graph → dependency closure → surgical slice for one symbol. Returns `target`, `context`, `dependencies`, `unresolved`, `full_source_bytes`, `context_source_bytes`, `reduction_ratio`. Every closure member is reported — UNRESOLVED boundaries are never silently dropped. `reduction_ratio` is SOURCE BYTES only, never a token claim. |
+| `asha_dispatch_task(id, declared_scope, reads, writes, deps, cmd, prompt, root)` | Dispatches ONE governed worker through the real pipeline: Phase 4.0 `classify_task` → `governance_profile` → Phase 4.2 `route` (fail-closed) → `GovernedScheduler` (worktrees, conflict gating, scope verification, sealed evidence). The classifier's context envelope comes from this repo's own sealed execution records (`.jspace/cache/orchestrator/*.json`) — no records means `UNKNOWN`, never a vacuous disjoint proof. Result carries `classification`, `reason_code`, `runtime_mode`, `routing`, `evidence`, `worktrees`, `timings`; `authorized_to_ship` stays `false`. |
 
 Planning never guesses: overlapping writes within one generation, unknown
 read/write sets, or dependencies without import facts downgrade the
 conflict matrix to `uncertain` instead of a false `safe`.
+
+### Fast Path runtime configuration (Phase 4.3)
+
+`ASHA_FAST_PATH_ENABLED=1` is a **runtime configuration of the server
+process** (exact value `"1"` enables; anything else or unset is the safe
+`False` default). No MCP `inputSchema` carries this field, and no MCP
+task, prompt, spec or any agent-produced payload can set or override it —
+a client that sends it gets a structured `unknown field` error. Even
+with the flag on, Fast Path still requires a coherent
+`PROVEN_DISJOINT` classification; `PROVEN_SHARED`, `UNKNOWN`, malformed
+or inconsistent profiles all stay on FULL GOVERNANCE.
+
+### Telemetry vs evidence (Phase 4.3)
+
+Every `tools/call` invocation appends one JSONL event to
+`<repo>/.jspace/mcp_live_telemetry.jsonl` (`timestamp`, `tool`,
+`request_id`, `duration_ms`, `status`, allowlisted `metadata` only —
+never raw prompt, never raw `cmd`, never secrets or environment
+values). Telemetry is **operational observability only**: not
+authoritative evidence, not an audit proof, not tamper-proof, not a
+commitment — and it is fail-safe: a telemetry write failure can never
+change routing, authorization or execution semantics. Authoritative
+evidence remains exclusively the sealed worker records produced by the
+scheduler's `_collect` contract (`evidence.seal` + digest re-verify).
 
 ## Dependency Model: Code Graph → Worker DAG
 

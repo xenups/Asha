@@ -232,7 +232,9 @@ class GovernedScheduler:
     def __init__(self, repo: Path | str, workers: Any, *,
                  task_id: str = 'task', keep_worktrees: bool = False,
                  execute: ExecuteHook | None = None,
-                 fast_path_enabled: bool = False) -> None:
+                 fast_path_enabled: bool = False,
+                 classification_context: tuple[dict[str, Any], ...] = (),
+                 ) -> None:
         # workers is Any at the boundary: validate_workers() is the gate.
         self.workers: list[dict[str, Any]] = validate_workers(workers)
         self.repo = Path(repo).resolve()
@@ -246,6 +248,10 @@ class GovernedScheduler:
         # lock so each one binds evidence to its OWN start revision
         # (no shared-base contamination between fast workers).
         self.fast_path_enabled = bool(fast_path_enabled)
+        # Phase 4.3: extra classifier envelope entries (already in
+        # classifier-task shape) merged into every _route_for context.
+        # Default () = legacy wave-only context, byte-for-byte.
+        self.classification_context = tuple(classification_context)
         self.routes: dict[str, dict[str, Any]] = {}
         self._fast_lock = threading.Lock()
         self.dispatcher = WorktreeDispatcher(self.repo, keep=keep_worktrees)
@@ -395,7 +401,7 @@ class GovernedScheduler:
         task = self._task_payload(worker)
         context = tuple(
             self._task_payload(other) for other in self.workers
-            if str(other.get('id')) != wid)
+            if str(other.get('id')) != wid) + self.classification_context
         started = perf_counter_ns()
         profile: object
         error: str | None = None

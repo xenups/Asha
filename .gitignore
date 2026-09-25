@@ -12,5 +12,6 @@ __pycache__/
 .jspace/evidence.json
 .jspace/cache/
 .jspace/lock
+.jspace/mcp_live_telemetry.jsonl
 *.tmp
 benchmarks/results/

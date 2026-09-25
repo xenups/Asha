@@ -42,12 +42,19 @@ import json
 import os
 import sys
 from collections.abc import Callable
+from datetime import UTC, datetime
 from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
+from time import perf_counter_ns
 from typing import Any, TextIO
 
-from . import dep_index, graph_state, worker_graph
+from . import dep_index, evidence, graph_state, worker_graph
+from .ast_indexer import ImportFact, ModuleIndex, index_module
+from .classifier import classify_task, governance_profile
+from .codegraph import build_graph, closure, sym_node
 from .conflict import ConflictManager, scope_status
+from .context_slicer import slice_context
+from .router import RuntimeMode, route
 from .scheduler import GovernedScheduler, validate_workers
 from .types import OrchestratorError
 from .worktree import _git
@@ -72,6 +79,103 @@ def _result(request_id: Any, payload: dict[str, Any]) -> dict[str, Any]:
 def _error(request_id: Any, code: int, message: str) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": request_id,
             "error": {"code": code, "message": message}}
+
+
+# -- Phase 4.3: runtime configuration + operational telemetry --------------
+# Fast Path comes ONLY from the process environment. No input schema
+# carries it, no task/prompt/spec field can set or override it, and
+# an unknown field that looks like it is rejected as unknown input.
+FAST_PATH_ENV = "ASHA_FAST_PATH_ENABLED"
+TELEMETRY_NAME = "mcp_live_telemetry.jsonl"
+
+
+def _fast_path_enabled() -> bool:
+    """Env-only runtime config: exactly "1" -> True, anything else or
+    unset -> False (safe default). Operational metadata, never a
+    client input."""
+    return os.environ.get(FAST_PATH_ENV) == "1"
+
+
+def _telemetry_repo(arguments: dict[str, Any]) -> Path:
+    """Where this call's event goes: the call's own valid root when it
+    names a real directory, else the server process cwd. A client can
+    never point telemetry at an arbitrary path."""
+    for key in ("root", "repo_path"):
+        value = arguments.get(key)
+        if isinstance(value, str) and value:
+            candidate = Path(value).expanduser()
+            if candidate.is_dir():
+                return candidate.resolve()
+    return Path.cwd()
+
+
+_META_KEYS = ("classification", "reason_code", "runtime_mode",
+              "routing_reason", "fast_path_enabled", "target",
+              "dependencies_count", "unresolved_count",
+              "full_source_bytes", "context_source_bytes",
+              "reduction_ratio", "state", "task_id")
+
+
+def _safe_metadata(payload: Any) -> dict[str, Any]:
+    """Allowlisted operational fields only: never prompt, never cmd,
+    never raw arguments, never error text, never environment values."""
+    meta: dict[str, Any] = {}
+    if not isinstance(payload, dict):
+        return meta
+    for key in _META_KEYS:
+        if key not in payload:
+            continue
+        value = payload[key]
+        if isinstance(value, (bool, int, float)):
+            meta[key] = value
+        elif value is None:
+            meta[key] = None
+        elif isinstance(value, str):
+            meta[key] = value[:200]
+    timings = payload.get("timings")
+    if isinstance(timings, dict):
+        meta["timings"] = {key: value for key, value in timings.items()
+                           if isinstance(key, str)
+                           and isinstance(value, (int, float))}
+    return meta
+
+
+def _emit_telemetry(repo: Path, tool: str, request_id: Any,
+                    duration_ns: int, status: str,
+                    metadata: dict[str, Any]) -> None:
+    """Append ONE event to <repo>/.jspace/mcp_live_telemetry.jsonl.
+
+    Operational observability ONLY -- not authoritative evidence, not
+    an audit proof, not tamper-proof, not a commitment. Fail-safe by
+    contract: every failure (bad disk, serialization, permissions) is
+    swallowed, so telemetry failure can never change routing,
+    authorization or execution semantics. Concurrency: one complete
+    line per single os.write on an O_APPEND fd.
+    """
+    try:
+        event = {
+            "timestamp": datetime.now(UTC)
+                         .isoformat(timespec="milliseconds"),
+            "tool": str(tool)[:100],
+            "request_id": str(request_id)[:200],
+            "duration_ms": round(duration_ns / 1e6, 3),
+            "status": status,
+            "metadata": metadata,
+        }
+        line = (json.dumps(event, sort_keys=True, ensure_ascii=False)
+                + "\n").encode("utf-8")
+        jspace = repo / ".jspace"
+        jspace.mkdir(parents=True, exist_ok=True)
+        fd = os.open(jspace / TELEMETRY_NAME,
+                     os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            os.write(fd, line)
+        finally:
+            os.close(fd)
+    except Exception:
+        # Fail-safe by contract: telemetry is best-effort observability;
+        # a write failure must never surface to or alter the call.
+        return
 
 
 ROOT_HELP = "Path to the git repository (default: current directory)."
@@ -147,8 +251,6 @@ ASHA_RUN_SPEC_SPEC: dict[str, Any] = {
         "additionalProperties": False,
     },
 }
-TOOL_SPECS: list[dict[str, Any]] = [
-    ASHA_PLAN_DAG_SPEC, ASHA_RUN_SPEC_SPEC, ASHA_STATUS_SPEC]
 
 
 def _tool_ok(payload: dict[str, Any]) -> dict[str, Any]:
@@ -626,10 +728,446 @@ def asha_run_spec(arguments: dict[str, Any]) -> dict[str, Any]:
         return _tool_error(f"{type(exc).__name__}: {exc}")
 
 
+# -- Phase 4.3: asha_get_surgical_context (read-only Phase 4.1 pipeline) --
+ASHA_GET_SURGICAL_CONTEXT_SPEC: dict[str, Any] = {
+    "name": "asha_get_surgical_context",
+    "description": ("Read-only surgical context extraction for one "
+                    "symbol in one repo file (Phase 4.1 pipeline: AST "
+                    "index -> code graph -> dependency closure -> "
+                    "surgical slice). Returns the full dependency "
+                    "closure including every UNRESOLVED boundary "
+                    "nothing is silently dropped), with byte counts; "
+                    "reduction_ratio is SOURCE BYTES only, never a "
+                    "token claim."),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "target_file": {"type": "string",
+                            "description": "Repo-relative file that "
+                                           "contains the symbol."},
+            "target_symbol": {"type": "string",
+                              "description": "Symbol name as indexed "
+                                             "(function/class/variable; "
+                                             "'Class.method' for methods)."},
+            "repo_path": {"type": "string", "default": ".",
+                          "description": ROOT_HELP},
+        },
+        "required": ["target_file", "target_symbol"],
+        "additionalProperties": False,
+    },
+}
+
+ASHA_DISPATCH_TASK_SPEC: dict[str, Any] = {
+    "name": "asha_dispatch_task",
+    "description": ("Dispatch ONE governed worker through the real Asha "
+                    "pipeline: Phase 4.0 classification -> Phase 4.2 "
+                    "router (fail-closed) -> GovernedScheduler "
+                    "(worktrees, conflict gating, scope verification, "
+                    "sealed evidence). Fast Path is decided ONLY by "
+                    "process runtime config ASHA_FAST_PATH_ENABLED=1 "
+                    "plus a proven-disjoint classification; no input "
+                    "field can set or override it. Result carries the "
+                    "decision and timings; authorized_to_ship stays "
+                    "false."),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string",
+                   "description": "Unique worker id."},
+            "declared_scope": {"type": "array",
+                               "items": {"type": "string"},
+                               "description": "Repo-relative paths this "
+                                              "task may touch."},
+            "reads": {"type": "array", "items": {"type": "string"}},
+            "writes": {"type": "array", "items": {"type": "string"}},
+            "deps": {"type": "array", "items": {"type": "string"}},
+            "cmd": {"type": "array", "items": {"type": "string"}},
+            "prompt": {"type": "string",
+                       "description": "Task metadata only: never "
+                                      "executed, never logged to "
+                                      "telemetry."},
+            "root": {"type": "string", "default": ".",
+                     "description": ROOT_HELP},
+        },
+        "required": ["id", "declared_scope", "cmd"],
+        "additionalProperties": False,
+    },
+}
+
+
+def _module_name(rel: str) -> str | None:
+    """'pkg/mod.py' -> 'pkg.mod'; 'pkg/__init__.py' -> 'pkg'.
+    None for anything not indexable as a Python module."""
+    if not rel.endswith(".py"):
+        return None
+    parts = rel[:-3].split("/")
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    if not parts or any(not part for part in parts):
+        return None
+    return ".".join(parts)
+
+
+def _import_candidates(root: Path, consumer: str,
+                       fact: ImportFact) -> list[str]:
+    """Repo-relative files a single import fact can reach. Resolution
+    is lexical only: a target that does not exist as a file is simply
+    NOT followed (it surfaces later as an EXTERNAL/UNRESOLVED graph
+    boundary -- never guessed, never dropped)."""
+    dotted_roots: list[str] = []
+    if fact.level == 0:
+        if fact.module:
+            dotted_roots.append(fact.module)
+            if fact.kind in ("from", "star"):
+                for original, _alias in fact.names:
+                    if original:
+                        dotted_roots.append(f"{fact.module}.{original}")
+        elif fact.kind in ("from", "star"):
+            dotted_roots.extend(original for original, _ in fact.names
+                                if original)
+    else:
+        parts = consumer.split(".")
+        prefix = ".".join(parts[:max(len(parts) - fact.level, 0)])
+        base = f"{prefix}.{fact.module}" if fact.module else prefix
+        if base:
+            dotted_roots.append(base)
+        if fact.kind in ("from", "star"):
+            for original, _alias in fact.names:
+                if original:
+                    dotted_roots.append(
+                        f"{base}.{original}" if base else original)
+    found: list[str] = []
+    for dotted in dict.fromkeys(dotted_roots):
+        rel = dotted.replace(".", "/")
+        if set(Path(rel).parts) & PLAN_EXCLUDED_DIRS:
+            continue
+        for candidate in (f"{rel}.py", f"{rel}/__init__.py"):
+            if (root / candidate).is_file():
+                found.append(candidate)
+                break
+    return found
+
+
+def _index_reachable(root: Path, start_rel: str
+                     ) -> tuple[ModuleIndex, ...]:
+    """Index the start file plus every repo module reachable through
+    its import facts (lexically, BFS, visited-set, excluded dirs
+    skipped). Bounded by the repo's own import graph."""
+    visited: set[str] = set()
+    ordered: list[ModuleIndex] = []
+    queue: list[str] = [start_rel]
+    while queue:
+        rel = queue.pop(0)
+        if rel in visited:
+            continue
+        visited.add(rel)
+        module = _module_name(rel)
+        if module is None:
+            continue
+        try:
+            source = (root / rel).read_text(encoding="utf-8",
+                                             errors="replace")
+        except OSError:
+            continue  # unreadable target -> boundary, not a crash
+        index = index_module(module, source)
+        ordered.append(index)
+        for fact in index.imports:
+            queue.extend(_import_candidates(root, module, fact))
+    ordered.sort(key=lambda entry: entry.module)
+    return tuple(ordered)
+
+
+def asha_get_surgical_context(arguments: dict[str, Any]
+                              ) -> dict[str, Any]:
+    """Read-only Phase 4.1 pipeline. Never raises: every failure
+    becomes structured error content (tool-level fail-closed)."""
+    try:
+        unknown = sorted(set(arguments) - {"target_file", "target_symbol",
+                                           "repo_path"})
+        if unknown:
+            return _tool_error("unknown field(s): " + ", ".join(unknown))
+        target_file = arguments.get("target_file")
+        if not isinstance(target_file, str) or not target_file:
+            return _tool_error("target_file must be a non-empty string")
+        target_symbol = arguments.get("target_symbol")
+        if not isinstance(target_symbol, str) or not target_symbol:
+            return _tool_error("target_symbol must be a non-empty string")
+        repo_arg = arguments.get("repo_path", ".")
+        if not isinstance(repo_arg, str):
+            return _tool_error("repo_path must be a string")
+        repo = Path(repo_arg).expanduser()
+        if not repo.is_dir():
+            return _tool_error(
+                f"repo_path does not exist or is not a directory: {repo_arg}")
+        root = repo.resolve()
+        rel = target_file.replace(chr(92), "/")
+        if rel.startswith("/") or ".." in rel.split("/"):
+            return _tool_error(
+                f"target_file must stay inside the repository: {target_file}")
+        if not rel.endswith(".py"):
+            return _tool_error("target_file must be a .py file")
+        source_file = root / rel
+        if not source_file.is_file():
+            return _tool_error(f"target_file not found: {target_file}")
+        source = source_file.read_text(encoding="utf-8", errors="replace")
+        module = _module_name(rel)
+        if module is None:
+            return _tool_error(f"cannot derive module name: {target_file}")
+
+        # Phase 4.1 pipeline, in order: index -> graph -> closure -> slice
+        indices = _index_reachable(root, rel)
+        target_index = next((entry for entry in indices
+                             if entry.module == module), None)
+        if target_index is None or target_index.symbol(target_symbol) is None:
+            return _tool_error(
+                f"symbol not found in target file: {target_symbol}")
+        graph = build_graph(indices)
+        root_node = sym_node(module, target_symbol)
+        reach = closure(graph, (root_node,), module)
+        sliced = slice_context(source, target_name=target_symbol,
+                               target_module=module, graph=graph,
+                               indices=indices)
+        context_text = (sliced.target_source
+                        + "".join(stub.text for stub in sliced.stubs))
+        full_bytes = sliced.full_bytes
+        context_bytes = sliced.surgical_bytes
+        ratio = (1.0 - context_bytes / full_bytes) if full_bytes else 0.0
+        payload = {
+            "target": f"{rel}:{target_symbol}",
+            "context": context_text,
+            # every closure member except the root, sorted; UNRESOLVED
+            # boundaries stay in `unresolved` (reported, never dropped)
+            "dependencies": [node for node in reach.reachable
+                             if node != root_node],
+            "unresolved": list(reach.unresolved),
+            "full_source_bytes": full_bytes,
+            "context_source_bytes": context_bytes,
+            "reduction_ratio": ratio,
+        }
+        return _tool_ok(payload)
+    except ValueError as exc:
+        return _tool_error(str(exc))
+    except Exception as exc:
+        return _tool_error(f"{type(exc).__name__}: {exc}")
+
+
+def _dispatch_context(root: Path) -> tuple[dict[str, Any], ...]:
+    """Classifier context adapter (Phase 4.3 -- registered mismatch):
+    classify_task demands a NON-EMPTY envelope of other executions
+    (empty context is a missing signal, never a vacuous disjoint
+    proof), but a lone MCP dispatch has no in-wave peers. The envelope
+    therefore comes from THIS repo's sealed execution records under
+    .jspace/cache/orchestrator -- real recorded surfaces, sorted by
+    id, never caller-supplied. Absence of records stays UNKNOWN; a
+    record that is unreadable, unsealed or tampered with enters as a
+    None-surface peer so classification fails closed to UNKNOWN."""
+    cache = root / ".jspace" / "cache" / "orchestrator"
+    peers: dict[str, dict[str, Any]] = {}
+    if not cache.is_dir():
+        return ()
+    for path in sorted(cache.glob("*.json")):
+        peer_id = f"record:{path.stem}"
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            payload = None
+        sealed_ok = (
+            isinstance(payload, dict)
+            and isinstance(payload.get("evidence_sha256"), str)
+            and evidence.compute_digest(payload)
+            == payload.get("evidence_sha256"))
+        if not sealed_ok:
+            peers.setdefault(peer_id, {"id": peer_id, "reads": None,
+                                       "writes": None})
+            continue
+        wid = str(payload.get("worker_id") or peer_id)
+        read_set = payload.get("read_set")
+        write_set = payload.get("write_set")
+        declared = payload.get("declared_scope")
+        peers.setdefault(wid, {
+            "id": wid,
+            "reads": list(read_set) if isinstance(read_set, list) else None,
+            "writes": list(write_set) if isinstance(write_set, list) else None,
+            "declared_scope": (list(declared)
+                               if isinstance(declared, list) else []),
+        })
+    return tuple(peers[key] for key in sorted(peers))
+
+
+def _str_list(arguments: dict[str, Any], key: str, *,
+              default: list[str] | None = None
+              ) -> tuple[list[str] | None, str | None]:
+    if key not in arguments or arguments[key] is None:
+        return ([] if default is not None else None), None
+    value = arguments[key]
+    if not isinstance(value, list) or not all(
+            isinstance(entry, str) for entry in value):
+        return None, f"{key} must be a list of strings"
+    return list(value), None
+
+
+def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Validation -> classify -> route -> GovernedScheduler -> result.
+
+    Fail-closed ladder: unknown input fields (including anything that
+    looks like runtime config) are rejected; a classification or
+    routing exception returns a structured error with NOTHING
+    executed; Fast Path requires BOTH env runtime config AND a proven
+    disjoint coherent profile. The router decides the mode only --
+    execution stays owned by GovernedScheduler, evidence stays on the
+    existing _collect contract."""
+    try:
+        unknown = sorted(set(arguments) - {
+            "id", "declared_scope", "reads", "writes", "deps", "cmd",
+            "prompt", "root"})
+        if unknown:
+            return _tool_error("unknown field(s): " + ", ".join(unknown)
+                               + " (runtime configuration is env-only "
+                                 "and cannot be supplied as input)")
+        wid = arguments.get("id")
+        if not isinstance(wid, str) or not wid.strip():
+            return _tool_error("id must be a non-empty string")
+        declared = arguments.get("declared_scope")
+        if not isinstance(declared, list) or not all(
+                isinstance(entry, str) for entry in declared):
+            return _tool_error("declared_scope must be a list of strings")
+        reads, error = _str_list(arguments, "reads")
+        if error:
+            return _tool_error(error)
+        writes, error = _str_list(arguments, "writes")
+        if error:
+            return _tool_error(error)
+        deps, error = _str_list(arguments, "deps", default=[])
+        if error:
+            return _tool_error(error)
+        assert deps is not None
+        cmd = arguments.get("cmd")
+        if not isinstance(cmd, list) or not cmd or not all(
+                isinstance(entry, str) for entry in cmd):
+            return _tool_error("cmd must be a non-empty list of strings")
+        prompt = arguments.get("prompt")
+        if prompt is not None and not isinstance(prompt, str):
+            return _tool_error("prompt must be a string")
+        # prompt is metadata only: never read again, never executed,
+        # never telemetry'd.
+        root_arg = arguments.get("root", ".")
+        if not isinstance(root_arg, str):
+            return _tool_error("root must be a string")
+        root_path = Path(root_arg).expanduser()
+        if not root_path.is_dir():
+            return _tool_error(
+                f"root does not exist or is not a directory: {root_arg}")
+        root = root_path.resolve()
+
+        envelope = _dispatch_context(root)
+        task_payload = {"id": wid, "reads": reads, "writes": writes,
+                        "declared_scope": list(declared), "deps": deps}
+        fast_env = _fast_path_enabled()
+        try:
+            classify_started = perf_counter_ns()
+            classification = classify_task(task_payload, envelope)
+            profile = governance_profile(classification)
+            classification_ms = (perf_counter_ns() - classify_started
+                                 ) / 1e6
+            route_started = perf_counter_ns()
+            decision = route(profile, fast_path_enabled=fast_env)
+            routing_ms = (perf_counter_ns() - route_started) / 1e6
+        except Exception as exc:
+            return _tool_error(
+                f"classification/routing failed (fail-closed, nothing "
+                f"executed): {type(exc).__name__}: {exc}")
+
+        worker: dict[str, Any] = {
+            "id": wid, "deps": deps, "declared_scope": list(declared),
+            "reads": reads, "writes": writes, "cmd": [str(x) for x in cmd]}
+        # single authorization point: the scheduler flag is the ROUTER's
+        # own decision (env AND proven-disjoint-coherent), never raw input
+        sched_fast = decision.mode is RuntimeMode.FAST_PATH
+        scheduler = GovernedScheduler(
+            root, [worker], task_id="mcp-" + os.urandom(6).hex(),
+            fast_path_enabled=sched_fast,
+            classification_context=envelope)
+        evidence_ns: list[int] = []
+        execution_ns: list[int] = []
+        real_collect = scheduler._collect
+        real_execute = scheduler.execute
+
+        def timed_collect(worker_arg: dict[str, Any], path: Path,
+                          rc: int, tail: str,
+                          **kwargs: Any) -> dict[str, Any]:
+            started = perf_counter_ns()
+            try:
+                return real_collect(worker_arg, path, rc, tail, **kwargs)
+            finally:
+                evidence_ns.append(perf_counter_ns() - started)
+
+        def timed_execute(worker_arg: dict[str, Any],
+                          path: Path) -> Any:
+            started = perf_counter_ns()
+            try:
+                return real_execute(worker_arg, path)
+            finally:
+                execution_ns.append(perf_counter_ns() - started)
+
+        scheduler._collect = timed_collect  # type: ignore[assignment]
+        scheduler.execute = timed_execute  # type: ignore[assignment]
+        run_started = perf_counter_ns()
+        try:
+            report = scheduler.run()
+        except Exception as exc:
+            snapshot = json.dumps(
+                {key: entry.get("state")
+                 for key, entry in scheduler.states.items()},
+                sort_keys=True)
+            return _tool_error(
+                f"orchestration aborted: {type(exc).__name__}: {exc}; "
+                f"states={snapshot}")
+        scheduler_ms = (perf_counter_ns() - run_started) / 1e6
+        states: dict[str, Any] = report.get("states") or {}
+        worker_state = (states.get(wid) or {}).get("state")
+        total_ms = (perf_counter_ns() - run_started) / 1e6
+        payload = {
+            "task_id": scheduler.task_id,
+            "state": worker_state,
+            "classification": decision.classification,
+            "reason_code": classification.reason_code,
+            "runtime_mode": decision.mode.value,
+            "routing_reason": decision.reason_code,
+            "fast_path_enabled": fast_env,
+            "routing": report.get("routing"),
+            "evidence": report.get("evidence") or {},
+            "worktrees": report.get("worktrees") or {},
+            "timings": {
+                "classification_ms": round(classification_ms, 3),
+                "routing_ms": round(routing_ms, 3),
+                "context_ms": 0.0,
+                "scheduler_ms": round(scheduler_ms, 3),
+                "execution_ms": round(sum(execution_ns) / 1e6, 3),
+                "evidence_ms": round(sum(evidence_ns) / 1e6, 3),
+                "total_ms": round(total_ms, 3),
+            },
+            # Merge law preserved verbatim: dispatch grants no ship
+            # authority of its own.
+            "authorized_to_ship": False,
+        }
+        return _tool_ok(payload)
+    except ValueError as exc:
+        return _tool_error(str(exc))
+    except Exception as exc:
+        return _tool_error(f"{type(exc).__name__}: {exc}")
+
+
+TOOL_SPECS: list[dict[str, Any]] = [
+    ASHA_PLAN_DAG_SPEC, ASHA_RUN_SPEC_SPEC, ASHA_STATUS_SPEC,
+    ASHA_GET_SURGICAL_CONTEXT_SPEC, ASHA_DISPATCH_TASK_SPEC]
+
+
 TOOL_HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "asha_plan_dag": asha_plan_dag,
     "asha_run_spec": asha_run_spec,
     "asha_status": asha_status,
+    "asha_get_surgical_context": asha_get_surgical_context,
+    "asha_dispatch_task": asha_dispatch_task,
 }
 
 
@@ -695,10 +1233,28 @@ def handle_message(message: dict[str, Any],
                 return _error(request_id, INVALID_PARAMS,
                               "params.arguments must be an object")
             handler = TOOL_HANDLERS.get(name)
+            started = perf_counter_ns()
             if handler is None:
+                # one operational event per invocation, failures too
+                _emit_telemetry(_telemetry_repo(arguments), name,
+                                request_id,
+                                perf_counter_ns() - started,
+                                "unknown_tool", {})
                 return _error(request_id, INVALID_PARAMS,
                               f"unknown tool: {name}")
-            return _result(request_id, handler(arguments))
+            result = handler(arguments)
+            payload: Any = {}
+            if not result.get("isError"):
+                try:
+                    payload = json.loads(result["content"][0]["text"])
+                except (KeyError, IndexError, TypeError, ValueError):
+                    payload = {}
+            _emit_telemetry(
+                _telemetry_repo(arguments), name, request_id,
+                perf_counter_ns() - started,
+                "error" if result.get("isError") else "ok",
+                _safe_metadata(payload))
+            return _result(request_id, result)
         if not has_id:
             return None
         return _error(request_id, METHOD_NOT_FOUND,
