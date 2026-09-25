@@ -29,13 +29,20 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 import time
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any
 
 from . import codegraph
-from .ast_indexer import ImportFact, ModuleIndex, SymbolFacts, index_module
+from .ast_indexer import (
+    ImportFact,
+    ModuleIndex,
+    SymbolFacts,
+    index_module,
+    prime_session_cache,
+)
 from .scoping import _module_name, _repository_py_files
 
 _CACHE_NAMES = ('meta.json', 'files.json', 'modules.json', 'graph.json')
@@ -319,3 +326,41 @@ def load(root: Path, cache_dir: Path) -> CacheLoadResult:
         hash_ms=(t_hash - t0) * 1000.0,
         load_ms=(t_load - t_hash) * 1000.0,
     )
+
+
+def default_cache_dir(root: Path) -> Path:
+    """Env override ``ASHA_GRAPH_CACHE_DIR``, else a temp-dir bucket
+    keyed by the repo path -- keeps the working tree (and the ship
+    gate's clean-tree check) untouched by cache payloads."""
+    env = os.environ.get('ASHA_GRAPH_CACHE_DIR')
+    if env:
+        return Path(env)
+    key = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / 'asha-graph-cache' / key
+
+
+def assemble(root: Path, cache_dir: Path | None = None, *,
+             prime_session: bool = True) -> CacheLoadResult:
+    """Integration wrapper (spec 2.A): disk-cache load PLUS in-process
+    session priming, so the FROZEN governance path
+    (``scoping._index_repository`` -> ``index_module``) reuses the very
+    same ModuleIndex objects instead of re-parsing.
+
+    The wrapper owns ZERO governance authority: it returns sources and
+    a graph; ``scoping.py`` evaluates eligibility from them exactly as
+    from a cold build. Any cache failure already purged and rebuilt
+    inside ``load()`` -- a failed cache can only ever be slower, never
+    differently-decided.
+    """
+    resolved_dir = default_cache_dir(root) if cache_dir is None else cache_dir
+    result = load(root, resolved_dir)
+    if prime_session:
+        texts: dict[str, str] = {}
+        for rel in sorted(_repository_py_files(root)):
+            module = _module_name(rel)
+            if module in result.sources:
+                texts[module] = _read_source(root, rel)
+        prime_session_cache(
+            (module, text, result.sources[module])
+            for module, text in texts.items())
+    return result

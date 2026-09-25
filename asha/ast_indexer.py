@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import ast
 import builtins
+import hashlib
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 _BUILTIN_NAMES = frozenset(vars(builtins))
@@ -643,12 +645,50 @@ def _dynamic_markers(tree: ast.Module) -> list[str]:
     return sorted(set(markers))
 
 
+_SESSION_CACHE: dict[tuple[str, str], ModuleIndex] = {}
+_SESSION_CACHE_LIMIT = 8192
+
+
+def _session_key(module: str, source: str) -> tuple[str, str]:
+    # content-addressed: a stale entry is structurally impossible
+    return (module, hashlib.sha256(source.encode('utf-8')).hexdigest())
+
+
+def _remember(module: str, source: str, index: ModuleIndex) -> None:
+    if len(_SESSION_CACHE) >= _SESSION_CACHE_LIMIT:
+        _SESSION_CACHE.pop(next(iter(_SESSION_CACHE)))  # FIFO eviction
+    _SESSION_CACHE[_session_key(module, source)] = index
+
+
+def prime_session_cache(
+        entries: Iterable[tuple[str, str, ModuleIndex]]) -> None:
+    """Integration layer (Phase 5.1 Step 3): seed the in-process memo
+    with already-constructed indices (disk-cache assemble). Pure
+    memoization of deterministic parses -- zero governance authority:
+    no verdicts, no eligibility, no policy state is stored here."""
+    for module, source, index in entries:
+        _remember(module, source, index)
+
+
+def clear_session_cache() -> None:
+    """Drop the memo (test isolation / explicit cold path)."""
+    _SESSION_CACHE.clear()
+
+
 def index_module(module: str, source: str) -> ModuleIndex:
     """Parse ``source`` and extract deterministic module facts.
+
+    Session memo: an identical (module, source) pair returns the
+    already-built index (frozen dataclass -- sharing is safe) and the
+    content-addressed key makes a stale hit impossible. Misses and
+    failures parse exactly as before.
 
     Raises ValueError on unparseable source (fail-closed API boundary;
     callers treat it as UNKNOWN, never as 'no dependencies').
     """
+    cached = _SESSION_CACHE.get(_session_key(module, source))
+    if cached is not None:
+        return cached
     try:
         tree = ast.parse(source)
     except SyntaxError as exc:
@@ -721,13 +761,15 @@ def index_module(module: str, source: str) -> ModuleIndex:
     unresolved = sorted(set(import_unresolved) | set(_dynamic_markers(tree))
                         | set(analyzer._sink.unresolved))
     ordered = tuple(facts[name] for name in sorted(facts))
-    return ModuleIndex(
+    index = ModuleIndex(
         module=module,
         symbols=ordered,
         imports=tuple(imports),
         module_writes=frozenset(module_bindings),
         unresolved=tuple(unresolved),
     )
+    _remember(module, source, index)
+    return index
 
 
 def _store_names(statement: ast.stmt) -> tuple[str, ...]:
