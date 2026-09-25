@@ -157,7 +157,9 @@ def _run_sealed(root: Path, affected: list[str], classification: Any
                 ) -> dict[str, Any]:
     """Canonical execution of the validation path through the EXISTING
     orchestrator (worktree isolation, sealed evidence, authoritative
-    record) -- identical to a client dispatch; no dogfood-only path."""
+    record) -- identical to a client dispatch; no phase-specific or
+    invocation-specific execution path exists anywhere in this
+    module."""
     envelope = _dispatch_context(root)
     routed = route(governance_profile(classification),
                    fast_path_enabled=_fast_path_enabled())
