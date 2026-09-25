@@ -13,5 +13,6 @@ __pycache__/
 .jspace/cache/
 .jspace/lock
 .jspace/mcp_live_telemetry.jsonl
+.jspace/dogfood_probe_*
 *.tmp
 benchmarks/results/
