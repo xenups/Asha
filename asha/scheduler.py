@@ -25,6 +25,7 @@ from . import (
     evidence,
     graph_state,
     scope_resolver,
+    scoping,
     worker_graph,
 )
 from .classifier import classify_task, governance_profile
@@ -373,6 +374,62 @@ class GovernedScheduler:
                 return evidence.IndependenceClassification.PROVEN_SHARED
         return evidence.IndependenceClassification.PROVEN_DISJOINT
 
+    # -- Phase 5.0 scoped validation ---------------------------------------
+    def _scoping_decision(
+            self,
+            root: Path,
+            resolved: dict[str, Any],
+            classification: evidence.IndependenceClassification,
+    ) -> scoping.ScopingDecision:
+        """Fail-closed boundary between classification and validation depth.
+
+        The Eligibility Engine (``asha.scoping``) is the SOLE authority
+        that may select SCOPED; this wrapper only (a) adapts scheduler
+        inputs to the engine's API and (b) structurally rejects missing,
+        forged or contradictory decisions (``INVALID_DECISION``). Any
+        exception collapses to COMPLETE -- the COMPLETE ``check_runner.run``
+        path below is never reached with an unverified decision.
+        ``envelope_valid=True``: the classification is derived in-process
+        from validate_workers-validated specs plus the graph's own
+        uncertainty verdict; dispatch-layer envelopes were digest-verified
+        at dispatch (Phase 4.3).
+        """
+        level = resolved.get('scope')
+        try:
+            decision = scoping.assess_scoping_eligibility(
+                root,
+                list(resolved.get('affected_files') or []),
+                getattr(classification, 'value', str(classification)),
+                str(level) if level is not None else '',
+                scope_status=str(resolved.get('status') or ''),
+                envelope_valid=True,
+            )
+            if not isinstance(decision, scoping.ScopingDecision):
+                raise TypeError(
+                    f'unexpected decision type {type(decision).__name__}')
+            if decision.mode == scoping.SCOPED and not decision.eligible:
+                raise ValueError('forged: SCOPED mode without eligibility')
+            if decision.eligible and decision.mode != scoping.SCOPED:
+                raise ValueError('forged: eligible with non-SCOPED mode')
+            if decision.eligible and decision.fallback_reason:
+                raise ValueError('forged: eligible with fallback_reason')
+            if decision.eligible and not isinstance(decision.mypy_targets, tuple):
+                raise ValueError('forged: mypy_targets must be a tuple')
+        except ValueError as exc:
+            if str(exc).startswith('forged:'):
+                return scoping.complete_decision(
+                    scoping.F_INVALID_DECISION, str(exc))
+            return scoping.complete_decision(
+                scoping.F_GRAPH_FAILURE, f'{type(exc).__name__}: {exc}'[:200])
+        except TypeError as exc:
+            return scoping.complete_decision(
+                scoping.F_INVALID_DECISION, f'{type(exc).__name__}: {exc}'[:200])
+        except Exception as exc:
+            return scoping.complete_decision(
+                scoping.F_ELIGIBILITY_EXCEPTION,
+                f'{type(exc).__name__}: {exc}'[:200])
+        return decision
+
     # -- Phase 4.2 fast-path routing ---------------------------------------
     @staticmethod
     def _task_payload(worker: dict[str, Any]) -> dict[str, Any]:
@@ -477,7 +534,21 @@ class GovernedScheduler:
                         'evidence': None}
             resolved = scope_resolver.resolve(
                 path, base=effective_base, paths=observed)
-            checks = check_runner.run(path, resolved)
+            # Phase 5.0: pure functions of `resolved`, computed BEFORE
+            # checks so validation depth can follow an affirmative
+            # Eligibility Engine decision; classification semantics are
+            # unchanged (same call, same inputs, same order of operands).
+            classification = self._classify_independence(str(wid), resolved)
+            decision = self._scoping_decision(path, resolved, classification)
+            if decision.eligible:
+                checks = check_runner.run_scoped(
+                    path,
+                    changed_files=list(resolved['affected_files']),
+                    targeted_tests=list(decision.targeted_tests),
+                    mypy_targets=list(decision.mypy_targets),
+                )
+            else:
+                checks = check_runner.run(path, resolved)
             failed = [entry['name'] for entry in checks
                       if entry['status'] == 'failed']
             if failed:
@@ -512,6 +583,16 @@ class GovernedScheduler:
                 'diff': diff,
                 'exit_status': rc,
             }
+            # Phase 5.0 scoping metadata: confined to the Worker Evidence
+            # Envelope, covered by the existing seal; the Phase 3
+            # AuthoritativeEvidence contract is untouched.
+            payload['validation_mode'] = decision.mode
+            if decision.eligible:
+                payload['targeted_tests'] = list(decision.targeted_tests)
+                payload['mypy_targets'] = list(decision.mypy_targets)
+                payload['omission_rationale'] = ';'.join(decision.rationale)
+            else:
+                payload['fallback_reason'] = decision.fallback_reason
             if tail:
                 payload['output_tail'] = tail[-TAIL_CHARS:]
             sealed = evidence.seal(payload)
@@ -523,8 +604,6 @@ class GovernedScheduler:
             # Phase 3.1 fast path: in-memory milestones -> authoritative
             # derivation through the ledger (3.3). Ledger events never
             # reach the canonical wire format; nothing new hits disk.
-            classification = self._classify_independence(
-                str(wid), resolved)
             policy = evidence.resolve_evidence_policy(classification)
             self.evidence_policy[str(wid)] = policy.value
             ledger = evidence.ExecutionLedger(
