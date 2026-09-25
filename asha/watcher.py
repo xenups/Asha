@@ -285,8 +285,12 @@ def _tty_key() -> str | None:
     try:
         if os.name == 'nt':
             import msvcrt
-            if msvcrt.kbhit():
-                return msvcrt.getwch()
+            # getattr keeps mypy clean on non-Windows platforms where
+            # the msvcrt stubs expose no attributes
+            kbhit = getattr(msvcrt, 'kbhit', None)
+            getwch = getattr(msvcrt, 'getwch', None)
+            if kbhit is not None and getwch is not None and kbhit():
+                return str(getwch())
         else:
             import select
             if select.select([sys.stdin], [], [], 0)[0]:
