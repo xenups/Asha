@@ -16,6 +16,7 @@ from asha.codegraph import (
     BOUNDARY_EXTERNAL,
     BOUNDARY_LOCAL,
     BOUNDARY_PROJECT,
+    BOUNDARY_UNRESOLVED,
     build_graph,
     closure,
     component_dag,
@@ -207,6 +208,176 @@ def test_deterministic_output_ordering() -> None:
     assert closure(graph, (sym_node('pkg.a', 'start'),),
                    'pkg.a') == closure(
         graph, (sym_node('pkg.a', 'start'),), 'pkg.a')
+
+
+def test_bare_local_cascade_and_negative_unbound_lock() -> None:
+    """Phase 5.1 repair A: a provable local binding (mutation base of
+    `self`) stays inside its symbol as a LOCAL self-edge; the hard
+    safety lock keeps an unbound name UNRESOLVED."""
+    source = (
+        'class Box:\n'
+        '    def poke(self):\n'
+        '        self.count = 1\n'
+        'def missing():\n'
+        '    return genuinely_missing_symbol\n'
+    )
+    graph = build_graph((index_module('tool.box', source),))
+    assert 'unk:self' not in graph.nodes
+    poke = sym_node('tool.box', 'Box.poke')
+    assert poke in {edge.target for edge in graph.edges_from(poke)}
+    # negative lock: unbound name must remain unk:* with UNRESOLVED
+    assert 'unk:genuinely_missing_symbol' in graph.nodes
+    assert graph.boundary_of('unk:genuinely_missing_symbol') == \
+        BOUNDARY_UNRESOLVED
+
+
+def test_negative_unbound_forces_complete_fallback(tmp_path) -> None:
+    """The unk:* node an unbound name mints must trigger the engine's
+    fail-closed fallback to COMPLETE (no SCOPED dispatch)."""
+    (tmp_path / 'shadow_mod.py').write_text(
+        'def _hidden():\n    return genuinely_missing_symbol\n',
+        encoding='utf-8')
+    from asha import scoping
+    decision = scoping.assess_scoping_eligibility(
+        tmp_path, ['shadow_mod.py'], 'PROVEN_DISJOINT', 'S1')
+    assert decision.eligible is False
+    assert decision.fallback_reason == scoping.F_UNRESOLVED_BOUNDARY
+
+
+def test_relative_import_depth_matrix() -> None:
+    """Exhaustive depth matrix (spec 2.C):
+    package/__init__.py -> '.'; package/a.py -> '.b';
+    package/sub/__init__.py -> '..'; package/sub/b.py -> '..a' and
+    '.c'; package/sub/deep/c.py -> '...a'; excess depth stays poison.
+    """
+    indices = (
+        index_module('package', 'from . import a\n'
+                                'from .a import thing\n'),
+        index_module('package.a', 'from .b import bee\n'
+                                  'def thing():\n    return 1\n'
+                                  'def other():\n    return 2\n'),
+        index_module('package.b', 'def bee():\n    return 1\n'),
+        index_module('package.sub', 'from ..a import thing\n'),
+        index_module('package.sub.b', 'from ..a import other\n'
+                                      'from .c import see\n'),
+        index_module('package.sub.c', 'def see():\n    return 2\n'),
+        index_module('package.sub.deep.c', 'from ...b import bee\n'
+                                           'from ....b import bee2\n'),
+    )
+    graph = build_graph(indices)
+
+    def imported(source: str) -> set[str]:
+        return {edge.target for edge in graph.edges_from(source)
+                if edge.kind == 'import'}
+
+    assert sym_node('package.a', 'thing') in imported('mod:package')
+    assert 'mod:package' in imported('mod:package')  # `from . import a`
+    assert sym_node('package.b', 'bee') in imported('mod:package.a')
+    assert sym_node('package.a', 'thing') in imported('mod:package.sub')
+    assert sym_node('package.a', 'other') in imported('mod:package.sub.b')
+    assert sym_node('package.sub.c', 'see') in imported(
+        'mod:package.sub.b')
+    assert sym_node('package.b', 'bee') in imported(
+        'mod:package.sub.deep.c')
+    # excess depth (beyond the top package) stays fail-closed poison
+    assert 'unk:b' in imported('mod:package.sub.deep.c')
+    assert graph.boundary_of('unk:b') == BOUNDARY_UNRESOLVED
+
+
+def test_module_namespace_dunders_and_package_path() -> None:
+    """Phase 5.1 repair B: interpreter-owned dunders resolve to the
+    module node; __path__ is package-only (hard lock: a non-package
+    module must NOT get it)."""
+    indices = (
+        index_module('pkg',
+                     'def load():\n'
+                     '    return (__name__, __file__, __doc__,\n'
+                     '            __package__, __loader__, __spec__,\n'
+                     '            __annotations__, __builtins__,\n'
+                     '            __path__)\n'),
+        index_module('pkg.leaf',
+                     'def poke():\n'
+                     '    return __file__, __path__\n'),
+    )
+    graph = build_graph(indices)
+    # package (has child pkg.leaf): all nine resolve to the module node
+    assert {edge.target for edge in
+            graph.edges_from(sym_node('pkg', 'load'))} == {'mod:pkg'}
+    leaf_targets = {edge.target for edge in
+                    graph.edges_from(sym_node('pkg.leaf', 'poke'))}
+    assert 'mod:pkg.leaf' in leaf_targets
+    assert 'unk:__file__' not in graph.nodes
+    # hard lock: ordinary module has NO __path__
+    assert 'unk:__path__' in leaf_targets
+    assert graph.boundary_of('unk:__path__') == BOUNDARY_UNRESOLVED
+
+
+def test_star_and_dynamic_markers_preserved() -> None:
+    """All star/dynamic markers survive the repairs untouched and keep
+    minting UNRESOLVED boundary nodes (poison enforcement)."""
+    source = (
+        'from outside.lib import *\n'
+        'import importlib\n'
+        'mod = importlib.import_module("dyn.mod")\n'
+        'def go():\n'
+        '    return mod\n'
+    )
+    graph = build_graph((index_module('pkg.star', source),))
+    assert any(node.startswith('unk:star') for node in graph.nodes)
+    assert any(node.startswith('unk:dynamic_import')
+               for node in graph.nodes)
+    for node in graph.nodes:
+        if node.startswith(('unk:star', 'unk:dynamic_import')):
+            assert graph.boundary_of(node) == BOUNDARY_UNRESOLVED
+
+
+def test_edge_monotonicity_preserves_valid_edges() -> None:
+    """Edge monotonicity (spec 2.B): every class of internal edge that
+    resolved BEFORE the repairs still resolves after -- module-level
+    relative imports (the old parent-anchor formula was already
+    correct for module consumers) and absolute imports are untouched."""
+    consumer = ('from .utils import helper\n'
+                'def serve():\n'
+                '    return helper()\n')
+    graph = build_graph((index_module('app.service', consumer),
+                         index_module('app.utils',
+                                      'def helper():\n    return 1\n')))
+    assert sym_node('app.utils', 'helper') in {
+        edge.target for edge in
+        graph.edges_from(sym_node('app.service', 'serve'))}
+    # absolute imports are never rebased
+    absolute = build_graph(
+        (index_module('app.abs', 'from other.pkg import tool\n'),))
+    assert 'ext:other.pkg.tool' in {edge.target for edge in
+                                     absolute.edges_from('mod:app.abs')}
+
+
+def test_nested_helper_and_class_resolve_as_local() -> None:
+    source = (
+        'def runner():\n'
+        '    def helper():\n'
+        '        return 1\n'
+        '    class Inner:\n'
+        '        pass\n'
+        '    return helper(), Inner\n'
+    )
+    graph = build_graph((index_module('app.run', source),))
+    assert 'unk:helper' not in graph.nodes
+    assert 'unk:Inner' not in graph.nodes
+    # PEP 227: a load before the def still has a binding somewhere in
+    # the scope (the nested def) -- classified LOCAL, not UNRESOLVED
+    forward = (
+        'def fwd():\n'
+        '    return early\n'
+        '    def early():\n'
+        '        return 2\n'
+    )
+    graph2 = build_graph((index_module('app.fwd', forward),))
+    assert 'unk:early' not in graph2.nodes
+    # a name with NO binding anywhere must remain UNRESOLVED (lock)
+    missing = 'def miss():\n    return nowhere_defined\n'
+    graph3 = build_graph((index_module('app.miss', missing),))
+    assert 'unk:nowhere_defined' in graph3.nodes
 
 
 def test_hermeticity_static_scan() -> None:

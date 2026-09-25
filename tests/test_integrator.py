@@ -158,7 +158,12 @@ def test_integration_failure_rolls_back_completely(tmp_path: Path,
     # the cherry-pick itself never conflicts: only the INTEGRATION gate
     # can catch it, which is exactly the golden invariant.
     marker_test = (
+        # blank lines after the import keep the SCOPED-path ruff gate
+        # green (I001): Repair B unpoisoned this worker's own file, so
+        # it now legitimately takes the targeted-verification path.
         "from pathlib import Path\n"
+        "\n"
+        "\n"
         "def test_marker_absent():\n"
         "    assert not (Path(__file__).parent / 'b_marker.txt').exists()\n"
     )

@@ -101,24 +101,31 @@ def build_graph(indices: tuple[ModuleIndex, ...]) -> CodeGraph:
             boundaries[node] = boundary
 
     def resolve(name: str, index: ModuleIndex) -> tuple[str, str]:
-        """(node, boundary) for a bare name reference."""
+        """(node, boundary) for a bare name reference.
+
+        Phase 5.1 cascade: local binding is settled by the caller
+        (resolve_name), then module namespace -> module symbol ->
+        imported symbol -> builtin -> UNRESOLVED.
+        """
+        # Repair B: interpreter-owned module namespace symbols resolve
+        # to the MODULE node itself, context-sensitively. __path__
+        # exists only on packages -- a non-package module must NOT
+        # resolve it (hard lock: it stays UNRESOLVED below).
+        if name in _MODULE_DUNDERS or (
+                name == '__path__'
+                and _is_package(index.module, provided)):
+            return f'mod:{index.module}', BOUNDARY_LOCAL
         if index.symbol(name) is not None:
             node = sym_node(index.module, name)
             return node, BOUNDARY_LOCAL
         alias = index.alias_table().get(name)
         if alias is not None:
-            module, original = alias
-            if module in provided:
-                if original:
-                    target_index = _find(indices, module)
-                    if target_index is not None and \
-                            target_index.symbol(original) is not None:
-                        return (sym_node(module, original),
-                                BOUNDARY_PROJECT)
-                    return f'mod:{module}', BOUNDARY_PROJECT
-                return f'mod:{module}', BOUNDARY_PROJECT
-            dotted = f'{module}.{original}' if original else module
-            return f'ext:{dotted}', BOUNDARY_EXTERNAL
+            # Repair C: relative bindings travel with their level and
+            # canonicalise through the SAME import-target path as
+            # import edges (level-0 behaviour byte-identical).
+            module_name, original, level = alias
+            return resolve_import_target(module_name, original, level,
+                                         index.module)
         if is_builtin(name):
             return f'builtin:{name}', BOUNDARY_EXTERNAL
         return f'unk:{name}', BOUNDARY_UNRESOLVED
@@ -127,7 +134,8 @@ def build_graph(indices: tuple[ModuleIndex, ...]) -> CodeGraph:
                               level: int, consumer: str
                               ) -> tuple[str, str]:
         if level > 0:
-            resolved_module = _relative(consumer, module, level)
+            resolved_module = _relative(consumer, module, level,
+                                        provided)
         else:
             resolved_module = module
         if not resolved_module:
@@ -207,6 +215,39 @@ def _symbol_edges(
             if root in fact.local_names:
                 return source, BOUNDARY_LOCAL
             return resolver(root, index)  # type: ignore[operator]
+        # Repair A: strict lexical cascade -- a BARE name with a
+        # provable local binding stays inside this symbol (local
+        # self-edge). No blanket fallback: unbound names fall
+        # through to resolve() and become unk:* (negative lock).
+        # The reads guard preserves ORDER: a name also loaded before
+        # its first binding is a forward reference -- a real
+        # NameError at runtime -- and must stay UNRESOLVED.
+        if name in fact.local_names and name not in fact.reads:
+            return source, BOUNDARY_LOCAL
+        if name in fact.local_names and name in fact.reads:
+            # Binding exists but the read sits in a forward position in
+            # the fact's own set (walk-order artifact): if a DESCENDANT
+            # fact of this qualified name also reads it, the read was
+            # merged from a nested definition -- PEP 227 makes the
+            # binding exist by call time, so it stays LOCAL. Without a
+            # reading descendant there is no such definition and the
+            # position stays a genuine forward reference, which falls
+            # through to resolve() as UNRESOLVED.
+            for other in index.symbols:
+                if (other.name.startswith(fact.name + '.')
+                        and name in other.reads):
+                    return source, BOUNDARY_LOCAL
+        # Closure: a name bound by a nested def/class in an ENCLOSING
+        # symbol of this fact (fact names are qualified paths, so walk
+        # the ancestors). Walk order may have recorded the read before
+        # the ancestor's later def -- at call time the closure is
+        # bound, so edge the reference to the ANCESTOR symbol.
+        ancestor = fact.name
+        while '.' in ancestor:
+            ancestor = ancestor.rpartition('.')[0]
+            parent = index.symbol(ancestor)
+            if parent is not None and name in parent.local_names:
+                return f'sym:{index.module}:{ancestor}', BOUNDARY_LOCAL
         return resolver(name, index)  # type: ignore[operator]
 
     def link(target: str, boundary: str, kind: str) -> None:
@@ -241,13 +282,44 @@ def _find(indices: tuple[ModuleIndex, ...],
     return None
 
 
-def _relative(consumer_module: str, target: str, level: int) -> str:
-    parts = consumer_module.split('.')[:-1]
-    if level > len(parts):
+_MODULE_DUNDERS = frozenset({
+    '__name__', '__file__', '__doc__', '__package__', '__loader__',
+    '__spec__', '__annotations__', '__builtins__',
+})
+
+
+def _is_package(module: str, provided: set[str]) -> bool:
+    """Package-ness is knowable from the provided index: a package is
+    a module whose children (submodules) were indexed alongside it.
+    Conservative direction: a childless __init__ is treated as a plain
+    module, so __path__ can only be UNDER-attributed, never wrong."""
+    return any(other.startswith(module + '.')
+               for other in provided)
+
+
+def _relative(consumer_module: str, target: str, level: int,
+              provided: set[str]) -> str:
+    """Python relative-import semantics (Phase 5.1 repair C).
+
+    Each dot anchors at the PACKAGE containing the import: the package
+    itself when the consumer IS a package (its __init__), otherwise the
+    consumer's parent package. The old parent-only formula returned ''
+    for every relative import written inside a top-level package
+    __init__, minting UNRESOLVED nodes. Excess depth (beyond the top
+    package) resolves to '' so the caller poisons the edge fail-closed
+    instead of guessing.
+    """
+    parts = consumer_module.split('.')
+    anchor = parts if _is_package(consumer_module, provided) \
+        else parts[:-1]
+    up = level - 1
+    if up > len(anchor):
         return ''
-    base = parts[:len(parts) - level + 1] if level else parts
+    base = anchor[:len(anchor) - up]
+    if not base:
+        return ''
     if target:
-        return '.'.join([*base, target]) if base else target
+        return '.'.join([*base, target])
     return '.'.join(base)
 
 

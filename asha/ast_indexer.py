@@ -74,20 +74,28 @@ class ModuleIndex:
                 return fact
         return None
 
-    def alias_table(self) -> dict[str, tuple[str, str]]:
-        """bound alias -> (module, original-or-'') for import bindings."""
-        table: dict[str, tuple[str, str]] = {}
+    def alias_table(self) -> dict[str, tuple[str, str, int]]:
+        """bound alias -> (module, original-or-'', relative-level).
+
+        Relative (level>0) from-imports are attributed TOO: the level
+        travels with the binding and codegraph canonicalises the module
+        path through the same import-target path as import edges
+        (Phase 5.1 repair C -- the old level==0 filter was an
+        artificial attribution gap that minted UNRESOLVED nodes).
+        """
+        table: dict[str, tuple[str, str, int]] = {}
         for fact in self.imports:
             if fact.kind == 'import':
                 for original, alias in fact.names:
                     if alias:
-                        table[alias] = (original, '')
+                        table[alias] = (original, '', 0)
                     else:
                         top = original.split('.')[0]
-                        table[top] = (top, '')
-            elif fact.kind == 'from' and fact.level == 0:
+                        table[top] = (top, '', 0)
+            elif fact.kind == 'from':
                 for original, alias in fact.names:
-                    table[alias or original] = (fact.module, original)
+                    table[alias or original] = (
+                        fact.module, original, fact.level)
         return table
 
 
@@ -206,8 +214,18 @@ class _Analyzer:
 
     def visit_Nonlocal(self, node: ast.Nonlocal) -> None:
         for name in node.names:
-            self._sink.reads.add(name)
+            # a nonlocal declaration binds the name LOCALLY (enclosing
+            # function scope) -- never a module-level reference.
+            self._bind(name)
             self._sink.writes.add(name)
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+        # `except E as exc:` binds in the ENCLOSING scope for the
+        # handler body -- provable lexical binding (Phase 5.1 repair A).
+        if node.name:
+            self._bind(node.name)
+        for child in ast.iter_child_nodes(node):
+            self.visit(child)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         path = _dotted(node)
@@ -396,6 +414,13 @@ class _Analyzer:
         if args.kwarg:
             self._annotation(args.kwarg.annotation)
         self._annotation(node.returns)
+        if len(self._scopes) > 1:
+            # PEP 227: a nested `def` name binds in the ENCLOSING local
+            # scope when the def statement executes (after decorators /
+            # defaults / annotations above). Module-level defs are left
+            # to module symbols. Loads before this point stay reads --
+            # they are genuine forward-reference NameErrors.
+            self._bind(node.name)
 
         # body in its own frame (class frames already dropped on entry)
         outer_sink, outer_scopes, outer_path, outer_kinds = (
@@ -468,6 +493,12 @@ class _Analyzer:
         self._path_kinds = [*outer_kinds, 'class']
         for statement in node.body:
             self.visit(statement)
+        if len(outer_scopes) > 1:
+            # PEP 227: a nested `class` name binds in the ENCLOSING local
+            # scope AFTER the class body executes -- in-body self-references
+            # remain reads (they are real NameErrors at runtime).
+            outer_scopes[-1].bound.add(node.name)
+            outer_sink.local_names.add(node.name)
         child_sink = self._sink
         child_facts = dict(self._facts)
         # class fact = outer context (decorators/bases) UNION class-body

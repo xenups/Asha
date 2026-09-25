@@ -117,9 +117,9 @@ def test_import_facts_aliases_and_type_checking() -> None:
     assert ('import', 'collections.abc') in kinds
     assert ('from', 'dataclasses') in kinds
     alias = index.alias_table()
-    assert alias['ca'] == ('collections.abc', '')
-    assert alias['dataclass'] == ('dataclasses', 'dataclass')
-    assert alias['field'] == ('dataclasses', 'field')
+    assert alias['ca'] == ('collections.abc', '', 0)
+    assert alias['dataclass'] == ('dataclasses', 'dataclass', 0)
+    assert alias['field'] == ('dataclasses', 'field', 0)
     # TYPE_CHECKING-guarded import is flagged, never dropped
     guarded = [fact for fact in index.imports
                if fact.module == 'shop.types']
@@ -267,6 +267,110 @@ def test_attributes_recorded_dotted() -> None:
     walk = _index(source).symbol('T.walk')
     assert walk is not None
     assert 'self.user.profile.id' in walk.attributes
+
+
+def test_alias_table_carries_relative_level() -> None:
+    """Phase 5.1 repair C: level>0 from-imports are attributed too --
+    the binding carries its relative level for codegraph canonicalising
+    (the old level==0 filter minted UNRESOLVED nodes)."""
+    source = (
+        'from .sibling import thing\n'
+        'from ..pkg.deep import other as o\n'
+        'def use():\n'
+        '    return thing, o\n'
+    )
+    alias = _index(source).alias_table()
+    assert alias['thing'] == ('sibling', 'thing', 1)
+    assert alias['o'] == ('pkg.deep', 'other', 2)
+
+
+def test_except_handler_target_is_lexical_binding() -> None:
+    """Phase 5.1 repair A form #6: `except E as exc:` binds in the
+    enclosing scope -- never a free module-level reference."""
+    source = (
+        'def guard():\n'
+        '    try:\n'
+        '        run()\n'
+        '    except OSError as exc:\n'
+        '        handle(exc)\n'
+    )
+    fact = _index(source).symbol('guard')
+    assert fact is not None
+    assert 'exc' in fact.local_names
+    assert 'exc' not in fact.reads
+    assert 'OSError' in fact.reads  # still a module-level reference
+
+
+def test_binding_cascade_forms_are_local() -> None:
+    """Every cascade form from the spec: parameters (positional-only,
+    keyword-only, *args, **kwargs), assignment targets, walrus, loop,
+    context manager, comprehension -- all LOCAL, none free reads."""
+    source = (
+        'def outer(alpha, /, beta, *args, gamma, **kwargs):\n'
+        '    assigned = 1\n'
+        '    announced: int = 2\n'
+        '    assigned += 1\n'
+        '    if (walrus := 3) > 0:\n'
+        '        use(walrus)\n'
+        '    for each in range(2):\n'
+        '        use(each)\n'
+        '    with managed_context() as managed:\n'
+        '        use(managed)\n'
+        '    items = [item for item in generated]\n'
+        '    return (alpha, beta, args, gamma, kwargs, assigned,\n'
+        '            announced, items)\n'
+    )
+    fact = _index(source).symbol('outer')
+    assert fact is not None
+    locals_ = fact.local_names
+    for bound in ('alpha', 'beta', 'args', 'gamma', 'kwargs',
+                  'assigned', 'announced', 'walrus', 'each',
+                  'managed', 'item', 'items'):
+        assert bound in locals_, bound
+        assert bound not in fact.reads, bound
+    # unbound names still surface as free reads (no blanket fallback)
+    assert 'managed_context' in fact.reads
+    assert 'generated' in fact.reads
+
+
+def test_negative_unbound_name_stays_in_reads() -> None:
+    """Hard safety lock: an unbound name inside a function is NOT
+    swallowed into a synthetic local -- it stays a free read that the
+    graph will poison as UNRESOLVED."""
+    fact = _index('def f():\n    return genuinely_missing_symbol\n'
+                  ).symbol('f')
+    assert fact is not None
+    assert 'genuinely_missing_symbol' in fact.reads
+    assert 'genuinely_missing_symbol' not in fact.local_names
+
+
+def test_nested_definition_binds_in_enclosing_scope() -> None:
+    # PEP 227: a nested def/class name binds in the ENCLOSING local
+    # scope; a load BEFORE the def is a genuine forward reference
+    # (runtime NameError) and must stay a read.
+    source = (
+        'def outer():\n'
+        '    def helper():\n'
+        '        return helper_inner()\n'
+        '    def helper_inner():\n'
+        '        return 1\n'
+        '    class Local:\n'
+        '        pass\n'
+        '    return helper(), Local\n'
+        'def forward_ref():\n'
+        '    return early\n'
+        '    def early():\n'
+        '        return 2\n'
+    )
+    index = _index(source)
+    fact = index.symbol('outer')
+    assert fact is not None
+    assert 'helper' in fact.local_names and 'helper' not in fact.reads
+    assert 'helper_inner' in fact.local_names
+    assert 'Local' in fact.local_names and 'Local' not in fact.reads
+    fwd = index.symbol('forward_ref')
+    assert fwd is not None
+    assert 'early' in fwd.reads  # load precedes the def -- stays a read
 
 
 def test_hermeticity_static_scan() -> None:
