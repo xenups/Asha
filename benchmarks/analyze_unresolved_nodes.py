@@ -430,8 +430,6 @@ THREE_QUESTIONS = {
 
 def main() -> int:
     result = analyze()
-    global analysis_records
-    analysis_records = result['records']
     counts = result['counts']
     observed = result['observed']
 

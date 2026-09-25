@@ -21,15 +21,19 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from asha import codegraph, context_slicer, scoping
 from asha.ast_indexer import ModuleIndex
+
+if TYPE_CHECKING:
+    import tiktoken
 
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS = ROOT / 'benchmarks' / 'results'
 
 
-def _detect_tokenizer() -> tuple[bool, str, object | None]:
+def _detect_tokenizer() -> tuple[bool, str, tiktoken.Encoding | None]:
     """REAL tokenizer only. Any failure -> UNAVAILABLE (no substitutes)."""
     try:
         import tiktoken
@@ -76,7 +80,7 @@ def main() -> int:
         ('interface change', 'asha/ast_indexer.py', 'index_module'),
     ]
 
-    rows = []
+    rows: list[dict[str, object]] = []
     for label, rel, symbol in named:
         module = module_of_rel[rel]
         if not symbol:
@@ -109,7 +113,7 @@ def main() -> int:
             })
         rows.append(row)
 
-    payload = {
+    payload: dict[str, object] = {
         'tokenizer_status': tokenizer_status,
         'raw_context_bytes': raw_bytes,
         'workloads': rows,
