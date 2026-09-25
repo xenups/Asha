@@ -42,7 +42,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import scope_resolver, scoping
+from . import git_context, scope_resolver, scoping
 from .classifier import classify_task, governance_profile
 from .mcp_server import _dispatch_context, _fast_path_enabled
 from .replay import parse_evidence, verify_bytes, verify_record
@@ -99,15 +99,14 @@ def _repository(root: Path) -> str:
 
 
 def _require_git_root(root: Path) -> Path:
-    if not root.is_dir():
-        raise CliError('REPOSITORY_ERROR', f'root is not a directory: {root}')
-    toplevel = _git(root, 'rev-parse', '--show-toplevel')
-    if not toplevel:
-        raise CliError('REPOSITORY_ERROR', 'not a git repository')
-    return Path(toplevel).resolve()
+    try:
+        return git_context.discover_root(root)
+    except git_context.GitContextError as exc:
+        raise CliError(exc.code, exc.message) from None
 
 
-def _change_set(root: Path, resolved: dict[str, Any]) -> dict[str, Any]:
+def _change_set(root: Path, resolved: dict[str, Any],
+                snap: git_context.WorkingState) -> dict[str, Any]:
     base_ref = str(resolved.get('base') or '')
     base_sha: str | None = None
     if base_ref:
@@ -116,10 +115,12 @@ def _change_set(root: Path, resolved: dict[str, Any]) -> dict[str, Any]:
         except CliError:
             base_sha = None     # unknown base is explicit null, not fatal
     head_sha = _git(root, 'rev-parse', 'HEAD')
-    porcelain = _git(root, 'status', '--porcelain')
-    uncommitted = len([line for line in porcelain.splitlines() if line.strip()])
+    # one coherent snapshot read (not a fresh status call): count and
+    # per-path states both come from the same git status --porcelain -z
     return {'base': base_ref or None, 'base_sha': base_sha,
-            'target_sha': head_sha, 'uncommitted_files': uncommitted}
+            'target_sha': head_sha,
+            'uncommitted_files': len(snap.states),
+            **snap.as_change_set_detail()}
 
 
 def evaluate(root: Path, paths: list[str] | None
@@ -236,11 +237,12 @@ def execute(root: Path, resolved: dict[str, Any],
     return _run_sealed(root, affected, classification)
 
 
-def _payload_base(root: Path, resolved: dict[str, Any]) -> dict[str, Any]:
+def _payload_base(root: Path, resolved: dict[str, Any],
+                  snap: git_context.WorkingState) -> dict[str, Any]:
     return {
         'schema_version': SCHEMA_VERSION,
         'repository': _repository(root),
-        'change_set': _change_set(root, resolved),
+        'change_set': _change_set(root, resolved, snap),
         'changed_files': list(resolved.get('affected_files') or []),
         'decision': None,
         'eligible': None,
@@ -256,17 +258,33 @@ def _payload_base(root: Path, resolved: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def render_human(payload: dict[str, Any]) -> str:
+def render_human(payload: dict[str, Any], *, color: bool = False) -> str:
     if payload.get('status') == 'NO_CHANGES':
         return 'Asha\nNo changes detected.\n'
+
+    def tint(text: str, code: str) -> str:
+        # ANSI only when explicitly enabled (TTY, no --no-color, no
+        # NO_COLOR env); captured/piped output stays byte-clean
+        return f'\033[{code}m{text}\033[0m' if color else text
+
+    decision = str(payload['decision'])
+    validation = str(payload.get('validation_result') or '')
     lines = ['Asha', _SEP,
-             f"Changes       {len(payload['changed_files'])} files",
-             f"Decision      {payload['decision']}"]
+             f"Changes       {len(payload['changed_files'])} files"]
+    # detected files with their per-path working-state facts
+    states = ((payload.get('change_set') or {}) or {}).get('states') or {}
+    for path in payload['changed_files']:
+        tags = states.get(path) or []
+        lines.append(f"  [{','.join(tags) if tags else 'worktree'}] {path}")
+    decision_tinted = tint(decision, '36' if decision == 'SCOPED'
+                           else '33' if decision == 'COMPLETE' else '0')
+    lines.append(f"Decision      {decision_tinted}")
     if payload.get('fallback_reason'):
         lines.append(f"Reason        {payload['fallback_reason']}")
     lines.append(f"Execution     {payload['execution_mode']}")
     if payload.get('validation_result'):
-        lines.append(f"Validation    {payload['validation_result']}")
+        tinted = tint(validation, '32' if validation == 'PASS' else '31')
+        lines.append(f"Validation    {tinted}")
     if payload.get('evidence_id'):
         lines.append(f"Evidence      {payload['evidence_id'][:12]}")
     lines.append(f"Duration      {payload['duration_ms'] / 1000.0:.2f}s")
@@ -274,14 +292,14 @@ def render_human(payload: dict[str, Any]) -> str:
 
 
 def _emit(payload: dict[str, Any], as_json: bool,
-          stream: Any = None) -> None:
+          stream: Any = None, *, color: bool = False) -> None:
     # resolve the stream at call time so capture layers see the output
     stream = sys.stdout if stream is None else stream
     if as_json:
         stream.write(json.dumps(payload, sort_keys=True,
                                 ensure_ascii=False) + '\n')
     else:
-        stream.write(render_human(payload))
+        stream.write(render_human(payload, color=color))
     stream.flush()
 
 
@@ -318,7 +336,11 @@ def main(argv: list[str] | None = None) -> int:
                 '--json writes exactly one JSON document to stdout; '
                 'diagnostics go to stderr. '
                 '`asha run --spec FILE [--apply]` is the legacy '
-                'scheduler CLI and passes through unchanged.'))
+                'scheduler CLI and passes through unchanged. '
+                'Auto-discovery reads one coherent git snapshot; '
+                'unmerged/conflict state or targets outside the '
+                'repository exit 2 (REPOSITORY_CONFLICT / '
+                'REPOSITORY_ERROR).'))
     parser.add_argument('--root', default='.',
                         help='repository root (default: cwd)')
     parser.add_argument('--paths', nargs='+', metavar='PATH',
@@ -328,17 +350,34 @@ def main(argv: list[str] | None = None) -> int:
                         help='emit exactly one JSON document on stdout')
     parser.add_argument('--no-execute', action='store_true',
                         help='evaluate governance only; run no checks')
+    parser.add_argument('--no-color', action='store_true',
+                        help='disable ANSI color (color is already off '
+                             'when stdout is not a TTY or NO_COLOR is set)')
     args = parser.parse_args(argv)
 
     started = time.monotonic()
     as_json = bool(args.as_json)
+    # color contract: TTY only, never with --json/--no-color/NO_COLOR
+    use_color = (not as_json and not args.no_color
+                 and sys.stdout.isatty() and not os.environ.get('NO_COLOR'))
     root = Path(args.root).expanduser()
     payload: dict[str, Any] | None = None
     exit_code = EXIT_OK
     try:
         root = _require_git_root(root)
-        resolved, decision, classification = evaluate(root, args.paths)
-        payload = _payload_base(root, resolved)
+        # ONE coherent snapshot of the working state; conflicts are an
+        # operational repository condition (exit 2), never a verdict
+        snap = git_context.snapshot(root)
+        if snap.conflicts:
+            raise CliError(
+                'REPOSITORY_CONFLICT',
+                'unmerged paths (merge conflict in progress): '
+                + ', '.join(snap.conflicts))
+        explicit = (git_context.normalize_paths(root, args.paths)
+                    if args.paths else None)
+        target_paths = list(snap.paths) if explicit is None else explicit
+        resolved, decision, classification = evaluate(root, target_paths)
+        payload = _payload_base(root, resolved, snap)
         if decision is None:
             payload['status'] = 'NO_CHANGES'
         else:
@@ -352,7 +391,7 @@ def main(argv: list[str] | None = None) -> int:
             payload.update(outcome)
             if payload['validation_result'] == 'FAIL':
                 exit_code = EXIT_VALIDATION_FAILED
-    except CliError as exc:
+    except (CliError, git_context.GitContextError) as exc:
         exit_code = EXIT_ERROR
         if payload is None:
             payload = {
@@ -377,7 +416,7 @@ def main(argv: list[str] | None = None) -> int:
         if payload is not None:
             payload['error'] = code
             payload['duration_ms'] = int((time.monotonic() - started) * 1000)
-            _emit(payload, as_json)
+            _emit(payload, as_json, color=use_color)
         print(f'Asha: {type(exc).__name__}: {exc}', file=sys.stderr)
         return exit_code
 
@@ -387,7 +426,7 @@ def main(argv: list[str] | None = None) -> int:
         # human contract: errors go to stderr only (already printed),
         # never a result block on stdout
         return exit_code
-    _emit(payload, as_json)
+    _emit(payload, as_json, color=use_color)
     if payload.get('error') == 'EVIDENCE_VERIFICATION_FAILED':
         return EXIT_ERROR
     return exit_code

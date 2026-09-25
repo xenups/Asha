@@ -27,9 +27,12 @@ class _FakeClassification:
     signals: tuple = ()
 
 
-def _git(cwd: Path, *args: str) -> str:
+def _git(cwd: Path, *args: str, check: bool = True) -> str:
     proc = subprocess.run(['git', *args], cwd=cwd, capture_output=True,
-                          text=True, check=True)
+                          text=True, check=False)
+    if check and proc.returncode != 0:
+        raise AssertionError(
+            f'git {args} failed: {proc.stderr.strip()}')
     return proc.stdout.strip()
 
 
@@ -393,6 +396,202 @@ def test_committed_target_executes_via_scheduler_authority(
     assert worker['reads'] == worker['declared_scope']
     assert created['kwargs']['classification_context'] == (
         cli._dispatch_context(repo))
+
+
+# ---------------------------------------- 5.2.3 git-aware discovery
+
+def _make_conflict(root: Path) -> None:
+    _git(root, 'checkout', '-qb', 'side')
+    (root / 'c.py').write_text('def f():\n    return 2\n', encoding='utf-8')
+    _git(root, 'commit', '-qam', 'side')
+    _git(root, 'checkout', '-q', 'main')
+    (root / 'c.py').write_text('def f():\n    return 3\n', encoding='utf-8')
+    _git(root, 'commit', '-qam', 'main2')
+    _git(root, 'merge', 'side', check=False)   # conflicts exit non-zero
+
+
+def test_conflict_state_is_operational_error(tmp_path: Path,
+                                             capsys: Any) -> None:
+    root = tmp_path / 'repo'
+    root.mkdir()
+    _git(root, 'init', '-q', '-b', 'main', '.')
+    _git(root, 'config', 'user.email', 't@example.invalid')
+    _git(root, 'config', 'user.name', 'test')
+    (root / 'c.py').write_text('def f():\n    return 1\n', encoding='utf-8')
+    _git(root, 'add', '-A')
+    _git(root, 'commit', '-qm', 'init')
+    _make_conflict(root)
+    assert _git(root, 'ls-files', '-u')          # genuinely unmerged
+
+    code, out, err = _run(root, '--json', capsys=capsys)
+    payload = json.loads(out)
+    assert code == cli.EXIT_ERROR
+    assert payload['error'] == 'REPOSITORY_CONFLICT'
+    assert payload['decision'] is None           # no synthesized verdict
+    assert payload['eligible'] is None
+    assert 'unmerged paths' in err
+
+    code2, out2, _err2 = _run(root, capsys=capsys)
+    assert code2 == cli.EXIT_ERROR
+    assert out2 == ''                            # human: stderr only
+
+
+def test_semantic_equivalence_explicit_paths_vs_auto(repo: Path,
+                                                     capsys: Any) -> None:
+    (repo / 'tests' / 'test_thing.py').write_text(
+        'def test_ok():\n    assert True\n# change\n', encoding='utf-8')
+    (repo / 'extra.py').write_text('x = 1\n', encoding='utf-8')
+
+    code_a, out_a, _ = _run(repo, '--json', '--no-execute', capsys=capsys)
+    code_e, out_e, _ = _run(
+        repo, '--paths', 'extra.py', 'tests/test_thing.py',
+        '--json', '--no-execute', capsys=capsys)
+    auto = json.loads(out_a)
+    explicit = json.loads(out_e)
+    assert code_a == code_e == cli.EXIT_OK
+    mismatches = [
+        field for field in ('decision', 'eligible', 'fallback_reason',
+                            'execution_mode')
+        if auto[field] != explicit[field]
+    ]
+    assert mismatches == []
+    assert sorted(auto['changed_files']) == sorted(explicit['changed_files'])
+
+
+def test_deleted_file_verdict_is_engine_owned(repo: Path,
+                                              capsys: Any) -> None:
+    (repo / 'gone.py').write_text('def gone():\n    return 0\n',
+                                  encoding='utf-8')
+    _git(repo, 'add', '-A')
+    _git(repo, 'commit', '-qm', 'add target')
+    # move the diff base past gone.py so the deletion is a net change
+    (repo / 'anchor.py').write_text('a = 1\n', encoding='utf-8')
+    _git(repo, 'add', '-A')
+    _git(repo, 'commit', '-qm', 'anchor')
+    (repo / 'gone.py').unlink()                  # uncommitted deletion
+
+    code, out, _err = _run(repo, '--json', '--no-execute', capsys=capsys)
+    payload = json.loads(out)
+    assert code == cli.EXIT_OK
+    assert 'gone.py' in payload['changed_files']
+    states = payload['change_set']['states']
+    assert 'deleted' in states['gone.py']
+    # the verdict comes from the engine, byte-identical to a direct
+    # engine call on the same target -- the CLI never branches on state
+    _res, decision, _cls = cli.evaluate(repo, None)
+    assert decision is not None
+    assert payload['decision'] == decision.mode
+    assert payload['eligible'] == decision.eligible
+    assert payload['fallback_reason'] == decision.fallback_reason
+
+
+def test_deleted_file_through_runtime_authority(tmp_path: Path,
+                                                capsys: Any) -> None:
+    """A COMMITTED deletion executed through the real scheduler path:
+    the single authority evaluates the change itself."""
+    root = tmp_path / 'auth'
+    (root / 'tests').mkdir(parents=True)
+    _git(root, 'init', '-q', '-b', 'main', '.')
+    _git(root, 'config', 'user.email', 't@example.invalid')
+    _git(root, 'config', 'user.name', 'test')
+    (root / 'keep.py').write_text('def keep():\n    return 1\n',
+                                  encoding='utf-8')
+    (root / 'gone.py').write_text('def gone():\n    return 0\n',
+                                  encoding='utf-8')
+    (root / 'tests' / 'test_keep.py').write_text(
+        'import keep\n\ndef test_keep():\n    assert keep.keep() == 1\n',
+        encoding='utf-8')
+    _git(root, 'add', '-A')
+    _git(root, 'commit', '-qm', 'init')
+    (root / 'gone.py').unlink()
+    _git(root, 'add', '-A')
+    _git(root, 'commit', '-qm', 'delete target')
+
+    _res, direct, _cls = cli.evaluate(root, None)
+    assert direct is not None                    # engine sees the change
+
+    code, out, _err = _run(root, '--json', capsys=capsys)
+    payload = json.loads(out)
+    assert payload['decision'] == direct.mode    # engine-owned, unchanged
+    assert payload['eligible'] == direct.eligible
+    assert code in (cli.EXIT_OK, cli.EXIT_VALIDATION_FAILED)
+    assert payload['validation_result'] in ('PASS', 'FAIL', None)
+    if payload['validation_result'] == 'PASS':
+        assert payload['evidence_verification'] in ('PASS', 'FAIL')
+
+
+def test_change_set_snapshot_states(repo: Path, capsys: Any) -> None:
+    (repo / 'tests' / 'test_thing.py').write_text(
+        'def test_ok():\n    assert True\n# change\n', encoding='utf-8')
+    _git(repo, 'add', 'tests/test_thing.py')     # staged only
+    (repo / 'staged.py').write_text('x = 1\n', encoding='utf-8')
+    (repo / 'loose.py').write_text('y = 2\n', encoding='utf-8')
+    _git(repo, 'add', 'staged.py')
+    # loose.py stays untracked; test_thing has a further unstaged edit
+    (repo / 'tests' / 'test_thing.py').write_text(
+        'def test_ok():\n    assert True\n# change2\n', encoding='utf-8')
+    code, out, _err = _run(repo, '--json', '--no-execute', capsys=capsys)
+    payload = json.loads(out)
+    assert code == cli.EXIT_OK
+    states = payload['change_set']['states']
+    assert states['tests/test_thing.py'] == ['staged', 'unstaged']
+    assert states['staged.py'] == ['staged']
+    assert states['loose.py'] == ['untracked']
+    assert payload['change_set']['untracked'] == ['loose.py']
+    assert payload['change_set']['conflicts'] == []
+    # single snapshot: uncommitted count matches the per-path states
+    assert payload['change_set']['uncommitted_files'] == len(states)
+
+
+def test_paths_outside_repository_operational_error(repo: Path,
+                                                    capsys: Any) -> None:
+    code, out, err = _run(repo, '--paths', str(repo.parent / 'x.py'),
+                          '--json', capsys=capsys)
+    payload = json.loads(out)
+    assert code == cli.EXIT_ERROR
+    assert payload['error'] == 'REPOSITORY_ERROR'
+    assert 'outside the repository' in err
+
+
+def test_auto_discovery_from_subdirectory(repo: Path,
+                                          capsys: Any) -> None:
+    (repo / 'tests' / 'test_thing.py').write_text(
+        'def test_ok():\n    assert True\n# change\n', encoding='utf-8')
+    sub = repo / 'tests'
+    code = cli.main(['--root', str(sub), '--json', '--no-execute'])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert code == cli.EXIT_OK
+    assert payload['change_set'] is not None     # toplevel discovered
+    assert sorted(payload['changed_files']) == ['tests/test_thing.py']
+
+
+def test_no_color_flag_and_no_ansi(repo: Path,
+                                   capsys: Any) -> None:
+    (repo / 'tests' / 'test_thing.py').write_text(
+        'def test_ok():\n    assert True\n# change\n', encoding='utf-8')
+    code_a, out_a, _ = _run(repo, '--no-color', '--no-execute',
+                            capsys=capsys)
+    code_b, out_b, _ = _run(repo, '--no-execute', capsys=capsys)
+    assert code_a == code_b == cli.EXIT_OK
+    assert '\x1b' not in out_a and '\x1b' not in out_b
+    assert 'Decision      ' in out_a and 'Decision      ' in out_b
+
+
+def test_git_context_reports_facts_only() -> None:
+    """Discovery module carries zero governance vocabulary and its
+    snapshot object is immutable after normalization."""
+    import dataclasses
+
+    from asha import git_context as gc
+
+    source = (Path(gc.__file__)).read_text(encoding='utf-8').lower()
+    for token in ('scoped', 'complete', 'eligible', 'fallback_reason',
+                  'scopingdecision'):
+        assert token not in source, token
+    snap = object.__new__(gc.WorkingState)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        snap.paths = ()          # type: ignore[misc]
 
 
 # ------------------------------------------------------- legacy + schema

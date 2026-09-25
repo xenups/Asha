@@ -31,6 +31,7 @@ asha [--root <path>] [--paths <file>...] [--json] [--no-execute]
                                               # governance CLI (schema v1)
 asha --root <path> run --spec <spec.json> [--apply]   # scheduler CLI
 asha-mcp                                              # stdio JSON-RPC MCP server
+.claude/commands/asha.md   →  /asha                    # thin passthrough
 ```
 
 `asha` (the default command) is a thin adapter over the existing engine:
@@ -43,8 +44,22 @@ semantic field in its output is the engine's own.
 
 CLI contract (schema_version 1):
 
-* stdout: human result block, or exactly one JSON document with `--json`
-  (no progress logs; diagnostics go to stderr).
+* target discovery: `--root` defaults to the current directory and walks
+  up to the git toplevel; without `--paths` the change set is one coherent
+  snapshot (a single `git status --porcelain=v1 -z` read plus the scope
+  resolver's own `base..worktree` membership source), reporting per-path
+  states (`staged`, `unstaged`, `deleted`, `untracked`, `renamed`) inside
+  `change_set.states`. Merge-conflict (unmerged) state exits `2` with
+  `error: "REPOSITORY_CONFLICT"` -- an operational condition, never a
+  synthesized verdict. `--paths` accepts relative or absolute paths under
+  the repository and normalizes them to the identical sorted form;
+  anything outside the repository exits `2`.
+* `/asha` thin wrapper: `.claude/commands/asha.md` is a pure passthrough
+  (`asha $ARGUMENTS`); it inspects nothing and decides nothing.
+* stdout: human result block (file states listed under `Changes`), or
+  exactly one JSON document with `--json`
+  (no progress logs; diagnostics go to stderr). ANSI color appears only
+  on a TTY; `--no-color` (or `NO_COLOR`, or piped output) disables it.
 * JSON fields: `schema_version`, `repository`, `change_set`,
   `changed_files`, `decision`, `eligible`, `fallback_reason`,
   `execution_mode` (`targeted`|`canonical`), `validation_result`
