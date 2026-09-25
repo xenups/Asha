@@ -28,6 +28,8 @@ Registered CLI commands:
 
 ```text
 asha [--root <path>] [--paths <file>...] [--json] [--no-execute]
+      [--ui] [--ui-out <path>]
+asha inspect <file> [--ui-out <path>]
                                               # governance CLI (schema v1)
 asha --root <path> run --spec <spec.json> [--apply]   # scheduler CLI
 asha-mcp                                              # stdio JSON-RPC MCP server
@@ -60,6 +62,14 @@ CLI contract (schema_version 1):
   exactly one JSON document with `--json`
   (no progress logs; diagnostics go to stderr). ANSI color appears only
   on a TTY; `--no-color` (or `NO_COLOR`, or piped output) disables it.
+* `--ui` / `--ui-out <path>`: after the run completes, also write a
+  passive HTML inspection report (default
+  `.jspace/reports/inspector.html`); the path goes to stderr, stdout
+  contract unchanged. `asha inspect <file>` renders the same report
+  from an existing artifact JSON with zero git/governance calls:
+  recorded facts only (`"Not recorded"`/`"Unknown"` for absent fields,
+  impact-set view when no edge data exists), single self-contained
+  file, no script tags, no network references.
 * JSON fields: `schema_version`, `repository`, `change_set`,
   `changed_files`, `decision`, `eligible`, `fallback_reason`,
   `execution_mode` (`targeted`|`canonical`), `validation_result`

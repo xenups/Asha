@@ -42,7 +42,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import git_context, scope_resolver, scoping
+from . import git_context, scope_resolver, scoping, ui
 from .classifier import classify_task, governance_profile
 from .mcp_server import _dispatch_context, _fast_path_enabled
 from .replay import parse_evidence, verify_bytes, verify_record
@@ -303,10 +303,10 @@ def _emit(payload: dict[str, Any], as_json: bool,
     stream.flush()
 
 
-def _legacy_run(argv: list[str]) -> bool:
-    """Detect `asha [--root X] run ...` for scheduler passthrough. The
-    first positional token decides; `--paths` switches to our mode so a
-    file literally named `run` stays a path."""
+def _first_positional(argv: list[str]) -> str | None:
+    """First positional token (subcommand candidate). `--root`'s value
+    is skipped; `--paths` consumes the rest so a file literally named
+    `run` or `inspect` stays a path."""
     skip = False
     for token in argv:
         if skip:
@@ -316,16 +316,72 @@ def _legacy_run(argv: list[str]) -> bool:
             if token == '--root':
                 skip = True
             elif token == '--paths':
-                return False
+                return None
             continue
-        return token == 'run'
-    return False
+        return token
+    return None
+
+
+def _legacy_run(argv: list[str]) -> bool:
+    """Detect `asha [--root X] run ...` for scheduler passthrough."""
+    return _first_positional(argv) == 'run'
+
+
+def _maybe_write_ui(args: Any, payload: dict[str, Any]) -> None:
+    """Passive post-completion hook for `--ui`: render whatever payload
+    exists (read-only consumer), report the path on stderr only."""
+    if not getattr(args, 'ui', False):
+        return
+    try:
+        out = ui.write_report(payload, getattr(args, 'ui_out', None))
+        print(f'Asha: report written to {out}', file=sys.stderr)
+    except OSError as exc:
+        print(f'Asha: report write failed: {exc}', file=sys.stderr)
+
+
+def _inspect(argv: list[str]) -> int:
+    """`asha inspect FILE` -- read an existing artifact and render the
+    HTML report. Strictly passive: no git, no AST, no governance calls;
+    stdout receives only the written path."""
+    import argparse as _argparse
+    import json as _json
+
+    parser = _argparse.ArgumentParser(
+        prog='asha inspect',
+        description='Render a read-only HTML inspection report from an '
+                    'existing evidence/CLI JSON artifact (passive: no '
+                    'git, no governance calls; offline output).')
+    parser.add_argument('file', help='artifact JSON file to inspect')
+    parser.add_argument('--ui-out', metavar='PATH', default=None,
+                        help='report destination (default: '
+                             '.jspace/reports/inspector.html)')
+    args = parser.parse_args(argv)
+    try:
+        payload = _json.loads(Path(args.file).read_text(encoding='utf-8'))
+        if not isinstance(payload, dict):
+            raise TypeError('artifact root must be a JSON object')
+        target = ui.write_report(payload, args.ui_out)
+    except (OSError, ValueError, TypeError) as exc:
+        print(f'Asha: inspect failed: {type(exc).__name__}: {exc}',
+              file=sys.stderr)
+        return EXIT_ERROR
+    print(str(target))
+    if sys.stdout.isatty() and sys.stdin.isatty():
+        import webbrowser
+        try:
+            webbrowser.open(target.resolve().as_uri())
+        except Exception as exc:      # browser launch is best effort
+            print(f'Asha: could not open browser: {exc}', file=sys.stderr)
+    return EXIT_OK
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    if _legacy_run(argv):
+    command = _first_positional(argv)
+    if command == 'run':
         return scheduler_main(argv)
+    if command == 'inspect':
+        return _inspect(argv[1:])
 
     parser = argparse.ArgumentParser(
         prog='asha',
@@ -353,6 +409,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--no-color', action='store_true',
                         help='disable ANSI color (color is already off '
                              'when stdout is not a TTY or NO_COLOR is set)')
+    parser.add_argument('--ui', action='store_true',
+                        help='after this run completes, also write a '
+                             'passive HTML inspection report; the path '
+                             'goes to stderr (stdout contract unchanged)')
+    parser.add_argument('--ui-out', metavar='PATH', default=None,
+                        help='destination for the --ui report '
+                             '(default: .jspace/reports/inspector.html)')
     args = parser.parse_args(argv)
 
     started = time.monotonic()
@@ -416,12 +479,14 @@ def main(argv: list[str] | None = None) -> int:
         if payload is not None:
             payload['error'] = code
             payload['duration_ms'] = int((time.monotonic() - started) * 1000)
+            _maybe_write_ui(args, payload)
             _emit(payload, as_json, color=use_color)
         print(f'Asha: {type(exc).__name__}: {exc}', file=sys.stderr)
         return exit_code
 
     assert payload is not None
     payload['duration_ms'] = int((time.monotonic() - started) * 1000)
+    _maybe_write_ui(args, payload)
     if payload.get('error') and not as_json:
         # human contract: errors go to stderr only (already printed),
         # never a result block on stdout
