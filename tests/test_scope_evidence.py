@@ -195,8 +195,7 @@ def test_evidence_json_integrity(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     _ready_ledger(repo)
     payload = _ship(repo)
-    assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert "GATE SHIP: PASS" in proc.stdout
+    assert payload["authorized_to_ship"] is True
 
     payload = json.loads(
         _evidence_file(repo).read_text(encoding="utf-8"))
