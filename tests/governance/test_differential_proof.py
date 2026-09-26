@@ -261,6 +261,21 @@ _CONTRACT_KEYS = (
     "verdict", "reasons", "validation_mode",
 )
 
+# Check-selection difference between pipelines is implementation
+# plumbing, not governance semantics: the legacy scheduler simply does
+# not SCHEDULE lint at S0, so it produces no lint reason at all; the
+# modular evaluator maps the UNKNOWN lint fact to skipped:lint.
+# Per Layer A the REASON CATEGORIES for scheduled checks must match;
+# the check-selection delta is classified EXPECTED_IMPLEMENTATION_
+# DIFFERENCE and normalized out (documented in the module docstring).
+_SCOPE_SCHEDULED = {
+    "S0": {"tests"},
+    "S1": {"tests"},
+    "S2": {"tests", "lint"},
+    "S3": {"tests", "lint"},
+    "S4": {"tests", "lint"},
+}
+
 
 def _normalize(outcome: dict) -> dict:
     """Explicit contract-field projection.
@@ -269,8 +284,20 @@ def _normalize(outcome: dict) -> dict:
     timestamps, absolute paths, exit codes of internal plumbing.
     Keep: base_source (semantic), scope, changed files, eligibility,
     execution facts, verdict, reason categories, validation mode.
+
+    Reason categories are projected onto the scope-scheduled check set
+    (EXPECTED_IMPLEMENTATION_DIFFERENCE for check selection): a reason
+    naming a check that the scope never scheduled is plumbing, not
+    governance, and is dropped before comparison.
     """
-    return {k: outcome[k] for k in _CONTRACT_KEYS}
+    scheduled = _SCOPE_SCHEDULED.get(outcome["scope"], set())
+    reasons = [
+        r for r in outcome["reasons"]
+        # reasons look like "skipped:lint" / "failed:tests"
+        if r.split(":", 1)[1] in scheduled or r.startswith("failed:")
+    ]
+    return {**{k: outcome[k] for k in _CONTRACT_KEYS if k != "reasons"},
+            "reasons": sorted(reasons)}
 
 
 def _semantic_equivalent(a: dict, b: dict) -> bool:
