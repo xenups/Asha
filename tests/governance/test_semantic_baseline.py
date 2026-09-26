@@ -139,14 +139,17 @@ class TestNoChanges:
         assert resolved["scope"] == "S0"
         assert resolved["status"] == "certain"
         assert resolved["affected_files"] == []
-        assert resolved["base"] is not None
+        # single-commit fixture: no origin/main, no HEAD~1 → base is None
+        assert resolved["base"] is None
         # change-state: no changes detected
         assert resolved["affected_files"] == []
 
     def test_assess_no_changed_files(self, tmp_path: Path) -> None:
         repo = _GitRepo(tmp_path / "nc2").base_commit()
+        # disjoint classification so the changed-files check (step 4) is
+        # reached; otherwise classification (step 1) fails first.
         decision = assess_scoping_eligibility(
-            repo.root, [], "PROVEN_SHARED", "S0",
+            repo.root, [], "PROVEN_DISJOINT", "S0",
             scope_status="certain",
         )
         repo.ensure_clean()
