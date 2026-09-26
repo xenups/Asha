@@ -20,8 +20,8 @@ from typing import Self
 
 import pytest
 
+from asha import evidence, scope_resolver
 from asha.common import paths as common_paths
-from asha import evidence, scheduler, scope_resolver
 from asha.scheduler import GovernedScheduler
 from asha.worktree import WorktreeDispatcher
 

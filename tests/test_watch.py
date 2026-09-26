@@ -19,7 +19,6 @@ from pathlib import Path
 import pytest
 
 from asha import cli, ui, watcher
-
 from asha.common import paths as common_paths
 
 

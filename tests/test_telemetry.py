@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from asha import cli, telemetry
 from asha.common import paths as common_paths
-from asha import cli, telemetry, ui
 from asha.telemetry import EventJournalWriter, PipelineStateProjector  # noqa: F401
 
 
@@ -197,7 +197,6 @@ def test_cli_writes_journal_no_changes(tmp_path: Path) -> None:
     the journal is empty/absent."""
     import subprocess
 
-    from asha import cli
     # minimal repo, no changes
     subprocess.run(['git', 'init', '-q', '.'], cwd=tmp_path, check=True)
     subprocess.run(['git', 'config', 'user.email', 't@e.i'],
@@ -225,7 +224,6 @@ def test_cli_journal_full_lifecycle_with_execution(tmp_path: Path) -> None:
     execution events because execution is not run."""
     import subprocess
 
-    from asha import cli
     subprocess.run(['git', 'init', '-q', '.'], cwd=tmp_path, check=True)
     subprocess.run(['git', 'config', 'user.email', 't@e.i'],
                    cwd=tmp_path, check=True)

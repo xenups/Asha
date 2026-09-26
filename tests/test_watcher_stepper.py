@@ -10,10 +10,8 @@ import subprocess
 from pathlib import Path
 
 from asha import telemetry, watcher
-from asha.presentation import render_stepper_html
-
 from asha.common import paths as common_paths
-
+from asha.presentation import render_stepper_html
 
 
 def _repo(tmp_path: Path) -> Path:
