@@ -104,7 +104,6 @@ class TestTreeUnchanged:
     def test_repo_tree_unchanged_by_asha(
         self, iso_repo: Path,
     ) -> None:
-        before = _tree(iso_repo)
         # commit a change so the engine has something to evaluate
         (iso_repo / "mod.py").write_text("VALUE: int = 3\n", encoding="utf-8")
         _git(iso_repo, "add", "-A")
@@ -189,9 +188,9 @@ class TestJournalCompatibility:
         assert set(event) == {
             "event_id", "run_id", "timestamp", "event_type", "payload",
         }
-        raw = list(
+        raw = next(
             (Path(iso_repo).parents[0] / "asha-state")
             .rglob("run-iso-5.jsonl")
-        )[0].read_text(encoding="utf-8")
+        ).read_text(encoding="utf-8")
         assert "change_detected" in raw
         assert '"target_files":["a.py"]' in raw or '"target_files": ["a.py"]' in raw

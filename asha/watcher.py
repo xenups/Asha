@@ -119,7 +119,7 @@ def read_last_sealed(root: Path) -> dict[str, Any]:
     """Read-only view of the most recent recorded evidence artifacts.
     Only fields that EXIST are returned; nothing is derived."""
     sealed: dict[str, Any] = {}
-    gate = common_paths.get_evidence_dir(root) / EVIDENCE_NAME
+    gate = common_paths.get_evidence_dir(root) / 'evidence.json'
     try:
         data = json.loads(gate.read_text(encoding='utf-8'))
         if isinstance(data, dict):
