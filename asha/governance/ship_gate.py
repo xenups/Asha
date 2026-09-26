@@ -12,6 +12,7 @@ files never skip lint silently (the legacy HEAD~1 fallback's effect).
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from asha import check_runner, evidence, scope_resolver
