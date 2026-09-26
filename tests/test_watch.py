@@ -180,11 +180,11 @@ def test_dirty_files_alone_never_invoke_authority(
     root = _repo(tmp_path)
     calls: list[Path] = []
 
-    def _record(r: Path, timeout: float = 1800.0) -> tuple[int, dict | None]:
+    def _spawn(r: Path) -> None:
         calls.append(r)
-        return 0, {'decision': 'COMPLETE', 'validation_result': 'PASS'}
+        raise AssertionError('dirty tree must never spawn authority')
 
-    monkeypatch.setattr(watcher, 'run_authority', _record)
+    monkeypatch.setattr(watcher, 'spawn_authority', _spawn)
     (root / 'a.py').write_text('x = 2  # dirty\n', encoding='utf-8')
     monkeypatch.setattr(sys, 'stdin', io.StringIO('q\n'))
     code = watcher.run_watch(root, ui=False)
@@ -200,12 +200,26 @@ def test_explicit_key_invokes_authority_once(
     root = _repo(tmp_path)
     calls: list[Path] = []
 
-    def _record(r: Path, timeout: float = 1800.0) -> tuple[int, dict | None]:
-        calls.append(r)
-        return 0, {'decision': 'COMPLETE', 'validation_result': 'PASS',
-                   'evidence_id': 'f' * 64}
+    class _FakeProc:
+        returncode = 0
 
-    monkeypatch.setattr(watcher, 'run_authority', _record)
+        def __init__(self) -> None:
+            self._done = False
+
+        def poll(self) -> int | None:
+            self._done = True
+            return 0 if self._done else None
+
+        def communicate(self, timeout: float = 30.0) -> tuple[str, str]:
+            return ('{"decision":"COMPLETE","validation_result":"PASS",'
+                    '"evidence_id":"ffffffffffffffffffffffffffffffffffffffff'
+                    'ffffffffffffffffffffffffffff"}'), ''
+
+    def _spawn(r: Path) -> _FakeProc:
+        calls.append(r)
+        return _FakeProc()
+
+    monkeypatch.setattr(watcher, 'spawn_authority', _spawn)
     monkeypatch.setattr(sys, 'stdin', io.StringIO(keys + 'q\n'))
     code = watcher.run_watch(root, ui=False)
     out = capsys.readouterr().out

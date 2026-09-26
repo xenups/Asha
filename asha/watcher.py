@@ -26,7 +26,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from . import git_context
+from . import git_context, telemetry
 
 # --------------------------------------------------------------- constants
 
@@ -182,6 +182,44 @@ def authority_command() -> list[str]:
     return [sys.executable, *AUTHORITY_COMMAND]
 
 
+def _authority_env() -> dict[str, str]:
+    env = dict(os.environ)
+    env.setdefault('GIT_TERMINAL_PROMPT', '0')
+    env.setdefault('GIT_PAGER', 'cat')
+    env.setdefault('GIT_ASKPASS', 'echo')
+    return env
+
+
+def spawn_authority(root: Path) -> subprocess.Popen[str]:
+    """Explicit-trigger spawn of the existing CLI as a tracked child.
+    The watcher only polls the child and reads its one schema-v1 JSON
+    document; it never interprets or drives execution."""
+    return subprocess.Popen(
+        authority_command(), cwd=root,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, env=_authority_env())
+
+
+def finish_authority(proc: subprocess.Popen[str],
+                     timeout: float = 30.0
+                     ) -> tuple[int, dict[str, Any] | None]:
+    """Collect a finished authority child -> (rc, parsed payload)."""
+    try:
+        out, _err = proc.communicate(timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        proc.kill()
+        return 127, {'error': 'authority child timed out'}
+    payload: dict[str, Any] | None = None
+    try:
+        parsed = json.loads(out)
+        if isinstance(parsed, dict):
+            payload = parsed
+    except ValueError:
+        payload = None
+    return proc.returncode, payload
+
+
 def run_authority(root: Path,
                   timeout: float = 1800.0) -> tuple[int, dict[str, Any] | None]:
     """Explicit user trigger only: spawn the existing CLI and hand back
@@ -191,14 +229,10 @@ def run_authority(root: Path,
     the git prompt/pager plumbing can hang on our empty stdin, so the
     child gets prompt/pager-disabling environment entries (observed
     failure: a bare `git rev-parse` stuck 60s in this exact path)."""
-    env = dict(os.environ)
-    env.setdefault('GIT_TERMINAL_PROMPT', '0')
-    env.setdefault('GIT_PAGER', 'cat')
-    env.setdefault('GIT_ASKPASS', 'echo')
     try:
         proc = subprocess.run(authority_command(), cwd=root,
                               capture_output=True, text=True,
-                              timeout=timeout, env=env)
+                              timeout=timeout, env=_authority_env())
     except (OSError, subprocess.TimeoutExpired) as exc:
         return 127, {'error': f'{type(exc).__name__}: {exc}'}
     payload: dict[str, Any] | None = None
@@ -209,6 +243,64 @@ def run_authority(root: Path,
     except ValueError:
         payload = None
     return proc.returncode, payload
+
+
+# --------------------------------------------------- live stepper view
+
+def latest_journal(root: Path) -> Path | None:
+    """Newest recorded run journal (append-only; mtime order)."""
+    jdir = root / '.jspace' / 'execution'
+    try:
+        files = list(jdir.glob('*.jsonl'))
+    except OSError:
+        return None
+    if not files:
+        return None
+    return max(files, key=lambda p: (p.stat().st_mtime, p.name))
+
+
+def journal_terminal_event(journal: Path | None) -> bool:
+    """Explicit terminal-event fact from the journal itself."""
+    if journal is None:
+        return False
+    try:
+        state, _ = telemetry.project_path(journal)
+    except OSError:
+        return False
+    return state in ('SEALED', 'FAILED')
+
+
+def watch_stepper(root: Path, interrupted: bool) -> str:
+    """Project the latest recorded journal (explicit interruption fact
+    only) into the human stepper HTML. Falls back to the clean state
+    when no journal exists yet -- presentation of recorded facts only."""
+    journal = latest_journal(root)
+    if journal is None:
+        from . import presentation
+        return presentation.render_stepper_html('IDLE_CLEAN', {})
+    state, meta = telemetry.project_path(journal, interrupted=interrupted)
+    from . import presentation
+    return presentation.render_stepper_html(state, meta)
+
+
+_STEPPER_OPEN = '<!-- ASHA-STEPPER -->'
+_STEPPER_CLOSE = '<!-- /ASHA-STEPPER -->'
+
+
+def inject_stepper(html: str, stepper_html: str) -> str:
+    """Place/replace the stepper block before </body> (offline,
+    inline). A previously injected block is replaced, never duplicated
+    -- the journal grows while a formal run is active and the watch
+    report is rewritten repeatedly."""
+    if _STEPPER_OPEN in html:
+        start = html.index(_STEPPER_OPEN)
+        end = html.index(_STEPPER_CLOSE, start) + len(_STEPPER_CLOSE)
+        html = html[:start] + html[end:]
+    block = _STEPPER_OPEN + stepper_html + _STEPPER_CLOSE
+    marker = '</body>'
+    if marker not in html:
+        return html + block
+    return html.replace(marker, block + marker, 1)
 
 
 # ----------------------------------------------------------------- display
@@ -309,6 +401,38 @@ def _tty_key() -> str | None:
     return None
 
 
+def _write_watch_html(root: Path, report_path: Path,
+                      snapshot: git_context.WorkingState,
+                      sealed: Mapping[str, Any],
+                      stepper_html: str | None) -> None:
+    """Write watch.html with the live stepper component injected."""
+    from . import ui as ui_module
+    html = ui_module.render_report(
+        watch_report_payload(root, branch_name(root), snapshot, sealed))
+    if stepper_html is not None:
+        html = inject_stepper(html, stepper_html)
+    try:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(html, encoding='utf-8')
+    except OSError:
+        pass
+
+
+def _inject_live_stepper(report_path: Path, root: Path,
+                         interrupted: bool) -> None:
+    """Refresh the stepper component inside the already-written report."""
+    try:
+        html = report_path.read_text(encoding='utf-8')
+    except OSError:
+        return
+    stepper = watch_stepper(root, interrupted)
+    html = inject_stepper(html, stepper)
+    try:
+        report_path.write_text(html, encoding='utf-8')
+    except OSError:
+        pass
+
+
 def _handle_key(key: str) -> str | None:
     """Map one input token to an action: 'q' quit, 'r'/Enter trigger."""
     if not key:
@@ -344,12 +468,47 @@ def run_watch(root: Path, *, ui: bool = False,
     opened_browser = False
     last_render = ''
     last_authority: str | None = None
+    active_proc: subprocess.Popen[str] | None = None
+    if ui:
+        _write_watch_html(root, report_path, snapshot, sealed,
+                          watch_stepper(root, False))
     try:
         while True:
             now = time.monotonic()
             if loop.tick(now):
                 snapshot = loop.refresh()
                 sealed = read_last_sealed(root)
+            # lapse a finished authority child: explicit host fact --
+            # a dead child with no terminal journal event is
+            # INTERRUPTED (never FAILED); a terminal journal event wins.
+            interrupted = False
+            if active_proc is not None and active_proc.poll() is not None:
+                journal = latest_journal(root)
+                if not journal_terminal_event(journal):
+                    interrupted = True
+                    if ui:
+                        _write_watch_html(root, report_path, snapshot,
+                                          sealed,
+                                          watch_stepper(root, True))
+                    sys.stdout.write(
+                        '\nAuthoritative run interrupted (no terminal '
+                        'event recorded).\n')
+                    sys.stdout.flush()
+                code, payload = finish_authority(active_proc)
+                if payload is not None:
+                    summary = (
+                        f"decision={payload.get('decision')!s} "
+                        f"validation={payload.get('validation_result')!s} "
+                        f"evidence="
+                        f"{str(payload.get('evidence_id'))[:12]} "
+                        f"exit={code}")
+                else:
+                    summary = f'exit={code} (non-JSON output)'
+                last_authority = summary
+                active_proc = None
+                sealed = read_last_sealed(root)
+                last_render = ''    # force re-render: the journal now
+                                    # has terminal events (SEALED/FAILED)
             text = render_terminal(root, branch, snapshot, sealed,
                                    last_authority)
             if text != last_render:             # render on change only
@@ -357,16 +516,21 @@ def run_watch(root: Path, *, ui: bool = False,
                 sys.stdout.write('\n' + text)
                 sys.stdout.flush()
                 if ui:
-                    from . import ui as ui_module
-                    ui_module.write_report(
-                        watch_report_payload(root, branch, snapshot, sealed),
-                        report_path)
+                    _write_watch_html(
+                        root, report_path, snapshot, sealed,
+                        watch_stepper(root, interrupted))
                     if not opened_browser and sys.stdout.isatty():
                         opened_browser = True
                         try:
                             webbrowser.open(report_path.resolve().as_uri())
                         except OSError:
                             pass
+            elif ui and active_proc is not None:
+                # live stepper refresh while a formal run is active:
+                # re-project the growing journal every tick
+                _inject_live_stepper(report_path, root,
+                                     interrupted or active_proc.poll()
+                                     is not None)
             key: str | None = None
             if interactive:
                 key = _tty_key()
@@ -384,24 +548,17 @@ def run_watch(root: Path, *, ui: bool = False,
                 if action == 'quit':
                     break
                 if action == 'trigger':
-                    sys.stdout.write(
-                        '\nRunning authoritative evaluation '
-                        '(existing runtime authority)...\n')
-                    sys.stdout.flush()
-                    code, payload = run_authority(root)
-                    if payload is not None:
-                        summary = (
-                            f"decision={payload.get('decision')!s} "
-                            f"validation={payload.get('validation_result')!s} "
-                            f"evidence="
-                            f"{str(payload.get('evidence_id'))[:12]} "
-                            f"exit={code}")
+                    if active_proc is not None:
+                        sys.stdout.write(
+                            '\nAn authoritative run is already '
+                            'in progress...\n')
+                        sys.stdout.flush()
                     else:
-                        summary = f'exit={code} (non-JSON output)'
-                    last_authority = summary
-                    sys.stdout.write(f'Authoritative run: {summary}\n')
-                    sys.stdout.flush()
-                    sealed = read_last_sealed(root)
+                        sys.stdout.write(
+                            '\nRunning authoritative evaluation '
+                            '(existing runtime authority)...\n')
+                        sys.stdout.flush()
+                        active_proc = spawn_authority(root)
             time.sleep(0.05)
     except KeyboardInterrupt:
         pass                                    # Ctrl+C == clean exit
