@@ -101,7 +101,9 @@ def test_ignored_paths_produce_no_logical_change(tmp_path: Path) -> None:
     assert after == before                          # zero logical change
     loop = watcher.WatchLoop(root, debounce_ms=400, scan_ms=500)
     assert loop.tick(0.6) is False
-    _evidence_file(root).write_text('{}', encoding='utf-8')
+    ev_f = _evidence_file(root)
+    ev_f.parent.mkdir(parents=True, exist_ok=True)
+    ev_f.write_text('{}', encoding='utf-8')
     assert loop.tick(1.1) is False                  # ignored: not observed
 
 
