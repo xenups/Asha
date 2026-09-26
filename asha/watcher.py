@@ -33,7 +33,7 @@ from .common import paths as common_paths
 
 IGNORE_DIRS = frozenset({
     '.git', '__pycache__', '.hermes', '.venv', 'venv', 'env',
-    'node_modules',
+    'node_modules', '.jspace',
 })
 IGNORE_SUFFIXES = ('.swp', '~', '.tmp')
 SCAN_INTERVAL_MS = 500      # session-scoped observation cadence
@@ -152,7 +152,11 @@ def read_last_sealed(root: Path) -> dict[str, Any]:
                         'base_commit', 'exit_status'):
                 if data.get(key) is not None:
                     sealed[key] = data[key]
-            sealed['run_source'] = best.relative_to(root).as_posix()
+            try:
+                sealed['run_source'] = best.relative_to(root).as_posix()
+            except ValueError:
+                # external state zone: report the absolute artifact path
+                sealed['run_source'] = str(best)
     return sealed
 
 

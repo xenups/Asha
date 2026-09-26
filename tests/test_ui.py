@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 from asha import cli, codegraph, scope_resolver, scoping, ui
+from asha.common import paths as common_paths
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GATE_EVIDENCE = REPO_ROOT / '.jspace/evidence.json'
