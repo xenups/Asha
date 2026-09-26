@@ -53,9 +53,8 @@ def _git(root: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def _init_repo(tmp_path: Path, name: str) -> Path:
-    root = tmp_path / name
-    root.mkdir()
+def _init_repo(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
     _git(root, "init", "-q", "-b", "main")
     _git(root, "config", "user.email", "tests@example.com")
     _git(root, "config", "user.name", "tests")
@@ -98,9 +97,7 @@ class _GitRepo:
     """Small scratch git repo builder with an anchor base commit."""
 
     def __init__(self, root: Path) -> None:
-        if not root.exists():
-            root.mkdir()
-        _init_repo(root, "r")
+        _init_repo(root)
         self.root = root
 
     def base_commit(self) -> "_GitRepo":
@@ -227,10 +224,7 @@ class TestUnresolvedBase:
     def test_empty_repo_no_base_fallback(self, tmp_path: Path) -> None:
         """A repo with no origin/main and no HEAD~1 yields base=None."""
         empty = tmp_path / "empty"
-        empty.mkdir()
-        _git(empty, "init", "-q", "-b", "main")
-        _git(empty, "config", "user.email", "tests@example.com")
-        _git(empty, "config", "user.name", "tests")
+        _init_repo(empty)
         base = scope_resolver.default_base(empty)
         assert base is None
 
