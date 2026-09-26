@@ -19,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from asha import project_map
+from asha.common import paths as common_paths
 
 CONFIDENCES = ("direct", "detected", "inferred")
 TOP_KEYS = {"schema", "cache_key", "repo", "stack", "layout", "tooling",
