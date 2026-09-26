@@ -15,7 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from asha import telemetry
+from asha.common import paths as common_paths
+from asha import cli, telemetry, ui
 from asha.telemetry import EventJournalWriter, PipelineStateProjector  # noqa: F401
 
 
@@ -34,14 +35,19 @@ def _journal_line(event_type: str, run_id: str = 'run1') -> str:
     return telemetry.serialize_event(_event(event_type, run_id))
 
 
+def _journal_file(tmp_path: Path, run_id: str) -> Path:
+    """External journal file (Phase D zone)."""
+    return common_paths.get_journal_dir(tmp_path) / f'{run_id}.jsonl'
+
+
 # ------------------------------------------------------------ writer
 
 def test_writer_appends_valid_jsonl(tmp_path: Path) -> None:
     with EventJournalWriter(tmp_path, 'r_x') as journal:
         journal.append('change_detected', {'target_files': ['a.py']})
         journal.append('sealed', {'evidence_id': 'deadbeef'}, critical=True)
-    lines = (tmp_path / '.jspace' / 'execution' / 'r_x.jsonl') \
-        .read_text(encoding='utf-8').splitlines()
+    lines = _journal_file(tmp_path, 'r_x').read_text(
+        encoding='utf-8').splitlines()
     assert len(lines) == 2
     for line in lines:
         parsed = json.loads(line)               # one valid JSON per line
@@ -49,8 +55,7 @@ def test_writer_appends_valid_jsonl(tmp_path: Path) -> None:
                                'event_type', 'payload'}
         assert parsed['run_id'] == 'r_x'
     assert lines[0].endswith('\n') is False or True  # splitlines strips \n
-    assert (tmp_path / '.jspace' / 'execution' / 'r_x.jsonl') \
-        .read_bytes().endswith(b'\n')
+    assert _journal_file(tmp_path, 'r_x').read_bytes().endswith(b'\n')
 
 
 def test_writer_rejects_unknown_event_type(tmp_path: Path) -> None:
@@ -205,7 +210,7 @@ def test_cli_writes_journal_no_changes(tmp_path: Path) -> None:
                    check=True)
     code = cli.main(['--root', str(tmp_path), '--json', '--no-execute'])
     assert code == cli.EXIT_OK
-    journal_dir = tmp_path / '.jspace' / 'execution'
+    journal_dir = common_paths.get_journal_dir(tmp_path)
     files = list(journal_dir.glob('*.jsonl')) if journal_dir.exists() \
         else []
     # change_detected is only appended when target_paths exist; with no
@@ -233,7 +238,7 @@ def test_cli_journal_full_lifecycle_with_execution(tmp_path: Path) -> None:
     (tmp_path / 'a.py').write_text('x = 2  # dirty\n', encoding='utf-8')
     code = cli.main(['--root', str(tmp_path), '--json', '--no-execute'])
     assert code == cli.EXIT_OK
-    journal_dir = tmp_path / '.jspace' / 'execution'
+    journal_dir = common_paths.get_journal_dir(tmp_path)
     files = sorted(journal_dir.glob('*.jsonl')) if journal_dir.exists() \
         else []
     assert files, 'journal expected on a dirty tree with execution path'
