@@ -70,10 +70,11 @@ class CIAdapter(ExecutionAdapter):
 
         if lint.is_file():
             text = lint.read_text(encoding="utf-8", errors="replace")
-            if _LINT_COUNT_RE.search(text):
-                # ruff-style summary: clean iff "All checks passed"
-                lint_result = "CLEAN" if "All checks passed" in text \
-                    else "VIOLATIONS"
+            if "All checks passed" in text:
+                lint_result = "CLEAN"
+                lint_violations = 0
+            elif _LINT_COUNT_RE.search(text):
+                lint_result = "VIOLATIONS"
                 m = _LINT_COUNT_RE.search(text)
                 lint_violations = int(m.group(1)) if m else 0
             else:

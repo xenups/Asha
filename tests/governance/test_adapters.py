@@ -75,18 +75,10 @@ class TestNativeExecution:
         assert facts.exit_codes["cmd0"] == 0
 
     def test_test_runner_passed(self, tmp_path: Path) -> None:
-        script = tmp_path / "run_tests.py"
-        script.write_text(
-            "import sys\n"
-            "import subprocess\n"
-            "subprocess.run([sys.executable, '-m', 'unittest', 'discover', "
-            "'-s', 'tests'], check=True)\n",
-            encoding="utf-8",
-        )
         (tmp_path / "tests").mkdir()
         (tmp_path / "tests" / "test_x.py").write_text(
             "def test_ok():\n    assert True\n", encoding="utf-8")
-        cmd = [PY, str(script)]
+        cmd = [PY, "-m", "pytest", "-q", "tests"]
         facts = NativeAdapter().execute(_manifest(tmp_path, [cmd]))
         assert facts.test_collection == "COLLECTED"
         assert facts.test_execution == "PASSED"
@@ -118,7 +110,7 @@ class TestNativeExecution:
     def test_lint_violations_detected(self, tmp_path: Path) -> None:
         # a command named ruff that exits nonzero
         script = tmp_path / "ruff"
-        script.write_text("#!/usr/bin/env python\nimport sys\n"
+        script.write_text("#!/usr/bin/env python3\nimport sys\n"
                           "print('Found 3 errors')\nsys.exit(1)\n",
                           encoding="utf-8")
         script.chmod(0o755)

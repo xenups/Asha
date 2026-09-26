@@ -2,8 +2,8 @@
 environment (Phase F).
 
 Contract:
-* preserves the manifest command VERBATIM — never injects Asha's
-  sys.executable or rewrites an opaque command;
+* preserves the manifest command VERBATIM — never injects Asha's own
+  interpreter or rewrites an opaque command;
 * applies env_overrides without mutating the parent environment;
 * enforces working_dir and timeout;
 * captures stdout/stderr into external scratch (Phase D Zone 3);
