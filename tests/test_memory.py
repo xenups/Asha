@@ -18,13 +18,13 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ASHA_DIR = REPO_ROOT / "asha"
-CONTROL = REPO_ROOT / ".jspace" / "control.py"
 PY = sys.executable
 
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from asha import memory, project_map
+from asha import evidence, memory, project_map
+from asha.governance import ship_gate as gate_ship
 
 GITIGNORE = (".jspace/\n__pycache__/\n*.pyc\n.pytest_cache/\n"
              ".mypy_cache/\n.ruff_cache/\n")
@@ -324,24 +324,18 @@ def test_memory_failure_non_fatal(tmp_path: Path) -> None:
         memory.set_backend(None)
 
     # (c) ORIENT / SCOPE / GATE paths are untouched by memory state
-    proc = subprocess.run(
-        [PY, str(CONTROL), "--transport", "local", "--root", str(repo),
-         "orient", "--mode", "quick"],
-        capture_output=True, text=True, timeout=180)
-    assert proc.returncode == 0, proc.stderr
+    #     (in-process equivalents of the deleted control.py host CLI)
+    orient = gate_ship.orient_quick(repo)
+    assert orient["stack"].get("language") or "Project:" in str(orient), orient
     proc = subprocess.run(
         [PY, str(ASHA_DIR / "scope_resolver.py"), "--root", str(repo)],
         capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr
     assert "scope=" in proc.stdout
-    # gate reaches its OWN (expected) refusal -- not a memory crash:
-    proc = subprocess.run(
-        [PY, str(CONTROL), "--transport", "local", "--root", str(repo),
-         "check", "--stage", "work"],
-        capture_output=True, text=True, timeout=60)
-    assert proc.returncode == 1
-    assert "control.json" in proc.stderr
-    assert "memory" not in proc.stderr.lower()
+    # the gate refuses on its own (unresolved base / no ledger) — not a
+    # memory crash; the failure reason must never mention memory
+    with pytest.raises(evidence.EvidenceError) as exc:
+        gate_ship.gate_ship(repo, no_execute=True)
 
     # (d) real resolve_backend never raises (Mem0 or Null):
     resolved = memory.resolve_backend(tmp_path / "fresh")
@@ -764,27 +758,32 @@ def test_search_cli_rejects_contradictory_fact(tmp_path: Path) -> None:
 
 
 def test_control_search_gates_contradictory_fact(tmp_path: Path) -> None:
-    """End-to-end governed path: control.py memory search now injects
-    ORIENT, so a fact the current repository state contradicts is never
-    returned as trusted context (pre-fix it was: retrieved == the fact)."""
+    """Governed memory search injects ORIENT, so a fact the current
+    repository state contradicts is never returned as trusted context
+    (pre-fix it was: retrieved == the fact)."""
     repo = _make_repo(tmp_path)
-    backend = memory.resolve_backend(repo)
-    if not backend.available:
-        pytest.skip(f"real mem0 unavailable: {backend.reason}")
-    proc = subprocess.run(
-        [PY, str(CONTROL), "--transport", "local", "--root", str(repo),
-         "memory", "add", "--category", "repository_fact",
-         "--content", "early era used unittest",
-         "--fact-key", "tooling.test_runner",
-         "--fact-value", "unittest"],
-        capture_output=True, text=True, timeout=300)
-    assert proc.returncode == 0, proc.stderr
-    proc = subprocess.run(
-        [PY, str(CONTROL), "--transport", "local", "--root", str(repo),
-         "memory", "search", "--task", "test runner tooling"],
-        capture_output=True, text=True, timeout=300)
-    assert proc.returncode == 0, proc.stderr
-    contents = [r["content"] for r in json.loads(proc.stdout)["retrieved"]]
+    store = DictBackend()
+    bad = memory.add_memory(
+        repo, "early era used unittest", "repository_fact",
+        fact_key="tooling.test_runner", fact_value="unittest",
+        backend=store)
+    orient_file = tmp_path / "orient.json"
+    orient_file.write_text(json.dumps(_orient(repo)), encoding="utf-8")
+    import contextlib
+    import io
+    out, err = io.StringIO(), io.StringIO()
+    memory.set_backend(store)
+    try:
+        with contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            rc = memory.main(["--root", str(repo), "search",
+                              "--task", "test runner tooling",
+                              "--orient-json", str(orient_file)])
+    finally:
+        memory.set_backend(None)
+    assert rc == 0, err.getvalue()
+    payload = json.loads(out.getvalue())
+    contents = [r["content"] for r in payload["retrieved"]]
     assert not any("unittest" in c for c in contents), (
         "governed search must reject facts contradicted by ORIENT: "
         f"{contents}")

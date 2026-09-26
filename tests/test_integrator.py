@@ -18,7 +18,6 @@ from typing import Any
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
-CONTROL = REPO / ".jspace" / "control.py"
 
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
@@ -83,13 +82,21 @@ def _spec(tmp_path: Path, task_id: str, workers: list[dict[str, Any]]
 
 
 def _control(repo: Path, spec: Path,
-             apply: bool = False) -> subprocess.CompletedProcess[str]:
-    argv = [PY, str(CONTROL), "--transport", "local",
-            "--root", str(repo), "orchestrator", "--spec", str(spec)]
+             apply: bool = False) -> dict:
+    """Run the governed run path in-process (control.py orchestrator CLI
+    eliminated in H.1; the engine is asha.cli.main)."""
+    import contextlib
+    import io
+    out = io.StringIO()
+    argv = ["--root", str(repo), "run", "--spec", str(spec)]
     if apply:
         argv.append("--apply")
-    return subprocess.run(argv, cwd=repo, capture_output=True, text=True,
-                          timeout=600)
+    with contextlib.redirect_stdout(out):
+        rc = asha.main(argv)
+    report = json.loads(out.getvalue())
+    if rc != 0:
+        raise AssertionError(f"run failed rc={rc}: {report}")
+    return report
 
 
 def _worktrees_dir(repo: Path) -> Path:
@@ -104,10 +111,8 @@ def test_dry_run_default_leaves_target_untouched(tmp_path: Path) -> None:
     spec = _spec(tmp_path, "dry", [
         _worker("A", writes=["tests/a.py"], cmd=_write_cmd("tests/a.py"))])
 
-    proc = _control(repo, spec)  # NO --apply
+    report = _control(repo, spec)  # NO --apply
 
-    assert proc.returncode == 0, proc.stderr
-    report = json.loads(proc.stdout)
     assert report["status"] == "ok"
     assert report["states"]["A"]["state"] == "DONE"
     # audit/inspection run: no integration stage at all
@@ -128,10 +133,8 @@ def test_apply_creates_single_atomic_commit(tmp_path: Path) -> None:
                 cmd=_write_cmd("tests/b.py", "import pathlib\n")),
     ])
 
-    proc = _control(repo, spec, apply=True)
+    report = _control(repo, spec, apply=True)
 
-    assert proc.returncode == 0, proc.stderr
-    report = json.loads(proc.stdout)
     assert report["status"] == "ok"
     integ = report["integration"]
     assert integ["status"] == "applied"

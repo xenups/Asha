@@ -30,7 +30,6 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CONTROL = REPO_ROOT / ".jspace" / "control.py"
 ORCHESTRATOR = REPO_ROOT / "asha" / "__main__.py"
 PY = sys.executable
 
@@ -628,10 +627,11 @@ def test_control_cli_delegation_and_bad_spec(tmp_path: Path) -> None:
     spec_path = tmp_path / "spec.json"
     spec_path.write_text(json.dumps(spec), encoding="utf-8")
 
-    # governed entry point: transport gate + delegation through control.py
+    # governed entry point: the orchestrator CLI is now the direct run path
+    # (control.py delegation eliminated in H.1)
     proc = subprocess.run(
-        [PY, str(CONTROL), "--transport", "local", "--root", str(repo),
-         "orchestrator", "--spec", str(spec_path)],
+        [PY, str(ORCHESTRATOR), "--root", str(repo), "run",
+         "--spec", str(spec_path)],
         cwd=repo, capture_output=True, text=True, timeout=600)
     assert proc.returncode == 0, proc.stderr
     report = json.loads(proc.stdout)

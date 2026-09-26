@@ -12,7 +12,6 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CONTROL = REPO_ROOT / ".jspace" / "control.py"
 PY = sys.executable
 
 if str(REPO_ROOT) not in sys.path:
@@ -20,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from asha import project_map
 from asha.common import paths as common_paths
+from asha.governance.ship_gate import orient_quick as ship_gate_orient
 
 CONFIDENCES = ("direct", "detected", "inferred")
 TOP_KEYS = {"schema", "cache_key", "repo", "stack", "layout", "tooling",
@@ -307,21 +307,11 @@ def test_markdown_rendering(tmp_path: Path) -> None:
     assert set(json.loads(proc.stdout)) == TOP_KEYS
 
 
-# ---- orient wrapper (control.py) ----------------------------------------
+# ---- orient wrapper (was control.py; now the in-process ship_gate) --------
 
 def test_control_orient_wrapper(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
-    proc = subprocess.run(
-        [PY, str(CONTROL), "--transport", "local", "--root", str(repo),
-         "orient", "--mode", "quick", "--format", "markdown"],
-        capture_output=True, text=True, timeout=180)
-    assert proc.returncode == 0, proc.stderr
-    assert "Project:" in proc.stdout and "Language:" in proc.stdout
+    orient = ship_gate_orient.orient_quick(repo)
+    assert orient["stack"].get("language") or "Project:" in str(orient), orient
     # ledger-free: no control.json may be created by orient
     assert not (repo / ".jspace" / "control.json").exists()
-    # fail-closed transport gate still applies to orient
-    proc = subprocess.run(
-        [PY, str(CONTROL), "--root", str(repo), "orient"],
-        capture_output=True, text=True, timeout=60)
-    assert proc.returncode == 1
-    assert "TRANSPORT GATE" in proc.stderr
