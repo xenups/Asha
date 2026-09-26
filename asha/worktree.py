@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import uuid
 from contextlib import suppress
 from pathlib import Path
 
@@ -48,13 +49,16 @@ class WorktreeDispatcher:
     (unless keep=True). Errors are accumulated, never silenced."""
 
     def __init__(self, repo: Path, *, keep: bool = False) -> None:
-        self.repo = Path(repo).resolve()
-        self.keep = keep
-        self.base_commit = _git(self.repo, 'rev-parse', 'HEAD')
-        self.base_tree = _git(self.repo, 'rev-parse', 'HEAD^{tree}')
-        self.root = common_paths.get_scratch_dir(self.repo.name + '-wt')
-        self.paths: dict[str, Path] = {}
-        self.cleanup_errors: list[str] = []
+            self.repo = Path(repo).resolve()
+            self.keep = keep
+            self.base_commit = _git(self.repo, 'rev-parse', 'HEAD')
+            self.base_tree = _git(self.repo, 'rev-parse', 'HEAD^{tree}')
+            # unique scratch root per dispatcher instance (run-id semantics):
+            # a repo-name-derived path collides across concurrent instances.
+            self.root = common_paths.get_scratch_dir(
+                f'{self.repo.name}-wt-{uuid.uuid4().hex[:12]}')
+            self.paths: dict[str, Path] = {}
+            self.cleanup_errors: list[str] = []
 
     def create(self, worker_id: str) -> Path:
         path = self.root / _safe_id(worker_id)
