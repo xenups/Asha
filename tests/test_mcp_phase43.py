@@ -20,6 +20,19 @@ import pytest
 import asha.mcp_server as server
 from asha import evidence
 
+from asha.common import paths as common_paths
+
+
+def _cache_dir(repo: Path, task_id: str = 'seed-task') -> Path:
+    """External orchestrator worker-evidence dir (Phase D zone)."""
+    return common_paths.get_orchestrator_dir(repo) / task_id
+
+
+def _telemetry(repo: Path) -> Path:
+    """External MCP live telemetry file (Phase D zone)."""
+    return common_paths.get_state_dir(repo) / 'mcp_live_telemetry.jsonl'
+
+
 PY = sys.executable
 _BASELINE = {
     '.gitignore': ('.jspace/\n__pycache__/\n*.pyc\n.pytest_cache/\n'
@@ -113,8 +126,7 @@ def _seed_record(repo: Path, worker_id: str,
         payload = dict(payload)
         payload['write_set'] = ['tampered.py']
     # real scheduler layout: evidence_dir = cache/<orchestrator>/<task_id>
-    cache = (repo / '.jspace' / 'cache' / 'orchestrator'
-             / 'seed-task')
+    cache = _cache_dir(repo, 'seed-task')
     cache.mkdir(parents=True, exist_ok=True)
     path = cache / (name or f'{worker_id}.json')
     path.write_text(json.dumps(payload), encoding='utf-8')
@@ -141,7 +153,7 @@ def _dispatch(repo: Path, wid: str, *, writes: list[str],
 
 
 def _events(repo: Path) -> list[dict[str, Any]]:
-    path = repo / '.jspace' / 'mcp_live_telemetry.jsonl'
+    path = _telemetry(repo)
     if not path.is_file():
         return []
     lines = path.read_text(encoding='utf-8').splitlines()
@@ -178,7 +190,7 @@ def test_client_cannot_supply_runtime_config(tmp_path) -> None:
     assert result.get('isError') is True
     assert 'unknown field' in str(result['payload'])
     # nothing executed, nothing recorded
-    cache = repo / '.jspace' / 'cache' / 'orchestrator'
+    cache = _cache_dir(repo)
     assert not cache.exists() or list(cache.rglob('*.json')) == []
 
 
@@ -299,7 +311,7 @@ def test_dispatch_invalid_inputs_structured_error(tmp_path) -> None:
         result = _call('asha_dispatch_task', arguments)
         assert result.get('isError') is True, arguments
     # no execution side effects from any rejected call
-    cache = repo / '.jspace' / 'cache' / 'orchestrator'
+    cache = _cache_dir(repo)
     assert not cache.exists() or list(cache.rglob('*.json')) == []
 
 
@@ -395,7 +407,7 @@ def test_dispatch_classifier_exception_no_execution(tmp_path,
     assert result.get('isError') is True
     assert 'fail-closed' in str(result['payload'])
     assert 'nothing executed' in str(result['payload'])
-    cache = repo / '.jspace' / 'cache' / 'orchestrator'
+    cache = _cache_dir(repo)
     assert not cache.exists() or list(cache.rglob('*.json')) == []
 
 
@@ -510,7 +522,7 @@ def test_telemetry_never_stores_prompt_or_cmd(tmp_path) -> None:
         'deps': [], 'cmd': [PY, '-c', marker],
         'prompt': secret_prompt, 'root': str(repo)})
     assert not result.get('isError'), result
-    raw = (repo / '.jspace' / 'mcp_live_telemetry.jsonl').read_text(
+    raw = _telemetry(repo).read_text(
         encoding='utf-8')
     assert secret_prompt not in raw
     assert secret_cmd not in raw
@@ -525,7 +537,7 @@ def test_telemetry_lines_always_valid_json(tmp_path) -> None:
     repo = _make_repo(tmp_path)
     for index in range(4):
         _call('asha_status', {'root': str(repo)}, request_id=index)
-    path = repo / '.jspace' / 'mcp_live_telemetry.jsonl'
+    path = _telemetry(repo)
     lines = path.read_text(encoding='utf-8').splitlines()
     assert len(lines) == 4
     ids = [json.loads(line)['request_id'] for line in lines]
@@ -541,7 +553,7 @@ def test_telemetry_failure_never_changes_authorization(tmp_path,
     _seed_record(repo, 'prior', reads=['other.py'], writes=['other.py'])
     # make the telemetry sink unopenable: a DIRECTORY occupies the
     # JSONL name (os.open on a dir fails -> swallowed fail-safe)
-    target = repo / '.jspace' / 'mcp_live_telemetry.jsonl'
+    target = _telemetry(repo)
     target.mkdir(parents=True, exist_ok=True)
     result = _dispatch(repo, 'tf', writes=['probe_tf.py'])
     payload = _payload(result)          # call itself unaffected
