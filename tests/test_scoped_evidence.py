@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 from asha import check_runner, evidence, replay, scoping
+from asha.common import paths as common_paths
 from asha.scheduler import GovernedScheduler, verify_worker_evidence
 from asha.types import OrchestratorError
 
@@ -570,8 +571,8 @@ def _scheduler_run(repo: Path, worker: dict, task_id: str,
     # evidence identity binds to THIS worktree's tree; tests that
     # re-verify must use it, not the untouched main repository
     sched._last_worktree = path  # type: ignore[attr-defined]
-    evidence_path = (repo / '.jspace' / 'cache' / 'orchestrator'
-                     / task_id / 'worker_a.json')
+    evidence_path = (common_paths.get_orchestrator_dir(repo)
+                     / _safe_id(task_id) / 'worker_a.json')
     payload = None
     if evidence_path.is_file():
         payload = json.loads(evidence_path.read_text(encoding='utf-8'))
