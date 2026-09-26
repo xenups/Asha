@@ -291,11 +291,15 @@ def _normalize(outcome: dict) -> dict:
     governance, and is dropped before comparison.
     """
     scheduled = _SCOPE_SCHEDULED.get(outcome["scope"], set())
-    reasons = [
-        r for r in outcome["reasons"]
-        # reasons look like "skipped:lint" / "failed:tests"
-        if r.split(":", 1)[1] in scheduled or r.startswith("failed:")
-    ]
+    # check-name spelling is plumbing (legacy: pytest/ruff; modular
+    # evaluator: tests/lint) — normalize to the contract vocabulary.
+    _NAME = {"pytest": "tests", "ruff": "lint", "mypy": "mypy"}
+    reasons = []
+    for r in outcome["reasons"]:
+        kind, _, name = r.partition(":")
+        norm = _NAME.get(name, name)
+        if kind == "failed" or norm in scheduled:
+            reasons.append(f"{kind}:{norm}")
     return {**{k: outcome[k] for k in _CONTRACT_KEYS if k != "reasons"},
             "reasons": sorted(reasons)}
 
