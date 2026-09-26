@@ -103,7 +103,7 @@ def default_base(root: Path) -> str | None:
     None (unresolved). Kept as a thin adapter for existing callers;
     returns None when resolution is unresolved.
     """
-    from .scoping.base_resolver import resolve_base
+    from .base_resolver import resolve_base
 
     resolved = resolve_base(root)
     return resolved.ref
