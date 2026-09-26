@@ -60,7 +60,7 @@ class CIAdapter(ExecutionAdapter):
             parsed = self._parse_junit(junit)
             if parsed is None:
                 return self._unknown(manifest, "junit malformed")
-            collected, passed, failed = parsed
+            collected, _passed, failed = parsed
             test_collection = "COLLECTED" if collected else "NO_TESTS_COLLECTED"
             test_execution = "PASSED" if failed == 0 and collected else (
                 "FAILED" if failed > 0 else "NOT_RUN")
