@@ -276,7 +276,14 @@ class TestCIAdapter:
             "ASHA_CI_REPORT": str(base)})
         a = CIAdapter().execute(manifest)
         b = CIAdapter().execute(manifest)
-        assert a == b
+        # SemanticFacts is a Phase-B locked plain class (identity ==);
+        # compare every field for deterministic equivalence.
+        assert (a.run_id, a.test_collection, a.test_execution,
+                a.failed_test_count, a.lint_result,
+                a.lint_violations_count, a.raw_logs_ref) == (
+            b.run_id, b.test_collection, b.test_execution,
+            b.failed_test_count, b.lint_result,
+            b.lint_violations_count, b.raw_logs_ref)
 
 
 class TestAdapterGateEvaluatorIntegration:

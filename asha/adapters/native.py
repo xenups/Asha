@@ -81,12 +81,13 @@ class NativeAdapter(ExecutionAdapter):
                 continue
 
             exit_codes[key] = rc
-            if _TEST_RUNNER_RE.search(" ".join(command)):
+            exe = os.path.basename(command[0]) if command else ""
+            if _TEST_RUNNER_RE.search(exe):
                 test_collection, test_execution = self._normalize_test(
                     rc, output)
                 failed_test_count = self._failed_count(output)
                 test_log = output
-            elif _LINT_RUNNER_RE.search(" ".join(command)):
+            elif _LINT_RUNNER_RE.search(exe):
                 lint_result = "CLEAN" if rc == 0 else "VIOLATIONS"
                 lint_violations_count = self._lint_count(output)
                 lint_log = output
