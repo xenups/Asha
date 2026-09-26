@@ -53,7 +53,7 @@ def test_idle_shows_clean_no_spawn(tmp_path: Path) -> None:
     assert journal is None                    # no journal: clean state
     html = watcher.watch_stepper(root, False)
     assert 'IDLE_CLEAN' in html
-    assert 'همه‌چیز مرتب و همگام است' in html
+    assert 'All systems synchronized' in html
     # modified repo: journal with change_detected only
     _journal(root, ['change_detected'])
     html2 = watcher.watch_stepper(root, False)
@@ -74,8 +74,8 @@ def test_active_progression_steps(tmp_path: Path) -> None:
     html = render_stepper_html(state, meta)
     # step 1+2 completed, step 3 active -- asserted via the stepper's
     # own deterministic classes (no independent state math here)
-    assert html.count('class="step done"') == 2
-    assert html.count('class="step current"') == 1
+    assert html.count('class="node done"') == 2
+    assert html.count('class="node current"') == 1
     assert 'Execution' in html
 
 
@@ -114,6 +114,7 @@ def test_explicit_failure_renders(tmp_path: Path) -> None:
     html = render_stepper_html(state, meta)
     assert 'FAILED' in html
     assert 'explicit failure fact recorded' in html
+    # recorded failure row carries the fact (not inferred)
     # failure comes from the recorded event, not from process state
     assert 'INTERRUPTED' not in html
 
@@ -130,7 +131,7 @@ def test_terminal_sealing(tmp_path: Path) -> None:
     state, meta = telemetry.project_path(journal)
     assert state == 'SEALED'
     html = render_stepper_html(state, meta)
-    assert html.count('class="step done"') == 5
+    assert html.count('class="node done"') == 5
     # recorded evidence fields from the sealed event
     assert 'deadbeef' in html
     assert 'ev-1' in html
@@ -164,10 +165,10 @@ def test_watch_html_integration_sealed_journal(tmp_path: Path) -> None:
     watcher._write_watch_html(root, report, snap, {},
                               watcher.watch_stepper(root, False))
     html = report.read_text(encoding='utf-8')
-    assert html.count('class="step done"') == 5
+    assert html.count('class="node done"') == 5
     assert 'SEALED' in html
-    assert 'مهروموم' in html
-    assert 'Эvidence SHA' in html or 'Evidence SHA' in html
+    assert 'Evidence sealed' in html
+    assert 'Evidence SHA' in html
     # no second stepper block (single injection)
     assert html.count('<!-- ASHA-STEPPER -->') == 1
 
@@ -183,8 +184,8 @@ def test_watch_stepper_current_vs_last_sealed(tmp_path: Path) -> None:
     html = watcher.watch_stepper(root, False)
     # projector sees the newest run's change_detected -> MODIFIED_PREVIEW
     assert 'MODIFIED_PREVIEW' in html
-    assert 'not_reached' in html
-    assert '✓' not in html        # never a sealed presentation for current
+    assert 'node not_reached' in html
+    assert 'node done' not in html
 
 
 def test_governance_trio_frozen(tmp_path: Path) -> None:
