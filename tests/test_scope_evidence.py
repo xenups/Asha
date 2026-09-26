@@ -13,11 +13,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CONTROL = REPO_ROOT / ".jspace" / "control.py"
 PY = sys.executable
 
 from asha.common import paths as common_paths
+from asha.governance.ship_gate import gate_ship
 
 
 def _evidence_file(repo: Path) -> Path:
@@ -92,45 +94,18 @@ def _resolve(repo: Path) -> dict:
     return scope_resolver.resolve(repo, base="HEAD~1")
 
 
-def _control(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [PY, str(CONTROL), "--transport", "local", "--root", str(repo), *args],
-        cwd=repo, capture_output=True, text=True, timeout=300,
-    )
-
-
 def _ready_ledger(repo: Path) -> None:
-    proc = _control(repo, "init", "--goal", "g", "--next", "n")
-    assert proc.returncode == 0, proc.stderr
-    proc = _control(repo, "read", "SKILL.md", "modules/self-monitoring.md")
-    assert proc.returncode == 0, proc.stderr
+    # legacy control.py init/read ledger eliminated (H.1); the ship gate
+    # itself is now invoked in-process via asha.governance.ship_gate.
+    return None
+
+
+def _ship(repo: Path) -> dict:
+    """Run the ship gate in-process (extracted control.py surface)."""
+    return gate_ship(repo)
 
 
 # ---- STEP 0 contract -----------------------------------------------------
-
-def test_control_questions_model() -> None:
-    spec = importlib.util.spec_from_file_location("control_model", CONTROL)
-    assert spec is not None
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    assert module.default_state(Path("."), "medium")["questions"] == {}
-    state = module.default_state(Path("."), "medium")
-    state["goal"] = "g"
-    state["next"] = "n"
-    state["transport"] = "local"
-    state["questions"]["1"] = {"question": "q", "checkpoint": 1,
-                               "closed": False}
-    module.validate(state)
-    legacy = dict(state)
-    legacy["questions"] = [{"question": "q", "checkpoint": 1, "closed": False}]
-    try:
-        module.validate(legacy)
-    except module.ControlError:
-        pass
-    else:
-        raise AssertionError("legacy list shape must be rejected")
-
 
 # ---- scope resolution ----------------------------------------------------
 
@@ -217,7 +192,7 @@ def test_rename_and_deletion_handling(tmp_path: Path) -> None:
 def test_evidence_json_integrity(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     _ready_ledger(repo)
-    proc = _control(repo, "check", "--stage", "ship")
+    payload = _ship(repo)
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert "GATE SHIP: PASS" in proc.stdout
 
@@ -252,9 +227,8 @@ def test_ship_gate_refusal_on_failure(tmp_path: Path) -> None:
     _ready_ledger(repo)
     _write(repo, "bad.py", "import os\n")  # ruff F401
     _commit_all(repo, "introduce lint failure")
-    proc = _control(repo, "check", "--stage", "ship")
-    assert proc.returncode == 1, "failed check must refuse ship"
-    assert "GATE SHIP: FAIL" in proc.stderr
+    with pytest.raises(evidence.EvidenceError):
+        _ship(repo)
 
     payload = json.loads(
         _evidence_file(repo).read_text(encoding="utf-8"))
@@ -269,18 +243,16 @@ def test_ship_gate_refusal_on_failure(tmp_path: Path) -> None:
 def test_evidence_binds_to_exact_tree(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     _ready_ledger(repo)
-    proc = _control(repo, "check", "--stage", "ship")
-    assert proc.returncode == 0, proc.stderr
+    payload = _ship(repo)
     artifact = _evidence_file(repo)
     before = artifact.read_bytes()
 
     # Dirty a tracked file WITHOUT committing: tree mismatch -> refuse.
     _write(repo, "tests/test_ok.py",
            "def test_ok():\n    assert False  # dirty\n")
-    proc = _control(repo, "check", "--stage", "ship")
-    assert proc.returncode == 1, "dirty tree must fail closed"
-    assert "SHIP GATE REFUSED" in proc.stderr
-    assert "dirty" in proc.stderr
+    with pytest.raises(evidence.EvidenceError) as exc:
+        _ship(repo)
+    assert "dirty" in str(exc.value)
     assert artifact.read_bytes() == before, (
         "a refused run must never overwrite sealed evidence")
 
@@ -290,8 +262,8 @@ def test_evidence_tamper_detection(tmp_path: Path) -> None:
     _ready_ledger(repo)
     _write(repo, "bad.py", "import os\n")  # failing run -> authorized false
     _commit_all(repo, "failing baseline")
-    proc = _control(repo, "check", "--stage", "ship")
-    assert proc.returncode == 1
+    with pytest.raises(evidence.EvidenceError):
+        _ship(repo)
     artifact = _evidence_file(repo)
     payload = json.loads(artifact.read_text(encoding="utf-8"))
     assert payload["authorized_to_ship"] is False
@@ -300,7 +272,6 @@ def test_evidence_tamper_detection(tmp_path: Path) -> None:
     payload["authorized_to_ship"] = True
     artifact.write_text(json.dumps(payload, indent=2, sort_keys=True),
                         encoding="utf-8")
-    proc = _control(repo, "check", "--stage", "ship")
-    assert proc.returncode == 1, "tampered evidence must be rejected"
-    assert "SHIP GATE REFUSED" in proc.stderr
-    assert "evidence_sha256 mismatch" in proc.stderr
+    with pytest.raises(evidence.EvidenceError) as exc:
+        _ship(repo)
+    assert "evidence_sha256" in str(exc.value) or "mismatch" in str(exc.value)
