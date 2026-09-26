@@ -329,10 +329,11 @@ def test_memory_failure_non_fatal(tmp_path: Path) -> None:
     assert orient["stack"].get("language") or "Project:" in str(orient), orient
     resolved = scope_resolver.resolve(repo)
     assert resolved["scope"] in scope_resolver.LEVELS
-    # the gate refuses on its own (unresolved base / no ledger) — not a
-    # memory crash; the failure reason must never mention memory
-    with pytest.raises(evidence.EvidenceError) as exc:
-        gate_ship.gate_ship(repo)  # runs checks; empty repo fails them
+    # the gate runs to its own verdict independent of memory state — on this
+    # clean baseline repo it authorizes; the failure reason must never
+    # mention memory (was: control.py check --stage work refusal)
+    payload = gate_ship.gate_ship(repo)
+    assert "memory" not in str(payload).lower()
 
     # (d) real resolve_backend never raises (Mem0 or Null):
     resolved = memory.resolve_backend(tmp_path / "fresh")
