@@ -33,10 +33,6 @@ def gate_ship(root: Path, *, no_execute: bool = False) -> dict:
     else:
         checks = check_runner.run(root, resolved)
     ok = all(c["status"] in ("passed", "skipped") for c in checks)
-    if not ok:
-        raise evidence.EvidenceError(
-            "SHIP GATE REFUSED: failing checks "
-            + ", ".join(c["name"] for c in checks if c["status"] != "passed"))
     sealed = evidence.seal({
         "schema": evidence.SCHEMA,
         "stage": "ship",
@@ -47,8 +43,12 @@ def gate_ship(root: Path, *, no_execute: bool = False) -> dict:
         "checks": checks,
         "authorized_to_ship": ok,
     })
-    evidence.write(root, sealed)
+    evidence.write(root, sealed)  # persist BEFORE refusal, as control.py did
     evidence.verify(root)  # roundtrip self-check
+    if not ok:
+        raise evidence.EvidenceError(
+            "SHIP GATE REFUSED: failing checks "
+            + ", ".join(c["name"] for c in checks if c["status"] != "passed"))
     from asha.common import paths as common_paths
     ev_file = common_paths.get_evidence_dir(root) / "evidence.json"
     return json.loads(ev_file.read_text(encoding="utf-8"))
