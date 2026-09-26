@@ -332,7 +332,7 @@ def test_memory_failure_non_fatal(tmp_path: Path) -> None:
     # the gate refuses on its own (unresolved base / no ledger) — not a
     # memory crash; the failure reason must never mention memory
     with pytest.raises(evidence.EvidenceError) as exc:
-        gate_ship.gate_ship(repo, no_execute=True)
+        gate_ship.gate_ship(repo)  # runs checks; empty repo fails them
 
     # (d) real resolve_backend never raises (Mem0 or Null):
     resolved = memory.resolve_backend(tmp_path / "fresh")
