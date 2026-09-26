@@ -98,11 +98,12 @@ class _GitRepo:
     """Small scratch git repo builder with an anchor base commit."""
 
     def __init__(self, root: Path) -> None:
+        if not root.exists():
+            root.mkdir()
+        _init_repo(root, "r")
         self.root = root
-        self.root.mkdir()
 
     def base_commit(self) -> "_GitRepo":
-        _init_repo(self.root, "r")
         _write(self.root, "mod_a.py", _MODULE_ONE)
         _write(self.root, "mod_b.py", _MODULE_TWO)
         _commit(self.root, "base")
