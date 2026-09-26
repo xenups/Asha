@@ -38,12 +38,11 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from asha import check_runner, evidence, scoping, scope_resolver  # noqa: E402
-from asha.base_resolver import resolve_base  # noqa: E402
-from asha.adapters.native import NativeAdapter  # noqa: E402
-from asha.common import paths as common_paths  # noqa: E402
-from asha.contracts.execution import ExecutionManifest, SemanticFacts  # noqa: E402
-from asha.governance.evaluator import evaluate  # noqa: E402
+from asha import check_runner, evidence, scope_resolver, scoping
+from asha.adapters.native import NativeAdapter
+from asha.base_resolver import resolve_base
+from asha.contracts.execution import ExecutionManifest
+from asha.governance.evaluator import evaluate
 
 PY = sys.executable
 
