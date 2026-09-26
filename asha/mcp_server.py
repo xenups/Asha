@@ -179,7 +179,7 @@ def _emit_telemetry(repo: Path, tool: str, request_id: Any,
         return
 
 
-        ROOT_HELP = "Path to the git repository (default: current directory)."
+ROOT_HELP = "Path to the git repository (default: current directory)."
 
 ASHA_STATUS_SPEC: dict[str, Any] = {
     "name": "asha_status",
