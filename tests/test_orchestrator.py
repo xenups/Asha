@@ -647,7 +647,7 @@ def test_control_cli_delegation_and_bad_spec(tmp_path: Path) -> None:
     proc = subprocess.run(
         [PY, str(ORCHESTRATOR), "--root", str(repo), "run",
          "--spec", str(tmp_path / "missing.json")],
-        cwd=repo, capture_output=True, text=True, timeout=120)
+        cwd=repo, capture_output=True, text=True, timeout=120, env=env)
     assert proc.returncode == 1
     assert "ORCHESTRATOR ERROR" in proc.stderr
     assert "Traceback" not in proc.stderr
