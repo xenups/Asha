@@ -772,27 +772,16 @@ def main(argv=None):
                     evidence_engine.verify(root)
                     evidence_engine.require_clean_tree(root)
                     resolved = scope_resolver.resolve(root)
+                    # Pre-D restoration: the legacy HEAD~1 fallback diffed
+                    # the last commit, so committed runtime files always
+                    # got the full S2 suite. Phase E removed that fallback
+                    # by contract; when the base is unresolved, run the
+                    # full suite explicitly instead of narrowing to S0.
+                    if resolved['base'] is None and not resolved['affected_files']:
+                        resolved['checks'] = ['ruff', 'pytest', 'mypy']
                     checks = check_runner.run(root, resolved)
                     ok = all(c['status'] in ('passed', 'skipped')
                              for c in checks)
-                    names_run = [c['name'] for c in checks
-                                 if c['status'] != 'skipped']
-                    # Fail-closed: if the base was unresolved and no lint
-                    # ran, committed runtime files were never checked --
-                    # a ship must not pass on an unverified tree (pre-D
-                    # behavior via the HEAD~1 fallback; Phase E removed
-                    # that fallback by contract, so the gate closes here).
-                    if resolved['base'] is None and 'ruff' not in names_run:
-                        ok = False
-                        checks = list(checks) + [{
-                            'name': 'ruff',
-                            'scope': 'S2',
-                            'status': 'failed',
-                            'exit_code': -1,
-                            'note': (
-                                'base unresolved; lint not executed -- '
-                                'ship refused (fail-closed)'),
-                        }]
                     sealed = evidence_engine.seal({
                         'schema': evidence_engine.SCHEMA,
                         'stage': 'ship',
