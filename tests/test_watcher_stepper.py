@@ -12,6 +12,9 @@ from pathlib import Path
 from asha import telemetry, watcher
 from asha.presentation import render_stepper_html
 
+from asha.common import paths as common_paths
+
+
 
 def _repo(tmp_path: Path) -> Path:
     root = tmp_path / 'repo'
@@ -161,7 +164,7 @@ def test_watch_html_integration_sealed_journal(tmp_path: Path) -> None:
                     'sealing_started', 'sealed'], run_id='r-full')
     # authoritative sealed evidence (as the gate writes it): the drawer
     # must consume THIS, not the ephemeral journal metadata
-    gate = root / '.jspace' / 'evidence.json'
+    gate = common_paths.get_evidence_dir(root) / 'evidence.json'
     gate.parent.mkdir(parents=True, exist_ok=True)
     gate.write_text(_json.dumps({
         'commit': 'c' * 40, 'tree_hash': 'd' * 40,
@@ -170,7 +173,7 @@ def test_watch_html_integration_sealed_journal(tmp_path: Path) -> None:
     from asha import git_context
     snap = git_context.snapshot(root)
     sealed = watcher.read_last_sealed(root)
-    report = root / '.jspace' / 'reports' / 'watch.html'
+    report = common_paths.get_state_dir(root) / 'reports' / 'watch.html'
     watcher._write_watch_html(root, report, snap, sealed,
                               watcher.watch_stepper(root, False))
     html = report.read_text(encoding='utf-8')

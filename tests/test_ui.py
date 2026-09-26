@@ -211,7 +211,7 @@ def test_inspect_writes_default_path_offline(tmp_path: Path,
     captured = capsys.readouterr()
     assert code == cli.EXIT_OK
     written = Path(captured.out.strip())
-    expected = tmp_path / '.jspace' / 'reports' / 'inspector.html'
+    expected = common_paths.get_state_dir(tmp_path) / 'reports' / 'inspector.html'
     assert written.is_file()            # relative to the chdir'd cwd
     assert expected.is_file()           # default location honored
     text = expected.read_text(encoding='utf-8')

@@ -20,6 +20,17 @@ import pytest
 
 from asha import cli, ui, watcher
 
+from asha.common import paths as common_paths
+
+
+def _evidence_file(root: Path) -> Path:
+    return common_paths.get_evidence_dir(root) / 'evidence.json'
+
+
+def _orch_file(root: Path, task: str, wid: str) -> Path:
+    return common_paths.get_orchestrator_dir(root) / task / f'{wid}.json'
+
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -90,7 +101,7 @@ def test_ignored_paths_produce_no_logical_change(tmp_path: Path) -> None:
     assert after == before                          # zero logical change
     loop = watcher.WatchLoop(root, debounce_ms=400, scan_ms=500)
     assert loop.tick(0.6) is False
-    (root / '.jspace' / 'evidence.json').write_text('{}', encoding='utf-8')
+    _evidence_file(root).write_text('{}', encoding='utf-8')
     assert loop.tick(1.1) is False                  # ignored: not observed
 
 
@@ -127,12 +138,12 @@ def test_inprocess_watch_leaves_no_threads(tmp_path: Path,
 def test_observation_never_mutates_authoritative_evidence(
         tmp_path: Path) -> None:
     root = _repo(tmp_path)
-    evidence = root / '.jspace' / 'evidence.json'
+    evidence = _evidence_file(root)
     evidence.parent.mkdir(parents=True, exist_ok=True)
     sentinel = json.dumps({'schema': 1, 'commit': 'abc',
                            'evidence_sha256': 'deadbeef'})
     evidence.write_text(sentinel, encoding='utf-8')
-    orch = root / '.jspace' / 'cache' / 'orchestrator' / 'task1'
+    orch = _orch_file(root, 'task1', 'wid1').parent
     orch.mkdir(parents=True)
     run_ev = json.dumps({'validation_mode': 'COMPLETE',
                          'evidence_sha256': 'cafebabe'})
@@ -159,7 +170,7 @@ def test_watch_report_writes_only_to_report_path(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture) -> None:
     root = _repo(tmp_path)
-    evidence = root / '.jspace' / 'evidence.json'
+    evidence = _evidence_file(root)
     evidence.parent.mkdir(parents=True, exist_ok=True)
     evidence.write_text('{"schema": 1}', encoding='utf-8')
     before = evidence.read_bytes()
