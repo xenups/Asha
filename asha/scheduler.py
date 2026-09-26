@@ -29,6 +29,7 @@ from . import (
     worker_graph,
 )
 from .classifier import classify_task, governance_profile
+from .common import paths as common_paths
 from .conflict import ConflictManager, covered, scope_status
 from .integrator import IntegrationResult, TreeIntegrator
 from .router import RuntimeMode, route
@@ -42,7 +43,6 @@ from .types import (
     OrchestratorError,
 )
 from .worktree import WorktreeDispatcher, _commit_all, _git, _safe_id
-from .common import paths as common_paths
 
 _SHA_RE = re.compile(r'[0-9a-f]{40}')
 

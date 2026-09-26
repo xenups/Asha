@@ -51,10 +51,11 @@ import json
 import re
 import subprocess
 import uuid
-from .common import paths as common_paths
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from .common import paths as common_paths
 
 SCHEMA = 1
 CATEGORIES = ('repository_fact', 'workflow_preference', 'historical_lesson',

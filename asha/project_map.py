@@ -47,8 +47,9 @@ import os
 import re
 import subprocess
 import tempfile
-from .common import paths as common_paths
 from pathlib import Path
+
+from .common import paths as common_paths
 
 try:
     from . import scope_resolver  # reuse: _DYNAMIC_RE marker set + PYTHON_SKIP_DIRS

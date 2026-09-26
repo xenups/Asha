@@ -25,7 +25,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from asha import evidence, telemetry  # noqa: E402
+from asha import evidence, telemetry
 
 TEST_REPO_NAME = "iso-repo"
 

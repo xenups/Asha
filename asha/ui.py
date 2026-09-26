@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import copy
 import html
-from .common import paths as common_paths
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
+
+from .common import paths as common_paths
 
 # Fixed presentation labels for known fallback reasons. Unmapped strings
 # fall back verbatim to the raw recorded value; missing -> Unknown.

@@ -52,6 +52,7 @@ from . import dep_index, evidence, graph_state, worker_graph
 from .ast_indexer import ImportFact, ModuleIndex, index_module
 from .classifier import classify_task, governance_profile
 from .codegraph import build_graph, closure, sym_node
+from .common import paths as common_paths
 from .conflict import ConflictManager, scope_status
 from .context_slicer import slice_context
 from .router import RuntimeMode, route
@@ -59,7 +60,6 @@ from .scheduler import GovernedScheduler, validate_workers
 from .types import OrchestratorError
 from .worktree import _git
 
-from .common import paths as common_paths
 SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18",
                                "2025-03-26", "2024-11-05"]
 DEFAULT_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]

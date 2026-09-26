@@ -7,9 +7,9 @@ import subprocess
 from contextlib import suppress
 from pathlib import Path
 
+from .common import paths as common_paths
 from .types import OrchestratorError
 
-from .common import paths as common_paths
 # ---------------------------------------------------------------------------
 # 6.3 WorktreeDispatcher -- git worktree lifecycle for worker isolation.
 # ---------------------------------------------------------------------------
