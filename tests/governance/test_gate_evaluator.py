@@ -194,8 +194,8 @@ class TestDeterminism:
     def test_result_type_is_frozen(self) -> None:
         v = evaluate(_facts())
         assert isinstance(v, EvaluationVerdict)
-        with pytest.raises(Exception):
-            v.verdict = VERDICT_FAIL  # frozen
+        with pytest.raises(AttributeError):
+            v.verdict = VERDICT_FAIL  # frozen (FrozenInstanceError)
 
 
 # --------------------------------------------------------------------------
