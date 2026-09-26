@@ -123,7 +123,9 @@ def read_last_sealed(root: Path) -> dict[str, Any]:
         data = json.loads(gate.read_text(encoding='utf-8'))
         if isinstance(data, dict):
             for key in ('commit', 'tree_hash', 'scope', 'evidence_sha256',
-                        'stage', 'observed_at'):
+                        'stage', 'observed_at', 'validation_mode',
+                        'decision', 'fallback_reason', 'worker_id',
+                        'task_id'):
                 if data.get(key) is not None:
                     sealed[key] = data[key]
             sealed['gate_source'] = '.jspace/evidence.json'
@@ -273,13 +275,18 @@ def journal_terminal_event(journal: Path | None) -> bool:
 def watch_stepper(root: Path, interrupted: bool) -> str:
     """Project the latest recorded journal (explicit interruption fact
     only) into the human stepper HTML. Falls back to the clean state
-    when no journal exists yet -- presentation of recorded facts only."""
+    when no journal exists yet -- presentation of recorded facts only.
+    The Technical Audit drawer consumes the authoritative sealed
+    evidence payload (meta['last_sealed_run']) so it never renders
+    transient live-journal metadata."""
     journal = latest_journal(root)
-    if journal is None:
-        from . import presentation
-        return presentation.render_stepper_html('IDLE_CLEAN', {})
-    state, meta = telemetry.project_path(journal, interrupted=interrupted)
     from . import presentation
+    if journal is None:
+        return presentation.render_stepper_html(
+            'IDLE_CLEAN',
+            {'last_sealed_run': read_last_sealed(root)})
+    state, meta = telemetry.project_path(journal, interrupted=interrupted)
+    meta['last_sealed_run'] = read_last_sealed(root)
     return presentation.render_stepper_html(state, meta)
 
 

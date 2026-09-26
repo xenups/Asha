@@ -166,8 +166,10 @@ def test_sealed_displays_recorded_evidence() -> None:
     state, meta = project(text)
     assert state == 'SEALED'
     html = render_stepper_html(state, meta)
+    # recorded evidence hash from the journal's sealed event is shown
+    # in the run summary (drawer consumes the authoritative sealed
+    # payload separately)
     assert 'abc123' in html
-    assert 'ev-9' in html
 
 
 def test_scope_info_comes_from_scope_event_only() -> None:
@@ -204,7 +206,10 @@ def test_missing_payload_fields_not_recorded() -> None:
         '"event_type":"sealed","payload":{}}\n')
     state, meta = project(text)
     html = render_stepper_html(state, meta)
-    assert 'Evidence SHA' in html
+    # run summary shows Evidence from the recorded sealed event; the
+    # audit drawer (authoritative payload) says no previous sealed run
+    drawer = html.split('<details class="tech">', 1)[1]
+    assert 'No previous sealed run recorded.' in drawer
     assert 'Not recorded' in html            # no fabrication
 
 
@@ -344,6 +349,68 @@ def test_determinism_same_input_same_bytes() -> None:
     # dict key order must not matter
     flipped = dict(reversed(list(meta.items())))
     assert render_stepper_html('FAILED', flipped) == h1
+
+
+def test_audit_drawer_uses_sealed_payload_not_journal() -> None:
+    # journal metadata only (no sealed payload): drawer must say
+    # 'no previous sealed run' -- never 'Not recorded' for audit rows
+    h = render_stepper_html('EXECUTING',
+                            {'run_id': 'live-1',
+                             'last_event': 'execution_started'})
+    drawer = h.split('<details class="tech">', 1)[1]
+    assert 'No previous sealed run recorded.' in drawer
+    assert 'Not recorded' not in drawer
+
+
+def test_audit_drawer_real_fields_middle_truncated() -> None:
+    sealed = {
+        'commit': 'ab' * 20, 'tree_hash': 'cd' * 20,
+        'evidence_sha256': 'ef' * 32, 'scope': 'COMPLETE',
+        'validation_mode': 'COMPLETE', 'decision': 'PASS',
+        'fallback_reason': 'UNKNOWN_CLASSIFICATION',
+        'worker_id': 'worker-7', 'task_id': 'task-42',
+        'observed_at': '2026-09-26T11:00:00Z',
+    }
+    h = render_stepper_html('SEALED', {'last_sealed_run': sealed})
+    drawer = h.split('<details class="tech">', 1)[1]
+    for field, value in (('Commit SHA', 'ab' * 20),
+                         ('Tree Hash', 'cd' * 20),
+                         ('Evidence SHA-256', 'ef' * 32),
+                         ('Scope Mode', 'COMPLETE'),
+                         ('Validation Mode', 'COMPLETE'),
+                         ('Validation Result', 'PASS'),
+                         ('Fallback Reason', 'UNKNOWN_CLASSIFICATION'),
+                         ('Worker ID', 'worker-7'),
+                         ('Task ID', 'task-42'),
+                         ('Sealed Timestamp', '2026-09-26T11:00:00Z')):
+        assert field in drawer, field
+    # long hashes middle-truncated: head + ellipsis + tail, never full
+    assert 'abababababababababababababababababababab' not in drawer
+    assert 'ababababab\u2026abab' in drawer
+    # duplicate: full hash never leaked in the drawer
+    assert drawer.count('ab' * 20) == 0
+    # non-hash values must NOT be truncated
+    assert 'UNKNOWN_CLASSIFICATION' in drawer
+
+
+def test_audit_drawer_collapsed_by_default() -> None:
+    h = render_stepper_html('SEALED', {
+        'last_sealed_run': {'commit': 'x', 'scope': 'S3'}})
+    assert '<details class="tech">' in h
+    assert '<details class="tech" open>' not in h
+    h2 = render_stepper_html('IDLE_CLEAN', {})
+    assert '<details class="tech">' in h2
+    assert '<details class="tech" open>' not in h2
+
+
+def test_audit_drawer_mono_values() -> None:
+    h = render_stepper_html('SEALED', {
+        'last_sealed_run': {'commit': 'ab' * 20, 'worker_id': 'w-1'}})
+    # CSS whitespace-insensitive check for the drawer dd rule
+    import re as _re
+    css = _re.sub(r'\s+', ' ', h)
+    assert ('font-family: ui-monospace, SFMono-Regular, Menlo, Monaco,'
+            ' Consolas, monospace; font-size: 0.82rem;') in css
 
 
 def test_watch_progression_event_facts() -> None:

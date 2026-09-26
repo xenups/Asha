@@ -132,9 +132,8 @@ def test_terminal_sealing(tmp_path: Path) -> None:
     assert state == 'SEALED'
     html = render_stepper_html(state, meta)
     assert html.count('class="node done"') == 5
-    # recorded evidence fields from the sealed event
+    # recorded evidence field from the sealed event
     assert 'deadbeef' in html
-    assert 'ev-1' in html
 
 
 # ------------------------------------------------------------ Test 6
@@ -155,20 +154,33 @@ def test_watch_html_integration_sealed_journal(tmp_path: Path) -> None:
     """The full watcher UI path: journal written by the real authority
     (via EventJournalWriter, same call the CLI hook makes) renders as a
     completed stepper in watch.html through the watcher helpers."""
+    import json as _json
     root = _repo(tmp_path)
     _journal(root, ['change_detected', 'scope_assessed',
                     'execution_started', 'validation_started',
                     'sealing_started', 'sealed'], run_id='r-full')
+    # authoritative sealed evidence (as the gate writes it): the drawer
+    # must consume THIS, not the ephemeral journal metadata
+    gate = root / '.jspace' / 'evidence.json'
+    gate.parent.mkdir(parents=True, exist_ok=True)
+    gate.write_text(_json.dumps({
+        'commit': 'c' * 40, 'tree_hash': 'd' * 40,
+        'evidence_sha256': 'e' * 64, 'scope': 'S3',
+        'observed_at': '2026-09-26T11:00:00Z'}))
     from asha import git_context
     snap = git_context.snapshot(root)
+    sealed = watcher.read_last_sealed(root)
     report = root / '.jspace' / 'reports' / 'watch.html'
-    watcher._write_watch_html(root, report, snap, {},
+    watcher._write_watch_html(root, report, snap, sealed,
                               watcher.watch_stepper(root, False))
     html = report.read_text(encoding='utf-8')
     assert html.count('class="node done"') == 5
     assert 'SEALED' in html
     assert 'Evidence sealed' in html
-    assert 'Evidence SHA' in html
+    # drawer shows the authoritative sealed evidence (hashes only)
+    assert 'Evidence SHA-256' in html
+    assert 'Tree Hash' in html
+    assert ('c' * 10) in html        # commit, middle-truncated
     # no second stepper block (single injection)
     assert html.count('<!-- ASHA-STEPPER -->') == 1
 

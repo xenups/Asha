@@ -223,7 +223,7 @@ def _run_summary(state: str, meta: dict[str, Any]) -> str:
         p = sealed.get('payload', {})
         rows.append(('Validation', _fmt(
             p.get('validation_result') or 'PASS')))
-        ev = (p.get('evidence_id') or p.get('evidence_sha256')
+        ev = (p.get('evidence_sha256') or p.get('evidence_id')
               or None)
         rows.append(('Evidence',
                      _fmt_sha(ev) if ev else 'SEALED'))
@@ -238,33 +238,43 @@ def _run_summary(state: str, meta: dict[str, Any]) -> str:
 
 
 def _tech_drawer(state: str, meta: dict[str, Any]) -> str:
-    """Collapsible Technical Audit & Sealed Evidence drawer."""
-    events = meta.get('events') or []
-    last_ev = events[-1] if events else None
-    rows: list[tuple[str, str]] = [
-        ('Run ID', _fmt(meta.get('run_id'))),
-        ('Last event', _fmt(meta.get('last_event'))),
-        ('Event ID', _fmt(last_ev.get('event_id') if last_ev else None)),
-        ('Timestamp', _fmt(last_ev.get('timestamp')
-                           if last_ev else None)),
+    """Collapsible Technical Audit & Sealed Evidence drawer.
+
+    The drawer consumes the AUTHORITATIVE sealed evidence payload
+    (``meta['last_sealed_run']`` -- what the watcher read from
+    .jspace/evidence.json via ``read_last_sealed``), never the
+    ephemeral live-journal metadata. If no sealed run exists it shows
+    a single clear message. Collapsed by default.
+    """
+    sealed = meta.get('last_sealed_run')
+    if not sealed:
+        return ('<details class="tech">'
+                '<summary>Technical Audit &amp; Sealed Evidence</summary>'
+                '<p class="nosealed">No previous sealed run recorded.'
+                '</p></details>')
+    # explicit field map; only fields that EXIST in the sealed payload
+    # are rendered (middle-truncated hashes), everything missing ->
+    # Not recorded (never invented)
+    fields: list[tuple[str, Any]] = [
+        ('Commit SHA', sealed.get('commit')),
+        ('Tree Hash', sealed.get('tree_hash')),
+        ('Evidence SHA-256', sealed.get('evidence_sha256')),
+        ('Scope Mode', sealed.get('scope')),
+        ('Validation Mode', sealed.get('validation_mode')),
+        ('Validation Result', sealed.get('decision')),
+        ('Fallback Reason', sealed.get('fallback_reason')),
+        ('Worker ID', sealed.get('worker_id')),
+        ('Task ID', sealed.get('task_id')),
+        ('Sealed Timestamp', sealed.get('observed_at')),
     ]
-    events = meta.get('events') or []
-    sealed_ev = next((e for e in events
-                      if e.get('event_type') == 'sealed'), None)
-    if sealed_ev is not None:
-        p = sealed_ev.get('payload', {})
-        rows.append(('Evidence SHA-256',
-                     _fmt_sha(p.get('evidence_sha256'))))
-    integrity = meta.get('integrity') or {}
-    rows.append(('Journal integrity', _fmt(
-        'incomplete' if integrity.get('incomplete') else 'complete')))
-    rows.append(('Record count', _fmt(integrity.get('record_count'))))
-    body = ''.join(
+    hash_fields = ('Commit SHA', 'Tree Hash', 'Evidence SHA-256')
+    rows = ''.join(
         f'<div class="trow"><dt>{html.escape(k)}</dt>'
-        f'<dd>{v}</dd></div>' for k, v in rows)
-    return ('<details class="tech" open>'
+        f'<dd>{_fmt_sha(v) if k in hash_fields else _fmt(v)}</dd></div>'
+        for k, v in fields if v is not None)
+    return ('<details class="tech">'
             '<summary>Technical Audit &amp; Sealed Evidence</summary>'
-            f'<div class="tgrid">{body}</div></details>')
+            f'<div class="tgrid">{rows}</div></details>')
 
 
 # ------------------------------------------------------------------
@@ -430,8 +440,12 @@ def render_stepper_html(state: str, meta: dict[str, Any] | None = None
           padding: 4px 0; border-top: 1px solid var(--bg); }}
   .trow:first-of-type {{ border-top: 0; }}
   .trow dt {{ font-size: 12px; color: var(--muted); }}
-  .trow dd {{ font-family: var(--mono); font-size: 11.5px;
-             overflow-wrap: anywhere; text-align: right; }}
+  .trow dd {{ font-family: ui-monospace, SFMono-Regular, Menlo,
+              Monaco, Consolas, monospace; font-size: 0.82rem;
+              overflow-wrap: anywhere; text-align: right; }}
+  .trow dd, .nosealed {{ font-variant-numeric: tabular-nums; }}
+  .nosealed {{ padding: 4px 20px 16px; font-size: 13px;
+              color: var(--muted); }}
   footer {{ margin-top: 18px; font-size: 11px; color: var(--faint);
            text-align: center; }}
   /* ---------- responsive ---------- */
