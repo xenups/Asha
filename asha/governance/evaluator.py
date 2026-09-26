@@ -7,8 +7,8 @@ a facts-only evaluator. No execution, no I/O, no runtime objects.
 Mapping (preserved byte-for-byte from the legacy semantics):
 
 * check status vocabulary: passed / failed / skipped
-* pytest exit code 5  ->  SKIP (never failed, never silent)   [note: no_tests_collected]
-* empty target set    ->  SKIP                                [note: empty_target_set_proven]
+* test exit code 5  ->  SKIP (never failed, never silent)   [note: no_tests_collected]
+* empty target set  ->  SKIP                                [note: empty_target_set_proven]
 * NOT_RUN / UNKNOWN  ->  SKIP (never failed, never silent)
 * any check FAILED   ->  verdict FAIL, reasons carry the failed check names
 * no check FAILED    ->  verdict PASS (skips never fail the gate)
@@ -81,7 +81,7 @@ def _facts_digest(facts: SemanticFacts) -> str:
 def _test_status(facts: SemanticFacts) -> str:
     """Map test-execution facts onto the legacy check status vocabulary.
 
-    Rule (preserved semantics): pytest exit code 5 (NO_TESTS_COLLECTED)
+    Rule (preserved semantics): test exit code 5 (NO_TESTS_COLLECTED)
     and NOT_RUN/UNKNOWN are SKIPPED, never failed and never silent.
     """
     if facts.test_execution == "FAILED":
