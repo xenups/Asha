@@ -17,6 +17,7 @@ from pathlib import Path
 
 from asha import check_runner, evidence, scope_resolver
 
+
 def gate_ship(root: Path, *, no_execute: bool = False) -> dict:
     """Run the ship gate exactly as control.py did; returns the sealed
     evidence payload. Raises evidence.EvidenceError on refusal."""
