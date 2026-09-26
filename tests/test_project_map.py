@@ -311,7 +311,7 @@ def test_markdown_rendering(tmp_path: Path) -> None:
 
 def test_control_orient_wrapper(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
-    orient = ship_gate_orient.orient_quick(repo)
+    orient = ship_gate_orient(repo)
     assert orient["stack"].get("language") or "Project:" in str(orient), orient
     # ledger-free: no control.json may be created by orient
     assert not (repo / ".jspace" / "control.json").exists()

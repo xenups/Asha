@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import os
 import sys
 import threading
 import time
@@ -629,10 +630,11 @@ def test_control_cli_delegation_and_bad_spec(tmp_path: Path) -> None:
 
     # governed entry point: the orchestrator CLI is now the direct run path
     # (control.py delegation eliminated in H.1)
+    env = dict(os.environ, PYTHONPATH=str(REPO_ROOT))
     proc = subprocess.run(
         [PY, str(ORCHESTRATOR), "--root", str(repo), "run",
          "--spec", str(spec_path)],
-        cwd=repo, capture_output=True, text=True, timeout=600)
+        cwd=repo, capture_output=True, text=True, timeout=600, env=env)
     assert proc.returncode == 0, proc.stderr
     report = json.loads(proc.stdout)
     assert report["status"] == "ok", report.get("reason")
