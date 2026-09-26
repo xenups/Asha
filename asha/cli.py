@@ -42,7 +42,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import git_context, scope_resolver, scoping, ui, watcher
+from . import git_context, scope_resolver, scoping, telemetry, ui, watcher
 from .classifier import classify_task, governance_profile
 from .mcp_server import _dispatch_context, _fast_path_enabled
 from .replay import parse_evidence, verify_bytes, verify_record
@@ -154,13 +154,15 @@ def evaluate(root: Path, paths: list[str] | None
     return resolved, decision, classification
 
 
-def _run_sealed(root: Path, affected: list[str], classification: Any
-                ) -> dict[str, Any]:
+def _run_sealed(root: Path, affected: list[str], classification: Any,
+                run_id: str | None = None) -> dict[str, Any]:
     """Canonical execution of the validation path through the EXISTING
     orchestrator (worktree isolation, sealed evidence, authoritative
     record) -- identical to a client dispatch; no phase-specific or
     invocation-specific execution path exists anywhere in this
     module."""
+    run_id = run_id or ('cli-' + os.urandom(4).hex())
+    journal = telemetry.EventJournalWriter(root, run_id)
     envelope = _dispatch_context(root)
     routed = route(governance_profile(classification),
                    fast_path_enabled=_fast_path_enabled())
@@ -169,22 +171,34 @@ def _run_sealed(root: Path, affected: list[str], classification: Any
               'reads': list(affected), 'writes': [],
               'cmd': [sys.executable, '-c', 'pass']}
     scheduler = GovernedScheduler(
-        root, [worker], task_id='cli-' + os.urandom(4).hex(),
+        root, [worker], task_id=run_id,
         fast_path_enabled=routed.mode is RuntimeMode.FAST_PATH,
         classification_context=envelope)
+    journal.append('execution_started',
+                   {'worker_id': wid, 'target_files': list(affected)},
+                   critical=True)
     report = scheduler.run()
     state = (report.get('states', {}).get(wid) or {}).get('state')
     ev_path = (report.get('evidence') or {}).get(wid)
     if state != 'DONE' or not ev_path:
+        journal.append('execution_failed',
+                       {'state': state or 'UNKNOWN', 'evidence': None},
+                       critical=True)
+        journal.close()
         raise CliError('EXECUTION_FAILED',
                        f'validation run ended as {state or "UNKNOWN"}')
 
+    journal.append('validation_started', {'worker_id': wid}, critical=True)
     payload = json.loads(Path(ev_path).read_text(encoding='utf-8'))
     checks = list(payload.get('checks') or [])
     failed = [entry['name'] for entry in checks
               if entry.get('status') == 'failed']
     validation = 'FAIL' if failed else 'PASS'
+    if failed:
+        journal.append('validation_failed', {'failed_checks': failed},
+                       critical=True)
 
+    journal.append('sealing_started', {'worker_id': wid}, critical=True)
     seal_ok = bool(verify_worker_evidence(Path(ev_path)))
     evidence_id = payload.get('evidence_sha256')
     auth = scheduler.authoritative.get(wid, b'')
@@ -198,8 +212,13 @@ def _run_sealed(root: Path, affected: list[str], classification: Any
         except Exception:            # fail closed: never a PASS
             record_ok, bytes_ok = False, False
     if evidence_id and not (seal_ok and record_ok and bytes_ok):
+        journal.close()
         raise CliError('EVIDENCE_VERIFICATION_FAILED',
                        'sealed evidence failed verification')
+    journal.append('sealed',
+                   {'evidence_id': evidence_id if seal_ok else None,
+                    'validation_result': validation}, critical=True)
+    journal.close()
     return {'validation_result': validation,
             'evidence_id': evidence_id if seal_ok else None,
             'evidence_verification': ('PASS' if seal_ok and record_ok
@@ -210,7 +229,7 @@ def _run_sealed(root: Path, affected: list[str], classification: Any
 
 def execute(root: Path, resolved: dict[str, Any],
             decision: scoping.ScopingDecision, classification: Any, *,
-            no_execute: bool) -> dict[str, Any]:
+            no_execute: bool, run_id: str | None = None) -> dict[str, Any]:
     """Run validation through the existing architecture only.
 
     Runtime authority (Spec 6.5.5): only the scheduler may take the
@@ -234,7 +253,7 @@ def execute(root: Path, resolved: dict[str, Any],
             'target; commit the change or pass --no-execute '
             '(evaluation only)')
     affected = list(resolved.get('affected_files') or [])
-    return _run_sealed(root, affected, classification)
+    return _run_sealed(root, affected, classification, run_id=run_id)
 
 
 def _payload_base(root: Path, resolved: dict[str, Any],
@@ -325,6 +344,22 @@ def _first_positional(argv: list[str]) -> str | None:
 def _legacy_run(argv: list[str]) -> bool:
     """Detect `asha [--root X] run ...` for scheduler passthrough."""
     return _first_positional(argv) == 'run'
+
+
+def _journal_scope_assessed(root: Path, run_id: str,
+                            decision: scoping.ScopingDecision) -> None:
+    """Observation fact after the engine decided; the decision itself
+    is never reinterpreted here -- it is recorded verbatim."""
+    try:
+        with telemetry.EventJournalWriter(root, run_id) as journal:
+            journal.append('scope_assessed', {
+                'mode': str(getattr(decision, 'mode', None)),
+                'eligible': bool(getattr(decision, 'eligible', False)),
+                'fallback_reason': (getattr(decision, 'fallback_reason',
+                                            None) or None),
+            })
+    except OSError:
+        pass    # observation-only: a journal failure never fails a run
 
 
 def _maybe_write_ui(args: Any, payload: dict[str, Any]) -> None:
@@ -454,6 +489,12 @@ def main(argv: list[str] | None = None) -> int:
         explicit = (git_context.normalize_paths(root, args.paths)
                     if args.paths else None)
         target_paths = list(snap.paths) if explicit is None else explicit
+        run_id = 'cli-' + os.urandom(4).hex()
+        if target_paths:
+            journal_pre = telemetry.EventJournalWriter(root, run_id)
+            journal_pre.append('change_detected',
+                               {'target_files': list(target_paths)})
+            journal_pre.close()
         resolved, decision, classification = evaluate(root, target_paths)
         payload = _payload_base(root, resolved, snap)
         if decision is None:
@@ -464,8 +505,9 @@ def main(argv: list[str] | None = None) -> int:
             payload['fallback_reason'] = decision.fallback_reason or None
             payload['execution_mode'] = ('targeted' if decision.eligible
                                          else 'canonical')
+            _journal_scope_assessed(root, run_id, decision)
             outcome = execute(root, resolved, decision, classification,
-                              no_execute=bool(args.no_execute))
+                              no_execute=bool(args.no_execute), run_id=run_id)
             payload.update(outcome)
             if payload['validation_result'] == 'FAIL':
                 exit_code = EXIT_VALIDATION_FAILED
