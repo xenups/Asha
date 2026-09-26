@@ -70,6 +70,20 @@ def _tree(root: Path) -> set[str]:
     }
 
 
+
+def _sealed(commit: str) -> dict:
+    """Full-schema sealed payload (evidence.seal required fields)."""
+    return {
+        "schema": 1,
+        "stage": "ship",
+        "scope": "S0",
+        "commit": commit,
+        "tree_hash": "abc",
+        "observed_at": "2026-09-26T00:00:00+00:00",
+        "checks": [],
+        "authorized_to_ship": False,
+    }
+
 class TestNoJspace:
     def test_no_jspace_created(self, iso_repo: Path) -> None:
         (iso_repo / "mod.py").write_text("VALUE: int = 2\n", encoding="utf-8")
@@ -77,7 +91,7 @@ class TestNoJspace:
         _git(iso_repo, "commit", "-qm", "change")
 
         # Run a real evidence seal + journal write (the canonical paths).
-        sealed = evidence.seal({"commit": "deadbeef", "scope": "S0"})
+        sealed = evidence.seal(_sealed("deadbeef"))
         evidence.write(iso_repo, sealed)
         journal = telemetry.EventJournalWriter(iso_repo, "run-iso-1")
         journal.append("change_detected", {"target_files": ["mod.py"]})
@@ -97,7 +111,7 @@ class TestTreeUnchanged:
         _git(iso_repo, "commit", "-qm", "change2")
         before2 = _tree(iso_repo)  # test-created commit only
 
-        sealed = evidence.seal({"commit": "abc", "scope": "S1"})
+        sealed = evidence.seal(_sealed("abc"))
         evidence.write(iso_repo, sealed)
         journal = telemetry.EventJournalWriter(iso_repo, "run-iso-2")
         journal.append("scope_assessed", {"scope": "S1"})
@@ -115,7 +129,7 @@ class TestGitClean:
         _git(iso_repo, "add", "-A")
         _git(iso_repo, "commit", "-qm", "change3")
 
-        sealed = evidence.seal({"commit": "def", "scope": "S2"})
+        sealed = evidence.seal(_sealed("def"))
         evidence.write(iso_repo, sealed)
         journal = telemetry.EventJournalWriter(iso_repo, "run-iso-3")
         journal.append("execution_started", {})
@@ -134,7 +148,7 @@ class TestExternalState:
         _git(iso_repo, "add", "-A")
         _git(iso_repo, "commit", "-qm", "change4")
 
-        sealed = evidence.seal({"commit": "1234", "scope": "S0"})
+        sealed = evidence.seal(_sealed("1234"))
         evidence.write(iso_repo, sealed)
         journal = telemetry.EventJournalWriter(iso_repo, "run-iso-4")
         journal.append("sealed", {"evidence_id": "abc123"})
@@ -155,7 +169,7 @@ class TestEvidenceCompatibility:
         # writer produced: same json.dumps(indent=2, sort_keys=True) +
         # same digest computation. We verify by re-reading the file and
         # re-sealing: digest of the read payload equals recorded digest.
-        sealed = evidence.seal({"commit": "beef", "scope": "S0"})
+        sealed = evidence.seal(_sealed("beef"))
         path = evidence.write(iso_repo, sealed)
         raw = Path(path).read_text(encoding="utf-8")
         payload = json.loads(raw)
@@ -180,4 +194,4 @@ class TestJournalCompatibility:
             .rglob("run-iso-5.jsonl")
         )[0].read_text(encoding="utf-8")
         assert "change_detected" in raw
-        assert '"target_files": ["a.py"]' in raw
+        assert '"target_files":["a.py"]' in raw or '"target_files": ["a.py"]' in raw
