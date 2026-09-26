@@ -376,7 +376,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', default='.', help='repository root')
     parser.add_argument('--base', default=None,
-                        help='diff base ref (default: origin/main or HEAD~1)')
+                        help='diff base ref (default: tiered resolver: explicit > CI > tracking)')
     parser.add_argument('--json', action='store_true', help='print full JSON')
     args = parser.parse_args(argv)
     try:
