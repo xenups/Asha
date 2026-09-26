@@ -58,7 +58,9 @@ def _load(name: str):
 
 
 scope_resolver = _load("scope_resolver")
-evidence = _load("evidence")
+# gate_ship runs IN-PROCESS and raises the real asha.evidence.EvidenceError;
+# the _load copy would be a distinct class, so catch against the real module.
+from asha import evidence
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
