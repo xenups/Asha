@@ -222,6 +222,25 @@ def test_authority_command_is_the_public_cli_only() -> None:
         sys.executable, '-m', 'asha', '--json']
 
 
+def test_authority_child_env_guards_git_prompt_pager(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, str] = {}
+
+    def _spy(cmd, **kwargs):
+        captured.update(kwargs.get('env', {}))
+        class _R:
+            returncode = 0
+            stdout = '{"schema_version": 1}'
+            stderr = ''
+        return _R()
+
+    monkeypatch.setattr(subprocess, 'run', _spy)
+    code, _ = watcher.run_authority(Path('/x'))
+    assert code == 0
+    assert captured.get('GIT_TERMINAL_PROMPT') == '0'
+    assert captured.get('GIT_PAGER') == 'cat'
+
+
 def test_explicit_trigger_reaches_schema_v1_runtime_authority(
         tmp_path: Path) -> None:
     root = _repo(tmp_path, with_tests=True)

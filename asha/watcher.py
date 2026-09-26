@@ -185,11 +185,19 @@ def authority_command() -> list[str]:
 def run_authority(root: Path,
                   timeout: float = 1800.0) -> tuple[int, dict[str, Any] | None]:
     """Explicit user trigger only: spawn the existing CLI and hand back
-    its (single, schema v1) document. Watch never interprets or edits it."""
+    its (single, schema v1) document. Watch never interprets or edits it.
+
+    The child CLI runs git under the hood; on hosts without a terminal
+    the git prompt/pager plumbing can hang on our empty stdin, so the
+    child gets prompt/pager-disabling environment entries (observed
+    failure: a bare `git rev-parse` stuck 60s in this exact path)."""
+    env = dict(os.environ)
+    env.setdefault('GIT_TERMINAL_PROMPT', '0')
+    env.setdefault('GIT_PAGER', 'cat')
     try:
         proc = subprocess.run(authority_command(), cwd=root,
                               capture_output=True, text=True,
-                              timeout=timeout)
+                              timeout=timeout, env=env)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return 127, {'error': f'{type(exc).__name__}: {exc}'}
     payload: dict[str, Any] | None = None
