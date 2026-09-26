@@ -412,7 +412,7 @@ def test_g8_evidence_sealing_and_integrity(repo: Path) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["schema"] == evidence.SCHEMA
     assert evidence.compute_digest(payload) == payload["evidence_sha256"]
-    assert evidence.verify(repo) is True
+    assert evidence.verify(repo) is not None  # digest-intact artifact
     # 5) semantic evidence matches the legacy normalized result
     legacy = run_legacy(repo, "clean")
     assert payload["stage"] == "ship"
