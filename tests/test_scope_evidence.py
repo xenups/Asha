@@ -17,6 +17,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CONTROL = REPO_ROOT / ".jspace" / "control.py"
 PY = sys.executable
 
+from asha.common import paths as common_paths
+
+
+def _evidence_file(repo: Path) -> Path:
+    """External evidence path (Phase D zone)."""
+    return common_paths.get_evidence_dir(repo) / "evidence.json"
+
 GITIGNORE = (
     ".jspace/\n__pycache__/\n*.pyc\n.pytest_cache/\n"
     ".mypy_cache/\n.ruff_cache/\n"
@@ -215,7 +222,7 @@ def test_evidence_json_integrity(tmp_path: Path) -> None:
     assert "GATE SHIP: PASS" in proc.stdout
 
     payload = json.loads(
-        (repo / ".jspace" / "evidence.json").read_text(encoding="utf-8"))
+        _evidence_file(repo).read_text(encoding="utf-8"))
     for key in ("schema", "stage", "scope", "commit", "tree_hash",
                 "observed_at", "checks", "authorized_to_ship",
                 "evidence_sha256"):
@@ -250,7 +257,7 @@ def test_ship_gate_refusal_on_failure(tmp_path: Path) -> None:
     assert "GATE SHIP: FAIL" in proc.stderr
 
     payload = json.loads(
-        (repo / ".jspace" / "evidence.json").read_text(encoding="utf-8"))
+        _evidence_file(repo).read_text(encoding="utf-8"))
     assert payload["authorized_to_ship"] is False
     failed = [c for c in payload["checks"] if c["status"] == "failed"]
     assert failed and failed[0]["name"] == "ruff"
@@ -264,7 +271,7 @@ def test_evidence_binds_to_exact_tree(tmp_path: Path) -> None:
     _ready_ledger(repo)
     proc = _control(repo, "check", "--stage", "ship")
     assert proc.returncode == 0, proc.stderr
-    artifact = repo / ".jspace" / "evidence.json"
+    artifact = _evidence_file(repo)
     before = artifact.read_bytes()
 
     # Dirty a tracked file WITHOUT committing: tree mismatch -> refuse.
@@ -285,7 +292,7 @@ def test_evidence_tamper_detection(tmp_path: Path) -> None:
     _commit_all(repo, "failing baseline")
     proc = _control(repo, "check", "--stage", "ship")
     assert proc.returncode == 1
-    artifact = repo / ".jspace" / "evidence.json"
+    artifact = _evidence_file(repo)
     payload = json.loads(artifact.read_text(encoding="utf-8"))
     assert payload["authorized_to_ship"] is False
 
