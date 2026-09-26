@@ -20,7 +20,8 @@ from typing import Self
 
 import pytest
 
-from asha import evidence, scope_resolver
+from asha.common import paths as common_paths
+from asha import evidence, scheduler, scope_resolver
 from asha.scheduler import GovernedScheduler
 from asha.worktree import WorktreeDispatcher
 
@@ -159,8 +160,8 @@ def cycle(tmp_path_factory: pytest.TempPathFactory) -> _Cycle:
         sched._collect = counting_collect  # type: ignore[assignment]
         result = sched._run_one(worker, path)
     assert result['state'] == 'DONE', result
-    evidence_path = repo / '.jspace' / 'cache' / 'orchestrator' / \
-        'evidence-opt' / 'worker_a.json'
+    evidence_path = (common_paths.get_orchestrator_dir(repo)
+                     / 'evidence-opt' / 'worker_a.json')
     payload = json.loads(evidence_path.read_text(encoding='utf-8'))
     return _Cycle(sched, worker, path, result, payload, spy)
 

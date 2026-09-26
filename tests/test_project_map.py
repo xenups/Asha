@@ -227,7 +227,7 @@ def test_dirty_tree_bypasses_cache(tmp_path: Path) -> None:
     first = project_map.build(repo, "standard", use_cache=True)
     assert first["repo"]["is_dirty"] is False
     assert first["cache_key"] == _tree(repo)
-    cache_file = repo / ".jspace" / "cache" / "orient.json"
+    cache_file = common_paths.get_cache_dir(repo) / "orient.json"
     assert cache_file.is_file(), "clean build must persist the cache"
 
     _write(repo, "pkg/main.py", MAIN_PY + "\n# dirty edit\n")
