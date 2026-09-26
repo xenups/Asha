@@ -20,10 +20,10 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from asha.adapters.ci import CIAdapter  # noqa: E402
-from asha.adapters.native import NativeAdapter  # noqa: E402
-from asha.contracts.execution import ExecutionManifest  # noqa: E402
-from asha.governance.evaluator import (  # noqa: E402
+from asha.adapters.ci import CIAdapter
+from asha.adapters.native import NativeAdapter
+from asha.contracts.execution import ExecutionManifest
+from asha.governance.evaluator import (
     VERDICT_FAIL,
     VERDICT_PASS,
     evaluate,
