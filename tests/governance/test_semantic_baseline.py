@@ -23,19 +23,17 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from asha import scope_resolver  # noqa: E402
-from asha.scoping import (  # noqa: E402
+from asha import scope_resolver
+from asha.scoping import (
     COMPLETE,
     F_FORBIDDEN_SCOPE_LEVEL,
     F_INVALID_ENVELOPE,
     F_NO_CHANGED_FILES,
     F_PROVEN_SHARED,
     F_UNKNOWN_CLASSIFICATION,
-    F_UNRESOLVED_BOUNDARY,
     SCOPED,
     assess_scoping_eligibility,
 )
-
 
 # --------------------------------------------------------------------------
 # Fixture helpers: minimal scratch git repos (mirrors house style; a real
@@ -100,17 +98,17 @@ class _GitRepo:
         _init_repo(root)
         self.root = root
 
-    def base_commit(self) -> "_GitRepo":
+    def base_commit(self) -> _GitRepo:
         _write(self.root, "mod_a.py", _MODULE_ONE)
         _write(self.root, "mod_b.py", _MODULE_TWO)
         _commit(self.root, "base")
         return self
 
-    def modify(self, rel: str, content: str) -> "_GitRepo":
+    def modify(self, rel: str, content: str) -> _GitRepo:
         _write(self.root, rel, content)
         return self
 
-    def commit(self, message: str) -> "_GitRepo":
+    def commit(self, message: str) -> _GitRepo:
         _commit(self.root, message)
         return self
 

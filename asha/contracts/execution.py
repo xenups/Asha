@@ -47,12 +47,12 @@ class ExecutionManifest:
     """
 
     __slots__ = (
-        "run_id",
-        "target_root",
         "commands",
         "env_overrides",
-        "working_dir",
+        "run_id",
+        "target_root",
         "timeout_seconds",
+        "working_dir",
     )
 
     def __init__(
@@ -83,14 +83,14 @@ class SemanticFacts:
     """
 
     __slots__ = (
-        "run_id",
         "exit_codes",
-        "test_collection",
-        "test_execution",
         "failed_test_count",
         "lint_result",
         "lint_violations_count",
         "raw_logs_ref",
+        "run_id",
+        "test_collection",
+        "test_execution",
     )
 
     def __init__(
