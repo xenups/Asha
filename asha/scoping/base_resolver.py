@@ -76,13 +76,18 @@ def explicit_base(root: Path, ref: str) -> ResolvedBase | None:
     return ResolvedBase(ref=ref, commit_sha=sha, source="explicit")
 
 
-_CI_CANDIDATES = (
-    ("GITHUB_BASE_SHA", "GITHUB_BASE_REF"),
-    ("GITHUB_BASE_REF", "GITHUB_BASE_SHA"),
-    ("CI_MERGE_REQUEST_TARGET_BRANCH_SHA", None),
-    ("CI_MERGE_REQUEST_TARGET_BRANCH_NAME", None),
-    ("GITLAB_MERGE_REQUEST_TARGET_BRANCH_SHA", None),
+_CI_SHA_CANDIDATES = (
+    "GITHUB_BASE_SHA",
+    "CI_MERGE_REQUEST_TARGET_BRANCH_SHA",
+    "GITLAB_MERGE_REQUEST_TARGET_BRANCH_SHA",
 )
+_CI_REF_PARTNER = {
+    "GITHUB_BASE_SHA": "GITHUB_BASE_REF",
+    "CI_MERGE_REQUEST_TARGET_BRANCH_SHA":
+        "CI_MERGE_REQUEST_TARGET_BRANCH_NAME",
+    "GITLAB_MERGE_REQUEST_TARGET_BRANCH_SHA":
+        "GITLAB_MERGE_REQUEST_TARGET_BRANCH_NAME",
+}
 
 
 def ci_base(root: Path) -> ResolvedBase | None:
@@ -92,15 +97,10 @@ def ci_base(root: Path) -> ResolvedBase | None:
     CONFLICTING base SHAs, fail closed (None) rather than guessing.
     """
     shas: dict[str, str] = {}
-    refs: dict[str, str] = {}
-    for sha_var, ref_var in _CI_CANDIDATES:
-        sha = os.environ.get(sha_var)
-        if sha:
-            shas[sha_var] = sha
-        if ref_var:
-            ref = os.environ.get(ref_var)
-            if ref:
-                refs[ref_var] = ref
+    for var in _CI_SHA_CANDIDATES:
+        val = os.environ.get(var)
+        if val:
+            shas[var] = val
 
     distinct_shas = set(shas.values())
     if len(distinct_shas) > 1:
@@ -108,15 +108,9 @@ def ci_base(root: Path) -> ResolvedBase | None:
     if not shas:
         return None
     sha = next(iter(distinct_shas))
-    # deterministic ref preference: base_ref var of the SAME provider
-    # as the winning sha var (map sha var -> partner ref var)
-    partner = {
-        "GITHUB_BASE_SHA": "GITHUB_BASE_REF",
-        "GITHUB_BASE_REF": "GITHUB_BASE_SHA",
-        "CI_MERGE_REQUEST_TARGET_BRANCH_SHA":
-            "CI_MERGE_REQUEST_TARGET_BRANCH_NAME",
-    }
-    ref = refs.get(partner.get(next(iter(shas)), ""), "") or None
+    # deterministic ref preference: partner ref var of the winning source
+    source_var = next(iter(shas))
+    ref = os.environ.get(_CI_REF_PARTNER.get(source_var, "")) or None
     return ResolvedBase(ref=ref, commit_sha=sha, source="ci")
 
 
