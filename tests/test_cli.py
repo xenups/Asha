@@ -41,6 +41,7 @@ def repo(tmp_path: Path) -> Path:
     root = tmp_path / 'repo'
     (root / 'tests').mkdir(parents=True)
     _git(root, 'init', '-q', '.')
+    (root / '.gitignore').write_text('.jspace/\n', encoding='utf-8')
     _git(root, 'config', 'user.email', 't@example.invalid')
     _git(root, 'config', 'user.name', 'test')
     (root / 'tests' / 'test_thing.py').write_text(
@@ -494,6 +495,7 @@ def test_deleted_file_through_runtime_authority(tmp_path: Path,
     _git(root, 'init', '-q', '-b', 'main', '.')
     _git(root, 'config', 'user.email', 't@example.invalid')
     _git(root, 'config', 'user.name', 'test')
+    (root / '.gitignore').write_text('.jspace/\n', encoding='utf-8')
     (root / 'keep.py').write_text('def keep():\n    return 1\n',
                                   encoding='utf-8')
     (root / 'gone.py').write_text('def gone():\n    return 0\n',
