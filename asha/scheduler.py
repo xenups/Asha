@@ -42,6 +42,7 @@ from .types import (
     OrchestratorError,
 )
 from .worktree import WorktreeDispatcher, _commit_all, _git, _safe_id
+from .common import paths as common_paths
 
 _SHA_RE = re.compile(r'[0-9a-f]{40}')
 
@@ -53,7 +54,7 @@ _SHA_RE = re.compile(r'[0-9a-f]{40}')
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     """IO plumbing only: atomic temp-sibling write (same pattern as
     evidence.write, different destination so the ship artifact at
-    .jspace/evidence.json is never touched)."""
+    the evidence dir is never touched)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     data = (json.dumps(payload, indent=2, sort_keys=True,
                        ensure_ascii=False) + '\n').encode('utf-8')
@@ -288,8 +289,8 @@ class GovernedScheduler:
         self.worker_graph: dict[str, Any] = self._derive_worker_graph({}, 0)
         self.worker_cycle_members: frozenset[str] = frozenset()
         self._deferred_seen: set[tuple[str, str]] = set()
-        self.evidence_dir = (self.repo / '.jspace' / 'cache' / 'orchestrator'
-                             / _safe_id(task_id))
+        self.evidence_dir = (common_paths.get_orchestrator_dir(self.repo)
+                                     / _safe_id(task_id))
 
     # -- small state helpers ------------------------------------------------
 

@@ -242,7 +242,7 @@ def _tech_drawer(state: str, meta: dict[str, Any]) -> str:
 
     The drawer consumes the AUTHORITATIVE sealed evidence payload
     (``meta['last_sealed_run']`` -- what the watcher read from
-    .jspace/evidence.json via ``read_last_sealed``), never the
+    external evidence dir via ``read_last_sealed``), never the
     ephemeral live-journal metadata. If no sealed run exists it shows
     a single clear message. Collapsed by default.
     """

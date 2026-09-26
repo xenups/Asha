@@ -27,11 +27,12 @@ from pathlib import Path
 from typing import Any
 
 from . import git_context, telemetry
+from .common import paths as common_paths
 
 # --------------------------------------------------------------- constants
 
 IGNORE_DIRS = frozenset({
-    '.git', '.jspace', '__pycache__', '.hermes', '.venv', 'venv', 'env',
+    '.git', '__pycache__', '.hermes', '.venv', 'venv', 'env',
     'node_modules',
 })
 IGNORE_SUFFIXES = ('.swp', '~', '.tmp')
@@ -118,7 +119,7 @@ def read_last_sealed(root: Path) -> dict[str, Any]:
     """Read-only view of the most recent recorded evidence artifacts.
     Only fields that EXIST are returned; nothing is derived."""
     sealed: dict[str, Any] = {}
-    gate = root / '.jspace' / 'evidence.json'
+    gate = common_paths.get_evidence_dir(root) / EVIDENCE_NAME
     try:
         data = json.loads(gate.read_text(encoding='utf-8'))
         if isinstance(data, dict):
@@ -128,12 +129,12 @@ def read_last_sealed(root: Path) -> dict[str, Any]:
                         'task_id'):
                 if data.get(key) is not None:
                     sealed[key] = data[key]
-            sealed['gate_source'] = '.jspace/evidence.json'
+            sealed['gate_source'] = 'external evidence.json'
     except (OSError, ValueError):
         pass
     best: Path | None = None
     best_mtime = -1.0
-    for candidate in root.glob('.jspace/cache/orchestrator/*/*.json'):
+    for candidate in common_paths.get_orchestrator_dir(root).glob('*/*.json'):
         try:
             mtime = candidate.stat().st_mtime
         except OSError:
@@ -251,7 +252,7 @@ def run_authority(root: Path,
 
 def latest_journal(root: Path) -> Path | None:
     """Newest recorded run journal (append-only; mtime order)."""
-    jdir = root / '.jspace' / 'execution'
+    jdir = common_paths.get_journal_dir(root)
     try:
         files = list(jdir.glob('*.jsonl'))
     except OSError:
@@ -463,7 +464,7 @@ def run_watch(root: Path, *, ui: bool = False,
     loop = WatchLoop(root)
     snapshot = loop.refresh()
     report_path = (ui_out if ui_out is not None else
-                   root / '.jspace' / 'reports' / 'watch.html')
+                   common_paths.get_state_dir(root) / 'reports' / 'watch.html')
     keys: queue.Queue[Any] = queue.Queue()
     stop = threading.Event()
     reader: threading.Thread | None = None

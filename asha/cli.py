@@ -389,7 +389,7 @@ def _inspect(argv: list[str]) -> int:
     parser.add_argument('file', help='artifact JSON file to inspect')
     parser.add_argument('--ui-out', metavar='PATH', default=None,
                         help='report destination (default: '
-                             '.jspace/reports/inspector.html)')
+                             'external state reports/inspector.html)')
     args = parser.parse_args(argv)
     try:
         payload = _json.loads(Path(args.file).read_text(encoding='utf-8'))
@@ -450,14 +450,14 @@ def main(argv: list[str] | None = None) -> int:
                              'goes to stderr (stdout contract unchanged)')
     parser.add_argument('--ui-out', metavar='PATH', default=None,
                         help='destination for the --ui report '
-                             '(default: .jspace/reports/inspector.html)')
+                             '(default: external state reports/inspector.html)')
     parser.add_argument('--watch', action='store_true',
                         help='observe filesystem changes (LIVE/PREVIEW '
                              'only, non-authoritative): Enter/r runs the '
                              'existing authoritative pipeline, q quits')
     parser.add_argument('--stepper', metavar='RUN_ID', default=None,
                         help='render the human pipeline stepper for a '
-                             'recorded run journal (.jspace/execution/'
+                             'recorded run journal (external state journal/'
                              '<RUN_ID>.jsonl) as offline HTML on stdout; '
                              'read-only, presentation only')
     args = parser.parse_args(argv)

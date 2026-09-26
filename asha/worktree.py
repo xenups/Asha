@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .types import OrchestratorError
 
+from .common import paths as common_paths
 # ---------------------------------------------------------------------------
 # 6.3 WorktreeDispatcher -- git worktree lifecycle for worker isolation.
 # ---------------------------------------------------------------------------
@@ -51,7 +52,7 @@ class WorktreeDispatcher:
         self.keep = keep
         self.base_commit = _git(self.repo, 'rev-parse', 'HEAD')
         self.base_tree = _git(self.repo, 'rev-parse', 'HEAD^{tree}')
-        self.root = self.repo.parent / (self.repo.name + '.worktrees')
+        self.root = common_paths.get_scratch_dir(self.repo.name + '-wt')
         self.paths: dict[str, Path] = {}
         self.cleanup_errors: list[str] = []
 

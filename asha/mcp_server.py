@@ -59,6 +59,7 @@ from .scheduler import GovernedScheduler, validate_workers
 from .types import OrchestratorError
 from .worktree import _git
 
+from .common import paths as common_paths
 SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18",
                                "2025-03-26", "2024-11-05"]
 DEFAULT_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]
@@ -143,7 +144,7 @@ def _safe_metadata(payload: Any) -> dict[str, Any]:
 def _emit_telemetry(repo: Path, tool: str, request_id: Any,
                     duration_ns: int, status: str,
                     metadata: dict[str, Any]) -> None:
-    """Append ONE event to <repo>/.jspace/mcp_live_telemetry.jsonl.
+    """Append ONE event to external state mcp_live_telemetry.jsonl.
 
     Operational observability ONLY -- not authoritative evidence, not
     an audit proof, not tamper-proof, not a commitment. Fail-safe by
@@ -163,8 +164,8 @@ def _emit_telemetry(repo: Path, tool: str, request_id: Any,
             "metadata": metadata,
         }
         line = (json.dumps(event, sort_keys=True, ensure_ascii=False)
-                + "\n").encode("utf-8")
-        jspace = repo / ".jspace"
+                        + "\n").encode("utf-8")
+        jspace = common_paths.get_state_dir(repo)
         jspace.mkdir(parents=True, exist_ok=True)
         fd = os.open(jspace / TELEMETRY_NAME,
                      os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
@@ -178,7 +179,7 @@ def _emit_telemetry(repo: Path, tool: str, request_id: Any,
         return
 
 
-ROOT_HELP = "Path to the git repository (default: current directory)."
+        ROOT_HELP = "Path to the git repository (default: current directory)."
 
 ASHA_STATUS_SPEC: dict[str, Any] = {
     "name": "asha_status",
@@ -272,7 +273,7 @@ def _lock_state(root: Path) -> dict[str, Any]:
     deliberately out of scope -- add when a caller needs it; never probe
     with os.kill(pid, 0), which on Windows terminates instead of tests.
     """
-    lock_file = root / ".jspace" / "lock"
+    lock_file = common_paths.get_state_dir(root) / "lock"
     if not lock_file.is_file():
         return {"exists": False, "pid": None}
     raw = lock_file.read_text(encoding="utf-8", errors="replace").strip()
@@ -957,11 +958,11 @@ def _dispatch_context(root: Path) -> tuple[dict[str, Any], ...]:
     (empty context is a missing signal, never a vacuous disjoint
     proof), but a lone MCP dispatch has no in-wave peers. The envelope
     therefore comes from THIS repo's sealed execution records under
-    .jspace/cache/orchestrator -- real recorded surfaces, sorted by
+    external orchestrator state -- real recorded surfaces, sorted by
     id, never caller-supplied. Absence of records stays UNKNOWN; a
     record that is unreadable, unsealed or tampered with enters as a
     None-surface peer so classification fails closed to UNKNOWN."""
-    cache = root / ".jspace" / "cache" / "orchestrator"
+    cache = common_paths.get_orchestrator_dir(root)
     peers: dict[str, dict[str, Any]] = {}
     if not cache.is_dir():
         return ()

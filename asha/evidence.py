@@ -12,7 +12,7 @@ with sort_keys, compact separators, excluding the digest field itself).
 Any manual edit of a field (e.g. authorized_to_ship false -> true) breaks
 the digest and the gate rejects the artifact.
 
-Writes are atomic (temp sibling + os.replace) into .jspace/evidence.json.
+Writes are atomic (temp sibling + os.replace) into the external state evidence dir.
 """
 
 from __future__ import annotations
@@ -26,6 +26,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
+
+from .common import paths as common_paths
 
 SCHEMA = 1
 EVIDENCE_NAME = 'evidence.json'
@@ -91,7 +93,7 @@ def seal(payload: dict) -> dict:
 
 
 def evidence_path(root: Path) -> Path:
-    return Path(root) / '.jspace' / EVIDENCE_NAME
+    return common_paths.get_evidence_dir(Path(root)) / EVIDENCE_NAME
 
 
 def write(root: Path, sealed: dict) -> Path:

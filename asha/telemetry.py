@@ -33,6 +33,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .common import paths as common_paths
+
 EVENT_TYPES = frozenset({
     'change_detected',
     'scope_assessed',
@@ -88,7 +90,7 @@ def validate_event(event: dict[str, Any]) -> None:
 
 
 class EventJournalWriter:
-    """Append-only JSONL writer under ``.jspace/execution/<run_id>.jsonl``.
+    """Append-only JSONL writer under the external state journal dir ``<run_id>.jsonl``.
 
     Events are immutable after append: there is no API to modify or
     delete a prior record. Critical milestones are flushed and fsynced
@@ -100,7 +102,7 @@ class EventJournalWriter:
             raise ValueError('run_id must be non-empty')
         self.run_id = run_id
         self.root = Path(root)
-        self.path = self.root / '.jspace' / 'execution' / f'{run_id}.jsonl'
+        self.path = common_paths.get_journal_dir(self.root) / f'{run_id}.jsonl'
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._handle = self.path.open('ab')
         self._closed = False
@@ -256,7 +258,7 @@ class PipelineStateProjector:
     def project_run(self, run_id: str, *,
                     interrupted: bool | None = None
                     ) -> tuple[str, dict[str, Any]]:
-        path = self.root / '.jspace' / 'execution' / f'{run_id}.jsonl'
+        path = common_paths.get_journal_dir(self.root) / f'{run_id}.jsonl'
         return project_path(path, interrupted=interrupted)
 
     def project_text(self, text: str, *,

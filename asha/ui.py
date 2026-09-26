@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import copy
 import html
+from .common import paths as common_paths
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -382,7 +383,7 @@ def write_report(payload: Mapping[str, Any],
     """Render and write to the default (or given) path; creating parent
     directories. Presentation-only I/O -- no governance side effects."""
     target = Path(out_path) if out_path is not None else Path(
-        '.jspace/reports/inspector.html')
+        str(common_paths.get_state_dir(Path.cwd())) + '/reports/inspector.html')
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(render_report(payload), encoding='utf-8')
     return target

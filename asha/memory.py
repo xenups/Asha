@@ -19,7 +19,7 @@ Observed mem0ai 2.1.0 API (recorded from the installed package):
     delete(memory_id)
 
 Offline profile (no API keys, no daemon, no LLM call):
-    vector store = chroma under <root>/.jspace/cache/mem0 (git-ignored)
+    vector store = chroma under external state cache/mem0
     embedder     = mem0's own MockEmbeddings (registered via factory map;
                    mem0's pydantic validator has no "mock" entry, so the
                    config instance is built with model_construct)
@@ -51,6 +51,7 @@ import json
 import re
 import subprocess
 import uuid
+from .common import paths as common_paths
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -187,7 +188,7 @@ class Mem0Backend:
         from mem0.embeddings.configs import EmbedderConfig
         from mem0.utils.factory import EmbedderFactory
 
-        cache = root / '.jspace' / 'cache' / 'mem0'
+        cache = common_paths.get_cache_dir(root) / 'mem0'
         cache.mkdir(parents=True, exist_ok=True)
         # mem0 ships MockEmbeddings but does not register it as a provider;
         # extend the factory map (uses mem0's own class, no new dependency).
