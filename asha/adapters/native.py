@@ -26,7 +26,6 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-import time
 from pathlib import Path
 
 from asha.adapters.base import ExecutionAdapter
@@ -50,14 +49,11 @@ class NativeAdapter(ExecutionAdapter):
         failed_test_count = 0
         lint_result = "UNKNOWN"
         lint_violations_count = 0
-        test_log: str = ""
-        lint_log: str = ""
 
         for idx, command in enumerate(manifest.commands):
             key = f"cmd{idx}"
             env = os.environ.copy()
             env.update(manifest.env_overrides)
-            started = time.monotonic()
             try:
                 proc = subprocess.run(
                     command,
@@ -87,11 +83,9 @@ class NativeAdapter(ExecutionAdapter):
                 test_collection, test_execution = self._normalize_test(
                     rc, output)
                 failed_test_count = self._failed_count(output)
-                test_log = output
             elif _LINT_RUNNER_RE.search(joined):
                 lint_result = "CLEAN" if rc == 0 else "VIOLATIONS"
                 lint_violations_count = self._lint_count(output)
-                lint_log = output
             else:
                 # unclassifiable command -> UNKNOWN facts (never guess)
                 pass
