@@ -17,8 +17,8 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from asha.contracts.execution import SemanticFacts  # noqa: E402
-from asha.governance.evaluator import (  # noqa: E402
+from asha.contracts.execution import SemanticFacts
+from asha.governance.evaluator import (
     VERDICT_FAIL,
     VERDICT_PASS,
     EvaluationVerdict,
