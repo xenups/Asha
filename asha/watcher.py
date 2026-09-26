@@ -194,6 +194,7 @@ def run_authority(root: Path,
     env = dict(os.environ)
     env.setdefault('GIT_TERMINAL_PROMPT', '0')
     env.setdefault('GIT_PAGER', 'cat')
+    env.setdefault('GIT_ASKPASS', 'echo')
     try:
         proc = subprocess.run(authority_command(), cwd=root,
                               capture_output=True, text=True,
