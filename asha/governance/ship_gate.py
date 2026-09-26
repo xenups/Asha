@@ -33,6 +33,10 @@ def gate_ship(root: Path, *, no_execute: bool = False) -> dict:
     else:
         checks = check_runner.run(root, resolved)
     ok = all(c["status"] in ("passed", "skipped") for c in checks)
+    if not ok:
+        raise evidence.EvidenceError(
+            "SHIP GATE REFUSED: failing checks "
+            + ", ".join(c["name"] for c in checks if c["status"] != "passed"))
     sealed = evidence.seal({
         "schema": evidence.SCHEMA,
         "stage": "ship",
