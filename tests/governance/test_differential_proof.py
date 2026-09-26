@@ -210,18 +210,16 @@ def run_modular(root: Path, scenario: str) -> dict:
 # ----------------------------------------------------------------------
 
 def run_legacy(root: Path, scenario: str) -> dict:
-    pid = os.urandom(4).hex()
+    del scenario  # legacy runs against the repo as-is
     base_ref = scope_resolver.default_base(root)
     res = scope_resolver.resolve(root, base_ref)
     scope = res["scope"]
     affected = res["affected_files"]
-    checks = res["checks"]
 
     legacy_checks = check_runner.run(root, res)
     statuses = {c["name"]: c["status"] for c in legacy_checks}
 
     failed = [n for n, s in statuses.items() if s == "failed"]
-    ok = not failed
     decision = scoping.assess_scoping_eligibility(
         root, affected, None, scope, scope_status=res["status"])
 
