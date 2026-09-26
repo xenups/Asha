@@ -239,6 +239,10 @@ def project(text: str,
         'last_event': events[-1]['event_type'] if events else None,
         'run_id': events[-1]['run_id'] if events else None,
         'interrupted_fact': interrupted,
+        # the already-validated records, exposed verbatim so the
+        # presentation layer can disclose recorded payload facts;
+        # no recomputation, no derived facts, no mutation
+        'events': events,
     }
     return state, metadata
 

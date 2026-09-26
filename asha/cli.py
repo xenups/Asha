@@ -455,6 +455,11 @@ def main(argv: list[str] | None = None) -> int:
                         help='observe filesystem changes (LIVE/PREVIEW '
                              'only, non-authoritative): Enter/r runs the '
                              'existing authoritative pipeline, q quits')
+    parser.add_argument('--stepper', metavar='RUN_ID', default=None,
+                        help='render the human pipeline stepper for a '
+                             'recorded run journal (.jspace/execution/'
+                             '<RUN_ID>.jsonl) as offline HTML on stdout; '
+                             'read-only, presentation only')
     args = parser.parse_args(argv)
 
     started = time.monotonic()
@@ -466,6 +471,18 @@ def main(argv: list[str] | None = None) -> int:
     payload: dict[str, Any] | None = None
     exit_code = EXIT_OK
     try:
+        if args.stepper:
+            if as_json:
+                raise CliError(
+                    'INVALID_ARGUMENTS',
+                    '--stepper cannot be combined with --json (stepper '
+                    'emits HTML, not schema v1)')
+            root = _require_git_root(root)
+            from . import presentation
+            state, meta = telemetry.PipelineStateProjector(
+                root).project_run(args.stepper)
+            print(presentation.render_stepper_html(state, meta))
+            return EXIT_OK
         if args.watch:
             if as_json:
                 raise CliError(
