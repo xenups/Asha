@@ -23,7 +23,7 @@ PY = sys.executable
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from asha import evidence, memory, project_map
+from asha import evidence, memory, project_map, scope_resolver
 from asha.governance import ship_gate as gate_ship
 
 GITIGNORE = (".jspace/\n__pycache__/\n*.pyc\n.pytest_cache/\n"
@@ -327,11 +327,8 @@ def test_memory_failure_non_fatal(tmp_path: Path) -> None:
     #     (in-process equivalents of the deleted control.py host CLI)
     orient = gate_ship.orient_quick(repo)
     assert orient["stack"].get("language") or "Project:" in str(orient), orient
-    proc = subprocess.run(
-        [PY, str(ASHA_DIR / "scope_resolver.py"), "--root", str(repo)],
-        capture_output=True, text=True, timeout=60)
-    assert proc.returncode == 0, proc.stderr
-    assert "scope=" in proc.stdout
+    resolved = scope_resolver.resolve(repo)
+    assert resolved["scope"] in scope_resolver.LEVELS
     # the gate refuses on its own (unresolved base / no ledger) — not a
     # memory crash; the failure reason must never mention memory
     with pytest.raises(evidence.EvidenceError) as exc:

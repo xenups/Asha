@@ -660,7 +660,7 @@ def test_control_cli_delegation_and_bad_spec(tmp_path: Path) -> None:
     proc = subprocess.run(
         [PY, str(ORCHESTRATOR), "--root", str(repo), "run",
          "--spec", str(bad)],
-        cwd=repo, capture_output=True, text=True, timeout=120)
+        cwd=repo, capture_output=True, text=True, timeout=120, env=env)
     assert proc.returncode == 1
     assert "unknown dependency" in proc.stderr
     assert not (repo.parent / (repo.name + ".worktrees")).exists()
