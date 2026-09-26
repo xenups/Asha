@@ -84,14 +84,13 @@ class TestNativeExecution:
         assert facts.test_execution == "PASSED"
 
     def test_test_failure(self, tmp_path: Path) -> None:
-        script = tmp_path / "fail.py"
-        script.write_text(
-            "import sys\n"
-            "sys.exit(1)\n", encoding="utf-8")
-        facts = NativeAdapter().execute(
-            _manifest(tmp_path, [[PY, str(script)]])
-        )
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_bad.py").write_text(
+            "def test_broken():\n    assert False\n", encoding="utf-8")
+        cmd = [PY, "-m", "pytest", "-q", "tests"]
+        facts = NativeAdapter().execute(_manifest(tmp_path, [cmd]))
         assert facts.test_execution == "FAILED"
+        assert facts.failed_test_count >= 1
 
     def test_pytest_rc5(self, tmp_path: Path) -> None:
         (tmp_path / "empty_test_dir").mkdir()
