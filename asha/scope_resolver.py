@@ -97,12 +97,16 @@ def _try_git(root: Path, *args: str) -> str | None:
 
 
 def default_base(root: Path) -> str | None:
-    """origin/main when it exists, else HEAD~1, else None (worktree only)."""
-    if _try_git(root, 'rev-parse', '--verify', 'origin/main') is not None:
-        return 'origin/main'
-    if _try_git(root, 'rev-parse', '--verify', 'HEAD~1') is not None:
-        return 'HEAD~1'
-    return None
+    """Tiered base discovery via BaseRefResolver (Phase E).
+
+    NEVER guesses origin/main/master: explicit -> CI -> git tracking ->
+    None (unresolved). Kept as a thin adapter for existing callers;
+    returns None when resolution is unresolved.
+    """
+    from .scoping.base_resolver import resolve_base
+
+    resolved = resolve_base(root)
+    return resolved.ref
 
 
 def changed_files(root: Path, base: str | None) -> list[str]:
