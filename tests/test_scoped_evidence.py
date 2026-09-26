@@ -24,7 +24,7 @@ import pytest
 
 from asha import check_runner, evidence, replay, scoping
 from asha.common import paths as common_paths
-from asha.scheduler import GovernedScheduler, verify_worker_evidence
+from asha.scheduler import GovernedScheduler, _safe_id, verify_worker_evidence
 from asha.types import OrchestratorError
 
 PY = sys.executable
