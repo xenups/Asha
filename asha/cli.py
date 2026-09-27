@@ -492,19 +492,20 @@ def main(argv: list[str] | None = None) -> int:
         return _inspect(argv[1:])
 
     parser = argparse.ArgumentParser(
-        prog='asha',
-        description='Asha governance CLI (stable contract, schema v1).',
-        epilog=('exit codes: 0 validation completed / NO_CHANGES / '
-                'evaluation-only, 1 validation failed, 2 operational or '
-                'engine error, 130 interrupted. '
-                '--json writes exactly one JSON document to stdout; '
-                'diagnostics go to stderr. '
-                '`asha run --spec FILE [--apply]` is the legacy '
-                'scheduler CLI and passes through unchanged. '
-                'Auto-discovery reads one coherent git snapshot; '
-                'unmerged/conflict state or targets outside the '
-                'repository exit 2 (REPOSITORY_CONFLICT / '
-                'REPOSITORY_ERROR).'))
+            prog='asha',
+            description='Asha governance CLI (stable contract, schema v1).',
+            epilog=('exit codes: 0 validation completed / NO_CHANGES / '
+                    'evaluation-only, 1 validation failed, 2 operational or '
+                    'engine error, 130 interrupted. '
+                    '--json writes exactly one JSON document to stdout; '
+                    'diagnostics go to stderr. '
+                    '`asha run --spec FILE [--apply]` runs the governed '
+                    'DAG scheduler (H.2.2-C DAGCoordinator) and passes '
+                    'through unchanged. '
+                    'Auto-discovery reads one coherent git snapshot; '
+                    'unmerged/conflict state or targets outside the '
+                    'repository exit 2 (REPOSITORY_CONFLICT / '
+                    'REPOSITORY_ERROR).'))
     parser.add_argument('--root', default='.',
                         help='repository root (default: cwd)')
     parser.add_argument('--paths', nargs='+', metavar='PATH',
