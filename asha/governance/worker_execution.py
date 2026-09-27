@@ -208,14 +208,14 @@ def run_worker_in_worktree(
     task_id: str,
     keep_worktrees: bool = False,
     fast_path: bool = False,
-    execute_hook=None,
+    fast_path_classification: str = "UNKNOWN",
 ) -> dict[str, Any]:
     """Execute ONE worker through the modular path (H.2.1-C/D).
 
     OLD: GovernedScheduler(repo, [worker]).run()  (single worker)
     NEW: this function -- same observable contract:
       * isolated worktree (fast_path skips the worktree, direct repo)
-      * worker cmd executed (execute_hook, default subprocess)
+      * worker cmd executed (default subprocess)
       * collect_worker_evidence -> sealed worker evidence (external)
       * verify + authoritative (ledger-derived) available for replay
       * worktree cleaned up unless keep_worktrees
@@ -246,7 +246,7 @@ def run_worker_in_worktree(
             base = _git(repo, "rev-parse", "HEAD").strip()
             base_tree = _git(repo, "rev-parse", "HEAD^{tree}").strip()
             try:
-                result = (execute_hook or default_execute)(worker, repo)
+                result = default_execute(worker, repo)
             except subprocess.TimeoutExpired:
                 outcome = {"state": "FAILED",
                            "reason": "timeout_exceeded", "evidence": None}
@@ -262,13 +262,14 @@ def run_worker_in_worktree(
             path = dispatcher.create(wid)
             created_path = path
             try:
-                result = (execute_hook or default_execute)(worker, path)
+                result = default_execute(worker, path)
             except subprocess.TimeoutExpired:
                 outcome = {"state": "FAILED",
                            "reason": "timeout_exceeded", "evidence": None}
                 states[wid] = outcome
                 return _report(task_id, states, evidence_paths,
-                               authoritative, dispatcher, created_path)
+                               authoritative, dispatcher, created_path,
+                               fast_path_classification=fast_path_classification)
             except Exception as exc:
                 outcome = {"state": "FAILED",
                            "reason": f"execution_error:{type(exc).__name__}: "
@@ -276,7 +277,8 @@ def run_worker_in_worktree(
                            "evidence": None}
                 states[wid] = outcome
                 return _report(task_id, states, evidence_paths,
-                               authoritative, dispatcher, created_path)
+                               authoritative, dispatcher, created_path,
+                               fast_path_classification=fast_path_classification)
             rc, tail = _split_result(result)
             outcome = collect_worker_evidence(
                 worker, path, rc, tail, task_id,
@@ -291,7 +293,8 @@ def run_worker_in_worktree(
         dispatcher.cleanup()
 
     return _report(task_id, states, evidence_paths, authoritative,
-                   dispatcher, created_path, fast_path=fast_path)
+                   dispatcher, created_path, fast_path=fast_path,
+                   fast_path_classification=fast_path_classification)
 
 
 def _split_result(result) -> tuple[int, str]:

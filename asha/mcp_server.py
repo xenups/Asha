@@ -1091,7 +1091,8 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
         run_started = perf_counter_ns()
         try:
             report = run_worker_in_worktree(
-                root, worker, task_id=task_id, fast_path=sched_fast)
+                    root, worker, task_id=task_id, fast_path=sched_fast,
+                    fast_path_classification=decision.classification)
         except Exception as exc:
             return _tool_error(
                 f"orchestration aborted: {type(exc).__name__}: {exc}")
