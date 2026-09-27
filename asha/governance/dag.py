@@ -76,12 +76,12 @@ class DAGCoordinator:
         self.conflicts = ConflictManager()
         self.dep_index = dep_index.DependencyIndex()
         self.graph = graph_state.GraphState.empty()
+        self.completed: list[str] = []
         self.worker_graph: dict[str, Any] = self._derive_worker_graph({}, 0)
         self.worker_cycle_members: frozenset[str] = frozenset()
         self.states: dict[str, dict[str, Any]] = {
             wid: {"state": "PENDING", "reason": None}
             for wid in self.by_id}
-        self.completed: list[str] = []
         self.deferral_events: list[dict[str, str]] = []
         self.evidence_paths: dict[str, str] = {}
         self.routes: dict[str, dict[str, Any]] = {}
