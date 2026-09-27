@@ -56,7 +56,8 @@ from .common import paths as common_paths
 from .conflict import ConflictManager, scope_status
 from .context_slicer import slice_context
 from .router import RuntimeMode, route
-from .scheduler import GovernedScheduler, validate_workers
+from .contracts.validation import validate_workers
+from .governance.worker_execution import run_worker_in_worktree
 from .types import OrchestratorError
 from .worktree import _git
 
@@ -1082,54 +1083,23 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
         worker: dict[str, Any] = {
             "id": wid, "deps": deps, "declared_scope": list(declared),
             "reads": reads, "writes": writes, "cmd": [str(x) for x in cmd]}
-        # single authorization point: the scheduler flag is the ROUTER's
+        # single authorization point: the fast flag is the ROUTER's
         # own decision (env AND proven-disjoint-coherent), never raw input
         sched_fast = decision.mode is RuntimeMode.FAST_PATH
-        scheduler = GovernedScheduler(
-            root, [worker], task_id="mcp-" + os.urandom(6).hex(),
-            fast_path_enabled=sched_fast,
-            classification_context=envelope)
-        evidence_ns: list[int] = []
-        execution_ns: list[int] = []
-        real_collect = scheduler._collect
-        real_execute = scheduler.execute
-
-        def timed_collect(worker_arg: dict[str, Any], path: Path,
-                          rc: int, tail: str,
-                          **kwargs: Any) -> dict[str, Any]:
-            started = perf_counter_ns()
-            try:
-                return real_collect(worker_arg, path, rc, tail, **kwargs)
-            finally:
-                evidence_ns.append(perf_counter_ns() - started)
-
-        def timed_execute(worker_arg: dict[str, Any],
-                          path: Path) -> Any:
-            started = perf_counter_ns()
-            try:
-                return real_execute(worker_arg, path)
-            finally:
-                execution_ns.append(perf_counter_ns() - started)
-
-        scheduler._collect = timed_collect  # type: ignore[assignment]
-        scheduler.execute = timed_execute  # type: ignore[assignment]
+        task_id = "mcp-" + os.urandom(6).hex()
         run_started = perf_counter_ns()
         try:
-            report = scheduler.run()
+            report = run_worker_in_worktree(
+                root, worker, task_id=task_id, fast_path=sched_fast)
         except Exception as exc:
-            snapshot = json.dumps(
-                {key: entry.get("state")
-                 for key, entry in scheduler.states.items()},
-                sort_keys=True)
             return _tool_error(
-                f"orchestration aborted: {type(exc).__name__}: {exc}; "
-                f"states={snapshot}")
+                f"orchestration aborted: {type(exc).__name__}: {exc}")
         scheduler_ms = (perf_counter_ns() - run_started) / 1e6
         states: dict[str, Any] = report.get("states") or {}
         worker_state = (states.get(wid) or {}).get("state")
         total_ms = (perf_counter_ns() - run_started) / 1e6
         payload = {
-            "task_id": scheduler.task_id,
+            "task_id": task_id,
             "state": worker_state,
             "classification": decision.classification,
             "reason_code": classification.reason_code,
@@ -1144,8 +1114,8 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
                 "routing_ms": round(routing_ms, 3),
                 "context_ms": 0.0,
                 "scheduler_ms": round(scheduler_ms, 3),
-                "execution_ms": round(sum(execution_ns) / 1e6, 3),
-                "evidence_ms": round(sum(evidence_ns) / 1e6, 3),
+                "execution_ms": 0.0,
+                "evidence_ms": 0.0,
                 "total_ms": round(total_ms, 3),
             },
             # Merge law preserved verbatim: dispatch grants no ship

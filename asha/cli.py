@@ -44,11 +44,12 @@ from typing import Any
 
 from . import git_context, scope_resolver, scoping, telemetry, ui, watcher
 from .classifier import classify_task, governance_profile
+from .governance.worker_execution import run_worker_in_worktree
 from .mcp_server import _dispatch_context, _fast_path_enabled
 from .replay import parse_evidence, verify_bytes, verify_record
 from .router import RuntimeMode, route
-from .scheduler import GovernedScheduler, verify_worker_evidence
 from .scheduler import main as scheduler_main
+from .scheduler import verify_worker_evidence
 
 SCHEMA_VERSION = 1
 
@@ -170,14 +171,12 @@ def _run_sealed(root: Path, affected: list[str], classification: Any,
     worker = {'id': wid, 'deps': [], 'declared_scope': list(affected),
               'reads': list(affected), 'writes': [],
               'cmd': [sys.executable, '-c', 'pass']}
-    scheduler = GovernedScheduler(
-        root, [worker], task_id=run_id,
-        fast_path_enabled=routed.mode is RuntimeMode.FAST_PATH,
-        classification_context=envelope)
+    report = run_worker_in_worktree(
+        root, worker, task_id=run_id,
+        fast_path=routed.mode is RuntimeMode.FAST_PATH)
     journal.append('execution_started',
                    {'worker_id': wid, 'target_files': list(affected)},
                    critical=True)
-    report = scheduler.run()
     state = (report.get('states', {}).get(wid) or {}).get('state')
     ev_path = (report.get('evidence') or {}).get(wid)
     if state != 'DONE' or not ev_path:
@@ -201,7 +200,7 @@ def _run_sealed(root: Path, affected: list[str], classification: Any,
     journal.append('sealing_started', {'worker_id': wid}, critical=True)
     seal_ok = bool(verify_worker_evidence(Path(ev_path)))
     evidence_id = payload.get('evidence_sha256')
-    auth = scheduler.authoritative.get(wid, b'')
+    auth = (report.get('authoritative') or {}).get(wid, b'')
     record_ok: bool | None = None
     bytes_ok: bool | None = None
     if auth:
