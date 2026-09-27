@@ -233,7 +233,7 @@ def execute(root: Path, resolved: dict[str, Any],
 
     Runtime authority (Spec 6.5.5): only the scheduler may take the
     SCOPED runtime path, so ALL execution happens as one synthesized
-    validation worker through ``GovernedScheduler`` against the
+    validation worker through the modular runner against the
     COMMITTED target -- identical to the MCP dispatch path: isolated
     worktree, sealed evidence, authoritative record, replay check.
     An uncommitted target is evaluated but never executed: fail closed
