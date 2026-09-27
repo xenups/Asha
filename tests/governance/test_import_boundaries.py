@@ -126,8 +126,10 @@ def test_governance_core_has_no_ast_dependency(rel_path: str) -> None:
     path = REPO_ROOT / rel_path
     assert path.is_file(), f"guard file missing: {rel_path}"
     source = path.read_text(encoding="utf-8")
-    offenders = [(ln, mod) for ln, mod, _ in _scan_imports(source)
-                 if mod in FORBIDDEN]
+    offenders: list[tuple[str, str]] = [
+        (str(ln), mod) for ln, mod, _ in _scan_imports(source)
+        if mod in FORBIDDEN
+    ]
     offenders += [("(dynamic)", mod) for mod, _ in
                   _scan_dynamic_strings(source)]
     assert not offenders, (
