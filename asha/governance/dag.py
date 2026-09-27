@@ -36,6 +36,7 @@ from asha import dep_index, evidence, graph_state, worker_graph
 from asha.classifier import classify_task, governance_profile
 from asha.common import paths as common_paths
 from asha.conflict import ConflictManager, covered, scope_status
+from asha.contracts.validation import validate_workers
 from asha.governance import worker_execution
 from asha.router import RuntimeMode, route
 from asha.types import STATES, OrchestratorError
@@ -552,7 +553,7 @@ def run_workers_dag(
     production callers (MCP apply=true, CLI run --apply).
     """
     coordinator = DAGCoordinator(
-        repo, workers, task_id=task_id, keep_worktrees=keep_worktrees,
+        repo, validate_workers(workers), task_id=task_id, keep_worktrees=keep_worktrees,
         fast_path_enabled=fast_path_enabled,
         classification_context=classification_context)
     if execute_hook is not None:
