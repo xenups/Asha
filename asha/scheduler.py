@@ -4,12 +4,10 @@ gates -> worktree dispatch -> evidence -> generational reconciliation
 `orchestrator` package facade."""
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
 import subprocess
-import sys
 import tempfile
 import threading
 from collections.abc import Iterable, Mapping, Sequence
@@ -36,7 +34,6 @@ from .governance.worker_execution import (
     default_execute,  # extracted (H.2.1)
     verify_worker_evidence,  # extracted (H.2.1)
 )
-from .integrator import IntegrationResult, TreeIntegrator
 from .router import RuntimeMode, route
 from .types import (
     STATES,
@@ -913,79 +910,3 @@ class GovernedScheduler:
         return report
 
 
-# ---------------------------------------------------------------------------
-# CLI (direct module usability; control.py delegates to this).
-# ---------------------------------------------------------------------------
-
-def _integration_summary(repo: Path, report: dict[str, Any]
-                         ) -> IntegrationResult:
-    """--apply stage (Phase 4): integrate only a fully-DONE run; a failed
-    run is refused without touching the target (audit semantics hold)."""
-    if report.get('status') != 'ok':
-        return IntegrationResult(
-            status='refused',
-            error='run_not_ok:' + str(report.get('reason')))
-    evidence_paths = report.get('evidence') or {}
-    integrator = TreeIntegrator(
-        repo, [Path(evidence_paths[wid]) for wid in sorted(evidence_paths)],
-        generation=report.get('graph', {}).get('generation'))
-    return integrator.apply()
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description='Asha Orchestrator (Phase 1 governed scheduling)')
-    parser.add_argument('--root', default='.',
-                        help='repository root (default: cwd)')
-    sub = parser.add_subparsers(dest='command', required=True)
-    run_p = sub.add_parser('run', help='run one worker graph to completion')
-    run_p.add_argument('--spec', required=True,
-                       help="JSON {task_id?, workers:[{id,deps,"
-                            "declared_scope,reads,writes,cmd,"
-                            "timeout?}]}")
-    run_p.add_argument('--keep-worktrees', action='store_true',
-                       help='debug: skip worktree removal (disk cost stays '
-                            'until removed manually; reported)')
-    run_p.add_argument('--apply', action='store_true',
-                       help='atomically apply verified worker results onto '
-                            'the target branch after the integration gate '
-                            '(default: audit-only, target untouched)')
-    args = parser.parse_args(argv)
-    try:
-        spec_path = Path(args.spec)
-        spec = json.loads(spec_path.read_text(encoding='utf-8'))
-        if not isinstance(spec, dict):
-            raise OrchestratorError('spec must be a JSON object')
-        task_id = spec.get('task_id', 'task')
-        if not isinstance(task_id, str) or not task_id:
-            raise OrchestratorError('spec.task_id must be a non-empty string')
-        scheduler = GovernedScheduler(
-            Path(args.root), spec.get('workers'), task_id=task_id,
-            keep_worktrees=args.keep_worktrees)
-        report = scheduler.run()
-        if args.apply:
-            report['integration'] = _integration_summary(
-                Path(args.root), report).as_dict()
-    except OrchestratorError as exc:
-        print(f'ORCHESTRATOR ERROR: {exc}', file=sys.stderr)
-        return 1
-    except json.JSONDecodeError as exc:
-        print(f'ORCHESTRATOR ERROR: invalid spec json: {exc}',
-              file=sys.stderr)
-        return 1
-    except OSError as exc:
-        print(f'ORCHESTRATOR ERROR: {exc}', file=sys.stderr)
-        return 1
-    except Exception as exc:  # fail closed, never a traceback at the agent
-        print(f'ORCHESTRATOR ERROR: {type(exc).__name__}: {exc}',
-              file=sys.stderr)
-        return 1
-    print(json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False))
-    ok = report.get('status') == 'ok'
-    if args.apply:
-        ok = ok and report.get('integration', {}).get('status') == 'applied'
-    return 0 if ok else 1
-
-
-if __name__ == '__main__':
-    sys.exit(main())

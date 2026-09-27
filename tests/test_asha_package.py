@@ -20,11 +20,14 @@ import pytest
 
 def test_package_import_surface() -> None:
     asha = pytest.importorskip("asha")
-    importlib.import_module("asha.scheduler")
     importlib.import_module("asha.runner")
     importlib.import_module("asha.mcp_server")
-    scheduler = importlib.import_module("asha.scheduler")
-    assert scheduler.GovernedScheduler is asha.GovernedScheduler
+    # H.2.2-C/D: the live multi-worker DAG boundary is the public
+    # runtime entry (scheduler.py was removed; the legacy
+    # GovernedScheduler export was an obsolete migration shim).
+    assert hasattr(asha, "run_workers_dag")
+    assert hasattr(asha, "DAGCoordinator")
+    assert asha.run_workers_dag is not None
 
 
 def test_entrypoint_scripts_resolve() -> None:

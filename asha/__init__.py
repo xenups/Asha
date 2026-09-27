@@ -53,55 +53,55 @@ CLI:
 Exit 0 only when every worker is DONE; every other outcome exits 1.
 """
 
+from .cli import main
 from .conflict import ConflictManager, _intersection, covered, overlap, scope_status
+from .contracts.validation import validate_workers
+from .governance.dag import DAGCoordinator, run_workers_dag
+from .governance.worker_execution import default_execute, verify_worker_evidence
 from .integrator import IntegrationResult, TreeIntegrator
 from .runner import (
-                        AntigravityRunner,
-                        BaseAgentRunner,
-                        CommandRunner,
-                        dispatch_runner,
+                                           AntigravityRunner,
+                                           BaseAgentRunner,
+                                           CommandRunner,
+                                           dispatch_runner,
 )
-from .scheduler import (
-                        GovernedScheduler,
-                        default_execute,
-                        main,
-                        validate_workers,
-                        verify_worker_evidence,
-)
+from .scheduler import GovernedScheduler
 from .types import (
-                        STATES,
-                        TAIL_CHARS,
-                        WORKER_EVIDENCE_FIELDS,
-                        WORKER_TIMEOUT_S,
-                        ExecuteHook,
-                        OrchestratorError,
-                        RunnerResult,
+                                           STATES,
+                                           TAIL_CHARS,
+                                           WORKER_EVIDENCE_FIELDS,
+                                           WORKER_TIMEOUT_S,
+                                           ExecuteHook,
+                                           OrchestratorError,
+                                           RunnerResult,
 )
 from .worktree import WorktreeDispatcher
 
 __all__ = [
-                        "STATES",
-                        "TAIL_CHARS",
-                        "WORKER_EVIDENCE_FIELDS",
-                        "WORKER_TIMEOUT_S",
-                        "AntigravityRunner",
-                        "BaseAgentRunner",
-                        "CommandRunner",
-                        "ConflictManager",
-                        "ExecuteHook",
-                        "GovernedScheduler",
-                        "IntegrationResult",
-                        "OrchestratorError",
-                        "RunnerResult",
-                        "TreeIntegrator",
-                        "WorktreeDispatcher",
-                        "_intersection",
-                        "covered",
-                        "default_execute",
-                        "dispatch_runner",
-                        "main",
-                        "overlap",
-                        "scope_status",
-                        "validate_workers",
-                        "verify_worker_evidence",
+                                           "STATES",
+                                           "TAIL_CHARS",
+                                           "WORKER_EVIDENCE_FIELDS",
+                                           "WORKER_TIMEOUT_S",
+                                           "AntigravityRunner",
+                                           "BaseAgentRunner",
+                                           "CommandRunner",
+                                           "ConflictManager",
+                                           "DAGCoordinator",
+                                           "ExecuteHook",
+                                           "GovernedScheduler",
+                                           "IntegrationResult",
+                                           "OrchestratorError",
+                                           "RunnerResult",
+                                           "TreeIntegrator",
+                                           "WorktreeDispatcher",
+                                           "_intersection",
+                                           "covered",
+                                           "default_execute",
+                                           "dispatch_runner",
+                                           "main",
+                                           "overlap",
+                                           "run_workers_dag",
+                                           "scope_status",
+                                           "validate_workers",
+                                           "verify_worker_evidence",
 ]
