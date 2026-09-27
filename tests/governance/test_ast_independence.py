@@ -57,16 +57,16 @@ def _make_repo(tmp: Path, files: dict[str, str]) -> Path:
 
 
 def _facts(**over: Any) -> evaluator.SemanticFacts:
-    base = dict(
-        run_id="h3-fixture",
-        test_collection="COLLECTED",
-        test_execution="PASSED",
-        failed_test_count=0,
-        lint_result="CLEAN",
-        lint_violations_count=0,
-        raw_logs_ref=None,
-        exit_codes={},
-    )
+    base = {
+        "run_id": "h3-fixture",
+        "test_collection": "COLLECTED",
+        "test_execution": "PASSED",
+        "failed_test_count": 0,
+        "lint_result": "CLEAN",
+        "lint_violations_count": 0,
+        "raw_logs_ref": None,
+        "exit_codes": {},
+    }
     base.update(over)
     return evaluator.SemanticFacts(**base)
 
