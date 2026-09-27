@@ -32,7 +32,7 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from graphlib import CycleError, TopologicalSorter
 from typing import Any
 
-from asha import dep_index, evidence, graph_state, worker_graph
+from asha import dep_index, graph_state, worker_graph
 from asha.classifier import classify_task, governance_profile
 from asha.common import paths as common_paths
 from asha.conflict import ConflictManager, covered, scope_status
@@ -90,9 +90,6 @@ class DAGCoordinator:
         self.stale_intents_dropped = 0
         self.stale_intents: list[dict[str, Any]] = []
         self.orphaned_reads: set[str] = set()
-        self.ledgers: dict[str, evidence.ExecutionLedger] = {}
-        self.authoritative: dict[str, bytes] = {}
-        self.evidence_policy: dict[str, str] = {}
         self._deferred_seen: set[tuple[str, str]] = set()
         self.evidence_dir = (common_paths.get_orchestrator_dir(self.repo)
                              / _safe_id(task_id))
@@ -334,14 +331,6 @@ class DAGCoordinator:
 
     # -- post-execution evidence side-records -------------------------------
 
-    def _record_auth(self, wid: str, outcome: dict[str, Any],
-                     base_tree: str) -> None:
-        """Ledger + authoritative derivations the legacy _collect kept
-        (in-memory only; never serialized)."""
-        worker = self.by_id[str(wid)]
-        self.authoritative[str(wid)] = worker_execution._derive_authoritative(
-            outcome, worker, base_tree)
-
     # -- the scheduling loop (legacy run() port) ----------------------------
 
     def run(self) -> dict[str, Any]:
@@ -474,8 +463,6 @@ class DAGCoordinator:
                                         (item,
                                          self._read_blob(tree, item),
                                          wid, tree))
-                                self._record_auth(wid, outcome,
-                                                  self.dispatcher.base_tree)
                             else:
                                 abort = True
                                 fail_reason = fail_reason or (
