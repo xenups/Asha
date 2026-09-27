@@ -31,6 +31,11 @@ from . import (
 from .classifier import classify_task, governance_profile
 from .common import paths as common_paths
 from .conflict import ConflictManager, covered, scope_status
+from .contracts.validation import validate_workers  # extracted (H.2.1)
+from .governance.worker_execution import (
+    collect_worker_evidence,  # extracted _collect (H.2.1)
+    verify_worker_evidence,   # extracted (H.2.1)
+)
 from .integrator import IntegrationResult, TreeIntegrator
 from .router import RuntimeMode, route
 from .runner import KNOWN_RUNNERS, dispatch_runner, runner_kind
@@ -70,49 +75,6 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
             os.unlink(tmp)
 
 
-def verify_worker_evidence(path: Path,
-                           worktree: Path | None = None) -> dict[str, Any]:
-    """Fail-closed worker-evidence verification: canonical digest intact,
-    Phase-1 identity fields present, worker evidence can never authorize a
-    ship (merge law), and -- when the worktree still exists -- the sealed
-    target_tree_sha re-binds to the live git tree. Raises on anything
-    unproven; returns the payload."""
-    raw = Path(path).read_text(encoding='utf-8')
-    try:
-        payload = json.loads(raw)
-    except ValueError as exc:
-        raise OrchestratorError(f'worker evidence unreadable: {exc}') from exc
-    if not isinstance(payload, dict):
-        raise OrchestratorError('worker evidence must be a JSON object')
-    recorded = payload.get('evidence_sha256')
-    if not isinstance(recorded, str) or \
-            evidence.compute_digest(payload) != recorded:
-        raise OrchestratorError(
-            'worker evidence digest mismatch (modified after sealing)')
-    if payload.get('authorized_to_ship') is not False:
-        raise OrchestratorError(
-            'worker evidence must seal authorized_to_ship=false '
-            '(PASS(A)+PASS(B) != PASS(A U B); ship stays with the gate)')
-    missing = [field for field in WORKER_EVIDENCE_FIELDS
-               if field not in payload]
-    if missing:
-        raise OrchestratorError(
-            'worker evidence missing fields: ' + ', '.join(missing))
-    target = payload.get('target_tree_sha')
-    if not isinstance(target, str) or not _SHA_RE.fullmatch(target):
-        raise OrchestratorError('missing/invalid tree identity '
-                                f'(target_tree_sha={target!r})')
-    if target != payload.get('tree_hash'):
-        raise OrchestratorError('target_tree_sha/tree_hash mismatch')
-    if worktree is not None:
-        live = _git(Path(worktree), 'rev-parse', 'HEAD^{tree}')
-        if live != target:
-            raise OrchestratorError(
-                'tree identity mismatch: evidence ' + target
-                + ' != live ' + live)
-    return payload
-
-
 def default_execute(worker: dict[str, Any], worktree: Path
                     ) -> tuple[int, str]:
     """Production execution: run the worker's primary action in its
@@ -134,99 +96,6 @@ def default_execute(worker: dict[str, Any], worktree: Path
 # 6.4 GovernedScheduler -- readiness -> conflict gate -> dispatch ->
 # evidence -> done(). done(node) is called ONLY after the full lifecycle.
 # ---------------------------------------------------------------------------
-
-def validate_workers(workers: Any) -> list[dict[str, Any]]:
-    """Graph/spec validation before anything is created or dispatched."""
-    if not isinstance(workers, list) or not workers:
-        raise OrchestratorError('spec.workers must be a non-empty list')
-    ids: set[str] = set()
-    for raw in workers:
-        if not isinstance(raw, dict):
-            raise OrchestratorError('each worker must be a JSON object')
-        wid = raw.get('id')
-        if not isinstance(wid, str) or not wid:
-            raise OrchestratorError('worker id must be a non-empty string')
-        if wid in ids:
-            raise OrchestratorError(f'duplicate worker id: {wid!r}')
-        ids.add(wid)
-        deps = raw.get('deps', [])
-        if not isinstance(deps, list) or \
-                not all(isinstance(dep, str) for dep in deps):
-            raise OrchestratorError(
-                f'{wid}.deps must be a list of worker ids')
-        for key in ('reads', 'writes'):
-            value = raw.get(key)
-            if value is not None and (
-                    not isinstance(value, list)
-                    or not all(isinstance(item, str) for item in value)):
-                raise OrchestratorError(
-                    f'{wid}.{key} must be a list of paths, or absent '
-                    'to mean UNKNOWN (never silently an empty set)')
-        kind = runner_kind(raw)
-        cmd = raw.get('cmd')
-        if cmd is not None and (not isinstance(cmd, list)
-                                or not all(isinstance(part, str)
-                                           for part in cmd)):
-            raise OrchestratorError(
-                f'{wid}.cmd must be a non-empty argv list')
-        if kind == 'command' and (not isinstance(cmd, list) or not cmd):
-            # Back-compat gate (Phase 2): pre-Phase-2 specs are command
-            # workers and keep the exact same requirement + message;
-            # agent workers whose primary action is the agent
-            # invocation may omit cmd entirely.
-            raise OrchestratorError(
-                f'{wid}.cmd must be a non-empty argv list')
-        timeout = raw.get('timeout')
-        if timeout is not None and (
-                isinstance(timeout, bool)
-                or not isinstance(timeout, (int, float))
-                or timeout <= 0):
-            raise OrchestratorError(
-                f'{wid}.timeout must be a positive number of seconds '
-                '(int/float), or absent/None for the default budget')
-        # -- Phase 2: optional agent-runner fields (fail-closed) -------
-        runner_cfg = raw.get('runner')
-        if runner_cfg is not None:
-            if not isinstance(runner_cfg, dict):
-                raise OrchestratorError(
-                    f'{wid}.runner must be an object with a type')
-            rtype = runner_cfg.get('type')
-            if not isinstance(rtype, str) or rtype not in KNOWN_RUNNERS:
-                raise OrchestratorError(
-                    f'{wid}: unknown runner type {rtype!r} '
-                    f'(known: {sorted(KNOWN_RUNNERS)})')
-        agent = raw.get('agent')
-        if agent is not None and (not isinstance(agent, str)
-                                  or not agent.strip()):
-            raise OrchestratorError(
-                f'{wid}.agent must be a non-empty string '
-                f'(known: {sorted(KNOWN_RUNNERS)})')
-        if kind not in KNOWN_RUNNERS:
-            raise OrchestratorError(
-                f'{wid}: unknown agent/runner {kind!r} '
-                f'(known: {sorted(KNOWN_RUNNERS)})')
-        prompt = raw.get('prompt')
-        if prompt is not None and (not isinstance(prompt, str)
-                                   or not prompt.strip()):
-            raise OrchestratorError(
-                f'{wid}.prompt must be a non-empty string when set')
-        if kind == 'antigravity' and prompt is None:
-            raise OrchestratorError(
-                f'{wid}: agent antigravity requires prompt')
-        verify_command = raw.get('verify_command')
-        if verify_command is not None and (
-                not isinstance(verify_command, str)
-                or not verify_command.strip()):
-            raise OrchestratorError(
-                f'{wid}.verify_command must be a non-empty string '
-                'when set')
-    for raw in workers:
-        for dep in raw.get('deps', []) or []:
-            if dep not in ids:
-                raise OrchestratorError(
-                    f'{raw["id"]}: unknown dependency {dep!r}')
-    return list(workers)
-
 
 class GovernedScheduler:
     """TopologicalSorter wrapped in the dispatch/evidence invariants."""
