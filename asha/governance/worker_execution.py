@@ -340,8 +340,7 @@ def _derive_authoritative(outcome: dict, worker: dict,
             verdict=evidence.GovernanceVerdict(
                 status=evidence.VerdictStatus.PASS,
                 reason_code="evidence_sealed"),
-        )
-    ).encode("utf-8")
+        ))
 
 
 def collect_worker_evidence(
