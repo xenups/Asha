@@ -205,6 +205,9 @@ class DAGCoordinator:
             rc, tail = int(result[0]), str(result[1])
         else:
             rc, tail = int(result), ""
+        if base is None or base_tree is None:
+            base = self.dispatcher.base_commit
+            base_tree = self.dispatcher.base_tree
         return worker_execution.collect_worker_evidence(
             worker, path, rc, tail, self.task_id, self.evidence_dir,
             base=base, base_tree=base_tree,
