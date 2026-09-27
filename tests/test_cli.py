@@ -212,13 +212,16 @@ def test_invariant_e_verification_failure_never_renders_pass(
     class _FakeRunner:
         def __init__(self, _repo: Any, worker: Any, **_kwargs: Any
                      ) -> None:
-            self._wid = worker['id']
+            self._repo = _repo
+            self._worker = worker
 
-        def __call__(self, *a: Any, **k: Any) -> dict[str, Any]:
-            return {'states': {self._wid: {'state': 'DONE'}},
-                    'evidence': {self._wid: str(evidence_file)},
+        def __call__(self, repo: Any, worker: dict[str, Any], **k: Any
+                     ) -> dict[str, Any]:
+            wid = worker['id']
+            return {'states': {wid: {'state': 'DONE'}},
+                    'evidence': {wid: str(evidence_file)},
                     'worktrees': {},
-                    'authoritative': {self._wid: b'{}'}}
+                    'authoritative': {wid: b'{}'}}
 
     def _fake_verify_record(_record: Any) -> Any:
         class R:
@@ -369,14 +372,13 @@ def test_committed_target_executes_via_scheduler_authority(
 
     class _FakeRunner:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            # worker is passed by keyword from cli._run_sealed
-            worker = kwargs.get('worker') or (args[1] if len(args) > 1
-                                              else args[0])
-            created['workers'] = [worker]
-            created['kwargs'] = kwargs
+            pass
 
-        def __call__(self, *a: Any, **k: Any) -> dict[str, Any]:
-            wid = created['workers'][0]['id']
+        def __call__(self, repo: Any, worker: dict[str, Any], **k: Any
+                     ) -> dict[str, Any]:
+            wid = worker['id']
+            created['workers'] = [worker]
+            created['kwargs'] = k
             return {'states': {wid: {'state': 'DONE'}},
                     'evidence': {wid: str(evidence_file)},
                     'worktrees': {},
