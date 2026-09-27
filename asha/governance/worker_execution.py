@@ -238,6 +238,7 @@ def run_worker_in_worktree(
     evidence_paths: dict[str, str] = {}
     authoritative: dict[str, bytes] = {}
     outcome: dict[str, Any] | None = None
+    created_path: Path | None = None
 
     try:
         if fast_path:
@@ -259,6 +260,7 @@ def run_worker_in_worktree(
                 base=base, base_tree=base_tree)
         else:
             path = dispatcher.create(wid)
+            created_path = path
             try:
                 result = (execute_hook or default_execute)(worker, path)
             except subprocess.TimeoutExpired:
@@ -266,7 +268,7 @@ def run_worker_in_worktree(
                            "reason": "timeout_exceeded", "evidence": None}
                 states[wid] = outcome
                 return _report(task_id, states, evidence_paths,
-                               authoritative, dispatcher, dispatcher)
+                               authoritative, dispatcher, created_path)
             except Exception as exc:
                 outcome = {"state": "FAILED",
                            "reason": f"execution_error:{type(exc).__name__}: "
@@ -274,7 +276,7 @@ def run_worker_in_worktree(
                            "evidence": None}
                 states[wid] = outcome
                 return _report(task_id, states, evidence_paths,
-                               authoritative, dispatcher)
+                               authoritative, dispatcher, created_path)
             rc, tail = _split_result(result)
             outcome = collect_worker_evidence(
                 worker, path, rc, tail, task_id,
@@ -289,7 +291,7 @@ def run_worker_in_worktree(
         dispatcher.cleanup()
 
     return _report(task_id, states, evidence_paths, authoritative,
-                   dispatcher)
+                   dispatcher, created_path, fast_path=fast_path)
 
 
 def _split_result(result) -> tuple[int, str]:
@@ -299,7 +301,20 @@ def _split_result(result) -> tuple[int, str]:
 
 
 def _report(task_id: str, states: dict, evidence_paths: dict,
-            authoritative: dict, dispatcher) -> dict[str, Any]:
+            authoritative: dict, dispatcher,
+            created_path: Path | None = None,
+            fast_path: bool = False) -> dict[str, Any]:
+    worktrees: dict[str, Any] = {}
+    if created_path is not None and states:
+        wid = next(iter(states))
+        worktrees[wid] = {"path": str(created_path), "state": "created"}
+    routing: dict[str, Any] = {}
+    if states:
+        wid = next(iter(states))
+        routing[wid] = {
+            "mode": ("fast_path" if fast_path else "full_governance"),
+            "reason_code": "executed",
+        }
     return {
         "task_id": task_id,
         "status": ("ok" if any(s.get("state") == "DONE"
@@ -307,7 +322,8 @@ def _report(task_id: str, states: dict, evidence_paths: dict,
         "states": states,
         "evidence": evidence_paths,
         "authoritative": authoritative,
-        "worktrees": {},
+        "worktrees": worktrees,
+        "routing": routing,
         "cleanup_errors": list(dispatcher.cleanup_errors),
     }
 
