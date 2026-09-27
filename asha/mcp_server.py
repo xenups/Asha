@@ -58,6 +58,7 @@ from .context_slicer import slice_context
 from .router import RuntimeMode, route
 from .contracts.validation import validate_workers
 from .governance.worker_execution import run_worker_in_worktree
+from .scheduler import GovernedScheduler  # apply/spec path (H.2.1-D deferral)
 from .types import OrchestratorError
 from .worktree import _git
 
