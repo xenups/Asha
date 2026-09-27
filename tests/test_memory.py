@@ -23,7 +23,7 @@ PY = sys.executable
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from asha import evidence, memory, project_map, scope_resolver
+from asha import memory, project_map, scope_resolver
 from asha.governance import ship_gate as gate_ship
 
 GITIGNORE = (".jspace/\n__pycache__/\n*.pyc\n.pytest_cache/\n"
@@ -761,7 +761,7 @@ def test_control_search_gates_contradictory_fact(tmp_path: Path) -> None:
     (pre-fix it was: retrieved == the fact)."""
     repo = _make_repo(tmp_path)
     store = DictBackend()
-    bad = memory.add_memory(
+    memory.add_memory(
         repo, "early era used unittest", "repository_fact",
         fact_key="tooling.test_runner", fact_value="unittest",
         backend=store)

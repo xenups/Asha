@@ -33,16 +33,14 @@ from .common import paths as common_paths
 from .conflict import ConflictManager, covered, scope_status
 from .contracts.validation import validate_workers  # extracted (H.2.1)
 from .governance.worker_execution import (
-    collect_worker_evidence,  # extracted _collect (H.2.1)
-    default_execute,          # extracted (H.2.1)
-    verify_worker_evidence,   # extracted (H.2.1)
+    default_execute,  # extracted (H.2.1)
+    verify_worker_evidence,  # extracted (H.2.1)
 )
 from .integrator import IntegrationResult, TreeIntegrator
 from .router import RuntimeMode, route
 from .types import (
     STATES,
     TAIL_CHARS,
-    WORKER_EVIDENCE_FIELDS,
     ExecuteHook,
     OrchestratorError,
 )

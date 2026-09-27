@@ -55,9 +55,9 @@ from .codegraph import build_graph, closure, sym_node
 from .common import paths as common_paths
 from .conflict import ConflictManager, scope_status
 from .context_slicer import slice_context
-from .router import RuntimeMode, route
 from .contracts.validation import validate_workers
 from .governance.worker_execution import run_worker_in_worktree
+from .router import RuntimeMode, route
 from .scheduler import GovernedScheduler  # apply/spec path (H.2.1-D deferral)
 from .types import OrchestratorError
 from .worktree import _git

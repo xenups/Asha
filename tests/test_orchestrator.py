@@ -20,8 +20,8 @@ Invariant map (task section 11.3):
 from __future__ import annotations
 
 import json
-import subprocess
 import os
+import subprocess
 import sys
 import threading
 import time

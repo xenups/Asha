@@ -28,7 +28,7 @@ from typing import Any
 
 import pytest
 
-from asha import evidence, scope_resolver
+from asha import evidence
 from asha.adapters.native import NativeAdapter
 from asha.common import paths as common_paths
 from asha.contracts.execution import ExecutionManifest
@@ -157,13 +157,13 @@ def repo(tmp_path: Path) -> Path:
 def _scenario(repo: Path, case: str, worker: dict[str, Any]) -> None:
     if case == "failing_checks":
         worker["cmd"] = [PY, "-c",
-                         "import pathlib,subprocess,sys;"
-                         "p=pathlib.Path(sys.argv[1]);p.write_text('x=1\\n')"
-                         ";[w.unlink(missing_ok=True) if False else None "
-                         "for w in []]", "."]
+                         ("import pathlib,subprocess,sys;"
+                          "p=pathlib.Path(sys.argv[1]);p.write_text('x=1\n')"
+                          ";[w.unlink(missing_ok=True) if False else None "
+                          "for w in []]"), "."]
         worker["cmd"] = [PY, "-c",
-                         "import pathlib,sys;"
-                         "pathlib.Path(sys.argv[1]).write_text('import os\\n')",
+                         ("import pathlib,sys;"
+                          "pathlib.Path(sys.argv[1]).write_text('import os\n')"),
                          "tests/poison.py"]
         worker["declared_scope"] = ["tests/"]
 

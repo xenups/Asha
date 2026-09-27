@@ -244,7 +244,7 @@ def test_ship_gate_refusal_on_failure(tmp_path: Path) -> None:
 def test_evidence_binds_to_exact_tree(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     _ready_ledger(repo)
-    payload = _ship(repo)
+    _ship(repo)
     artifact = _evidence_file(repo)
     before = artifact.read_bytes()
 

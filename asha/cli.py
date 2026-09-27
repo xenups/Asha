@@ -164,7 +164,6 @@ def _run_sealed(root: Path, affected: list[str], classification: Any,
     module."""
     run_id = run_id or ('cli-' + os.urandom(4).hex())
     journal = telemetry.EventJournalWriter(root, run_id)
-    envelope = _dispatch_context(root)
     routed = route(governance_profile(classification),
                    fast_path_enabled=_fast_path_enabled())
     wid = 'cli-' + os.urandom(4).hex()
