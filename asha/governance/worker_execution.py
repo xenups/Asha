@@ -303,7 +303,8 @@ def _split_result(result) -> tuple[int, str]:
 def _report(task_id: str, states: dict, evidence_paths: dict,
             authoritative: dict, dispatcher,
             created_path: Path | None = None,
-            fast_path: bool = False) -> dict[str, Any]:
+            fast_path: bool = False,
+            fast_path_classification: str = "UNKNOWN") -> dict[str, Any]:
     worktrees: dict[str, Any] = {}
     if created_path is not None and states:
         wid = next(iter(states))
@@ -314,8 +315,7 @@ def _report(task_id: str, states: dict, evidence_paths: dict,
         routing[wid] = {
             "mode": ("fast_path" if fast_path else "full_governance"),
             "reason_code": "executed",
-            "classification": str(
-                (states.get(wid) or {}).get("classification", "UNKNOWN")),
+            "classification": fast_path_classification,
         }
     return {
         "task_id": task_id,
