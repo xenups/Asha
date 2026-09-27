@@ -158,12 +158,12 @@ def _scenario(repo: Path, case: str, worker: dict[str, Any]) -> None:
     if case == "failing_checks":
         worker["cmd"] = [PY, "-c",
                          ("import pathlib,subprocess,sys;"
-                          "p=pathlib.Path(sys.argv[1]);p.write_text('x=1\n')"
+                          "p=pathlib.Path(sys.argv[1]);p.write_text('x=1\\n')"
                           ";[w.unlink(missing_ok=True) if False else None "
                           "for w in []]"), "."]
         worker["cmd"] = [PY, "-c",
                          ("import pathlib,sys;"
-                          "pathlib.Path(sys.argv[1]).write_text('import os\n')"),
+                          "pathlib.Path(sys.argv[1]).write_text('import os\\n')"),
                          "tests/poison.py"]
         worker["declared_scope"] = ["tests/"]
 
