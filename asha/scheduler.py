@@ -34,16 +34,15 @@ from .conflict import ConflictManager, covered, scope_status
 from .contracts.validation import validate_workers  # extracted (H.2.1)
 from .governance.worker_execution import (
     collect_worker_evidence,  # extracted _collect (H.2.1)
+    default_execute,          # extracted (H.2.1)
     verify_worker_evidence,   # extracted (H.2.1)
 )
 from .integrator import IntegrationResult, TreeIntegrator
 from .router import RuntimeMode, route
-from .runner import KNOWN_RUNNERS, dispatch_runner, runner_kind
 from .types import (
     STATES,
     TAIL_CHARS,
     WORKER_EVIDENCE_FIELDS,
-    WORKER_TIMEOUT_S,
     ExecuteHook,
     OrchestratorError,
 )
@@ -73,23 +72,6 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
-
-
-def default_execute(worker: dict[str, Any], worktree: Path
-                    ) -> tuple[int, str]:
-    """Production execution: run the worker's primary action in its
-    worktree under the worker's `timeout` (WORKER_TIMEOUT_S when
-    unspecified/None -- existing behavior preserved). On timeout the
-    child TREE is killed and TimeoutExpired propagates; _run_one maps
-    it to FAILED/timeout_exceeded. Phase 2: the spawn/teardown primitive
-    lives in runner._spawn (shared by every AgentRunner) -- this hook
-    keeps its (rc, tail-of-combined-output) contract byte-for-byte."""
-    timeout = worker.get('timeout')
-    if timeout is None:
-        timeout = WORKER_TIMEOUT_S
-    result = dispatch_runner(worker).execute(worker, worktree, timeout)
-    combined = (result.stdout or '') + (result.stderr or '')
-    return result.exit_code, combined[-TAIL_CHARS:]
 
 
 # ---------------------------------------------------------------------------

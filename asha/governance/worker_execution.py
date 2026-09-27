@@ -30,10 +30,11 @@ from typing import Any
 from asha import check_runner, evidence, scope_resolver, scoping
 from asha.common import paths as common_paths
 from asha.conflict import covered
-from asha.runner import default_execute
+from asha.runner import dispatch_runner
 from asha.types import (
     TAIL_CHARS,
     WORKER_EVIDENCE_FIELDS,
+    WORKER_TIMEOUT_S,
     OrchestratorError,
 )
 from asha.worktree import (
@@ -44,6 +45,24 @@ from asha.worktree import (
 )
 
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
+
+
+def default_execute(worker: dict[str, Any], worktree: Path
+                    ) -> tuple[int, str]:
+    """Production execution: run the worker's primary action in its
+    worktree under the worker's `timeout` (WORKER_TIMEOUT_S when
+    unspecified/None -- existing behavior preserved). On timeout the
+    child TREE is killed and TimeoutExpired propagates; the caller maps
+    it to FAILED/timeout_exceeded. The spawn/teardown primitive lives in
+    runner._spawn (shared by every AgentRunner) -- this hook keeps its
+    (rc, tail-of-combined-output) contract byte-for-byte. (Extracted
+    verbatim from scheduler.py.)"""
+    timeout = worker.get("timeout")
+    if timeout is None:
+        timeout = WORKER_TIMEOUT_S
+    result = dispatch_runner(worker).execute(worker, worktree, timeout)
+    combined = (result.stdout or "") + (result.stderr or "")
+    return result.exit_code, combined[-TAIL_CHARS:]
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
