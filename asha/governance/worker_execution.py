@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -29,12 +30,18 @@ from typing import Any
 from asha import check_runner, evidence, scope_resolver, scoping
 from asha.common import paths as common_paths
 from asha.conflict import covered
+from asha.runner import default_execute
 from asha.types import (
     TAIL_CHARS,
     WORKER_EVIDENCE_FIELDS,
     OrchestratorError,
 )
-from asha.worktree import _commit_all, _git, _safe_id
+from asha.worktree import (
+    WorktreeDispatcher,
+    _commit_all,
+    _git,
+    _safe_id,
+)
 
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 
@@ -175,7 +182,151 @@ def scoping_decision(root: Path,
     return decision
 
 
-def collect_worker_evidence(worker: dict[str, Any],
+def run_worker_in_worktree(
+    repo: Path,
+    worker: dict[str, Any],
+    *,
+    task_id: str,
+    keep_worktrees: bool = False,
+    fast_path: bool = False,
+    execute_hook=None,
+) -> dict[str, Any]:
+    """Execute ONE worker through the modular path (H.2.1-C/D).
+
+    OLD: GovernedScheduler(repo, [worker]).run()  (single worker)
+    NEW: this function -- same observable contract:
+      * isolated worktree (fast_path skips the worktree, direct repo)
+      * worker cmd executed (execute_hook, default subprocess)
+      * collect_worker_evidence -> sealed worker evidence (external)
+      * verify + authoritative (ledger-derived) available for replay
+      * worktree cleaned up unless keep_worktrees
+
+    Returns the scheduler-shaped report: {
+      'states': {wid: {state, reason, evidence}},
+      'evidence': {wid: ev_path},
+      'authoritative': {wid: bytes},
+      'worktrees': cleared,
+      'cleanup_errors': [],
+      'task_id': task_id,
+    }
+    """
+    repo = Path(repo).resolve()
+    dispatcher = WorktreeDispatcher(repo, keep=keep_worktrees)
+    base_commit = dispatcher.base_commit
+    base_tree = dispatcher.base_tree
+    wid = worker["id"]
+    states: dict[str, Any] = {}
+    evidence_paths: dict[str, str] = {}
+    authoritative: dict[str, bytes] = {}
+    outcome: dict[str, Any] | None = None
+
+    try:
+        if fast_path:
+            # direct repo execution, serialized evidence binding
+            base = _git(repo, "rev-parse", "HEAD").strip()
+            base_tree = _git(repo, "rev-parse", "HEAD^{tree}").strip()
+            try:
+                result = (execute_hook or default_execute)(worker, repo)
+            except subprocess.TimeoutExpired:
+                outcome = {"state": "FAILED",
+                           "reason": "timeout_exceeded", "evidence": None}
+                states[wid] = outcome
+                return _report(task_id, states, evidence_paths,
+                               authoritative, dispatcher)
+            rc, tail = _split_result(result)
+            outcome = collect_worker_evidence(
+                worker, repo, rc, tail, task_id,
+                common_paths.get_orchestrator_dir(repo) / _safe_id(task_id),
+                base=base, base_tree=base_tree)
+        else:
+            path = dispatcher.create(wid)
+            try:
+                result = (execute_hook or default_execute)(worker, path)
+            except subprocess.TimeoutExpired:
+                outcome = {"state": "FAILED",
+                           "reason": "timeout_exceeded", "evidence": None}
+                states[wid] = outcome
+                return _report(task_id, states, evidence_paths,
+                               authoritative, dispatcher, dispatcher)
+            except Exception as exc:
+                outcome = {"state": "FAILED",
+                           "reason": f"execution_error:{type(exc).__name__}: "
+                                     f"{exc}",
+                           "evidence": None}
+                states[wid] = outcome
+                return _report(task_id, states, evidence_paths,
+                               authoritative, dispatcher)
+            rc, tail = _split_result(result)
+            outcome = collect_worker_evidence(
+                worker, path, rc, tail, task_id,
+                common_paths.get_orchestrator_dir(repo) / _safe_id(task_id),
+                base=base_commit, base_tree=base_tree)
+        states[wid] = outcome
+        if outcome.get("evidence"):
+            evidence_paths[wid] = outcome["evidence"]
+            authoritative[wid] = _derive_authoritative(
+                outcome, worker, base_tree)
+    finally:
+        dispatcher.cleanup()
+
+    return _report(task_id, states, evidence_paths, authoritative,
+                   dispatcher)
+
+
+def _split_result(result) -> tuple[int, str]:
+    if isinstance(result, tuple):
+        return int(result[0]), str(result[1])
+    return int(result), ""
+
+
+def _report(task_id: str, states: dict, evidence_paths: dict,
+            authoritative: dict, dispatcher) -> dict[str, Any]:
+    return {
+        "task_id": task_id,
+        "status": ("ok" if any(s.get("state") == "DONE"
+                                for s in states.values()) else "failed"),
+        "states": states,
+        "evidence": evidence_paths,
+        "authoritative": authoritative,
+        "worktrees": {},
+        "cleanup_errors": list(dispatcher.cleanup_errors),
+    }
+
+
+def _derive_authoritative(outcome: dict, worker: dict,
+                          base_tree: str) -> bytes:
+    """Ledger-derived authoritative record (extracted from _collect's
+    ledger section): replay/ship verification bytes."""
+    import json
+    evidence_path = outcome.get("evidence")
+    if not evidence_path:
+        return b""
+    try:
+        payload = json.loads(Path(evidence_path).read_text(
+            encoding="utf-8"))
+    except (OSError, ValueError):
+        return b""
+    return evidence.canonicalize_evidence(
+        evidence.AuthoritativeEvidence(
+            worker_id=worker["id"],
+            task_id=payload.get("task_id", ""),
+            base_tree_sha=base_tree,
+            target_tree_sha=payload.get("target_tree_sha", ""),
+            observed_scope=evidence.ObservedScope(
+                reads=frozenset(str(e) for e in (worker.get("reads") or [])),
+                writes=frozenset(str(e) for e in
+                                 (payload.get("observed_scope") or [])),
+                capture_mode=evidence.ScopeCaptureMode.STRICT,
+            ),
+            verdict=evidence.GovernanceVerdict(
+                status=evidence.VerdictStatus.PASS,
+                reason_code="evidence_sealed"),
+        )
+    ).encode("utf-8")
+
+
+def collect_worker_evidence(
+                            worker: dict[str, Any],
                             path: Path,
                             rc: int,
                             tail: str,
