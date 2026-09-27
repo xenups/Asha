@@ -56,9 +56,9 @@ from .common import paths as common_paths
 from .conflict import ConflictManager, scope_status
 from .context_slicer import slice_context
 from .contracts.validation import validate_workers
+from .governance.dag import run_workers_dag
 from .governance.worker_execution import run_worker_in_worktree
 from .router import RuntimeMode, route
-from .scheduler import GovernedScheduler  # apply/spec path (H.2.1-D deferral)
 from .types import OrchestratorError
 from .worktree import _git
 
@@ -680,21 +680,14 @@ def asha_run_spec(arguments: dict[str, Any]) -> dict[str, Any]:
         # conflict gating, scope verification, checks and sealed
         # evidence are all the existing orchestrator's own.
         task_id = "mcp-" + os.urandom(6).hex()
-        scheduler: GovernedScheduler | None = None
         try:
-            scheduler = GovernedScheduler(Path(plan["root"]), workers,
-                                          task_id=task_id)
-            report = scheduler.run()
+            report = run_workers_dag(Path(plan["root"]), workers,
+                                     task_id=task_id)
         except Exception as exc:
             # Refused to start or died catastrophically: report the real
             # state, never a fabricated success (partial = partial).
-            snapshot = (json.dumps(
-                {wid: entry.get("state")
-                 for wid, entry in scheduler.states.items()},
-                sort_keys=True) if scheduler is not None else "{}")
             return _tool_error(
-                f"orchestration aborted: {type(exc).__name__}: {exc}; "
-                f"states={snapshot}")
+                f"orchestration aborted: {type(exc).__name__}: {exc}")
 
         states: dict[str, Any] = report.get("states") or {}
 
@@ -717,7 +710,7 @@ def asha_run_spec(arguments: dict[str, Any]) -> dict[str, Any]:
             "blocked_workers": bucket("BLOCKED"),
             "invalid_evidence_workers": bucket("INVALID_EVIDENCE"),
             "evidence": report.get("evidence") or {},
-            "deferrals": list(scheduler.deferral_events),
+            "deferrals": list(report.get("deferral_events") or []),
             "graph": report.get("graph") or {},
             "worktrees": report.get("worktrees") or {},
             "cleanup_errors": report.get("cleanup_errors") or [],

@@ -44,12 +44,14 @@ from typing import Any
 
 from . import git_context, scope_resolver, scoping, telemetry, ui, watcher
 from .classifier import classify_task, governance_profile
+from .governance.dag import run_workers_dag
 from .governance.worker_execution import run_worker_in_worktree
+from .integrator import IntegrationResult, TreeIntegrator
 from .mcp_server import _dispatch_context, _fast_path_enabled
 from .replay import parse_evidence, verify_bytes, verify_record
 from .router import RuntimeMode, route
-from .scheduler import main as scheduler_main
 from .scheduler import verify_worker_evidence
+from .types import OrchestratorError
 
 SCHEMA_VERSION = 1
 
@@ -408,11 +410,82 @@ def _inspect(argv: list[str]) -> int:
     return EXIT_OK
 
 
+def _integration_summary(repo: Path, report: dict[str, Any]
+                         ) -> IntegrationResult:
+    """--apply stage (Phase 4): integrate only a fully-DONE run; a failed
+    run is refused without touching the target (audit semantics hold)."""
+    if report.get('status') != 'ok':
+        return IntegrationResult(
+            status='refused',
+            error='run_not_ok:' + str(report.get('reason')))
+    evidence_paths = report.get('evidence') or {}
+    integrator = TreeIntegrator(
+        repo, [Path(evidence_paths[wid]) for wid in sorted(evidence_paths)],
+        generation=report.get('graph', {}).get('generation'))
+    return integrator.apply()
+
+
+def run_spec_cmd(argv: list[str]) -> int:
+    """`asha run --spec FILE [--keep-worktrees] [--apply]` (migrated from
+    scheduler_main). DAG sequencing via run_workers_dag (H.2.2-C)."""
+    parser = argparse.ArgumentParser(
+        description='Asha Orchestrator (governed scheduling)')
+    parser.add_argument('--root', default='.',
+                        help='repository root (default: cwd)')
+    sub = parser.add_subparsers(dest='command', required=True)
+    run_p = sub.add_parser('run', help='run one worker graph to completion')
+    run_p.add_argument('--spec', required=True,
+                       help="JSON {task_id?, workers:[{id,deps,"
+                            "declared_scope,reads,writes,cmd,"
+                            "timeout?}]}")
+    run_p.add_argument('--keep-worktrees', action='store_true',
+                       help='debug: skip worktree removal (disk cost stays '
+                            'until removed manually; reported)')
+    run_p.add_argument('--apply', action='store_true',
+                       help='atomically apply verified worker results onto '
+                            'the target branch after the integration gate '
+                            '(default: audit-only, target untouched)')
+    args = parser.parse_args(argv)
+    try:
+        spec_path = Path(args.spec)
+        spec = json.loads(spec_path.read_text(encoding='utf-8'))
+        if not isinstance(spec, dict):
+            raise OrchestratorError('spec must be a JSON object')
+        task_id = spec.get('task_id', 'task')
+        if not isinstance(task_id, str) or not task_id:
+            raise OrchestratorError('spec.task_id must be a non-empty string')
+        report = run_workers_dag(
+            Path(args.root), spec.get('workers'), task_id=task_id,
+            keep_worktrees=args.keep_worktrees)
+        if args.apply:
+            report['integration'] = _integration_summary(
+                Path(args.root), report).as_dict()
+    except OrchestratorError as exc:
+        print(f'ORCHESTRATOR ERROR: {exc}', file=sys.stderr)
+        return 1
+    except json.JSONDecodeError as exc:
+        print(f'ORCHESTRATOR ERROR: invalid spec json: {exc}',
+              file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f'ORCHESTRATOR ERROR: {exc}', file=sys.stderr)
+        return 1
+    except Exception as exc:  # fail closed, never a traceback at the agent
+        print(f'ORCHESTRATOR ERROR: {type(exc).__name__}: {exc}',
+              file=sys.stderr)
+        return 1
+    print(json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False))
+    ok = report.get('status') == 'ok'
+    if args.apply:
+        ok = ok and report.get('integration', {}).get('status') == 'applied'
+    return 0 if ok else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     command = _first_positional(argv)
     if command == 'run':
-        return scheduler_main(argv)
+        return run_spec_cmd(argv)
     if command == 'inspect':
         return _inspect(argv[1:])
 
