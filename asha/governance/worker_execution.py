@@ -314,6 +314,8 @@ def _report(task_id: str, states: dict, evidence_paths: dict,
         routing[wid] = {
             "mode": ("fast_path" if fast_path else "full_governance"),
             "reason_code": "executed",
+            "classification": str(
+                (states.get(wid) or {}).get("classification", "UNKNOWN")),
         }
     return {
         "task_id": task_id,
