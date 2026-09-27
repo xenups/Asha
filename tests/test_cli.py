@@ -624,7 +624,7 @@ def test_legacy_run_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
         seen.append(argv)
         return 0
 
-    monkeypatch.setattr(cli, 'scheduler_main', _sched)
+    monkeypatch.setattr(cli, 'run_spec_cmd', _sched)
     assert cli.main(['run', '--spec', 'x.json']) == 0
     assert seen == [['run', '--spec', 'x.json']]
     # --paths keeps an explicitly named path in our mode
