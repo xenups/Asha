@@ -453,8 +453,11 @@ def run_spec_cmd(argv: list[str]) -> int:
         task_id = spec.get('task_id', 'task')
         if not isinstance(task_id, str) or not task_id:
             raise OrchestratorError('spec.task_id must be a non-empty string')
+        workers = spec.get('workers')
+        if not isinstance(workers, list):
+            raise OrchestratorError('spec.workers must be a list')
         report = run_workers_dag(
-            Path(args.root), spec.get('workers'), task_id=task_id,
+            Path(args.root), workers, task_id=task_id,
             keep_worktrees=args.keep_worktrees)
         if args.apply:
             report['integration'] = _integration_summary(
