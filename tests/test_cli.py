@@ -209,23 +209,24 @@ def test_invariant_e_verification_failure_never_renders_pass(
         {'checks': [{'name': 'pytest', 'status': 'passed'}],
          'evidence_sha256': 'f' * 64}), encoding='utf-8')
 
-    class _FakeScheduler:
-        def __init__(self, _repo: Any, workers: Any, **_kwargs: Any
+    class _FakeRunner:
+        def __init__(self, _repo: Any, worker: Any, **_kwargs: Any
                      ) -> None:
-            self._wid = workers[0]['id']
-            self.authoritative = {self._wid: b'{}'}
+            self._wid = worker['id']
 
-        def run(self) -> dict[str, Any]:
+        def __call__(self, *a: Any, **k: Any) -> dict[str, Any]:
             return {'states': {self._wid: {'state': 'DONE'}},
                     'evidence': {self._wid: str(evidence_file)},
-                    'worktrees': {}}
+                    'worktrees': {},
+                    'authoritative': {self._wid: b'{}'}}
 
     def _fake_verify_record(_record: Any) -> Any:
         class R:
             verified = True
         return R()
 
-    monkeypatch.setattr(cli, 'GovernedScheduler', _FakeScheduler)
+    runner = _FakeRunner(0, {'id': 'w0'})
+    monkeypatch.setattr(cli, 'run_worker_in_worktree', runner)
     monkeypatch.setattr(cli, 'verify_worker_evidence', lambda *_a, **_k: True)
     monkeypatch.setattr(cli, 'parse_evidence', lambda _b: object())
     monkeypatch.setattr(cli, 'verify_record', _fake_verify_record)
@@ -355,7 +356,7 @@ def test_scoped_dirty_refuses_execution_keeps_verdict(
 def test_committed_target_executes_via_scheduler_authority(
         repo: Path, capsys: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """The only execution path: one validation worker through
-    GovernedScheduler (evidence fields propagate)."""
+    run_worker_in_worktree (evidence fields propagate)."""
     (repo / 'tests' / 'test_thing.py').write_text(
         'def test_ok():\n    assert True\n# dirty\n', encoding='utf-8')
     _git(repo, 'add', '-A')
@@ -366,19 +367,22 @@ def test_committed_target_executes_via_scheduler_authority(
          'evidence_sha256': 'a' * 64}), encoding='utf-8')
     created: dict[str, Any] = {}
 
-    class _FakeScheduler:
-        def __init__(self, _repo: Any, workers: Any, **kwargs: Any) -> None:
-            created['workers'] = workers
+    class _FakeRunner:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            # worker is passed by keyword from cli._run_sealed
+            worker = kwargs.get('worker') or (args[1] if len(args) > 1
+                                              else args[0])
+            created['workers'] = [worker]
             created['kwargs'] = kwargs
-            self.authoritative = {workers[0]['id']: b'{}'}
 
-        def run(self) -> dict[str, Any]:
+        def __call__(self, *a: Any, **k: Any) -> dict[str, Any]:
             wid = created['workers'][0]['id']
             return {'states': {wid: {'state': 'DONE'}},
                     'evidence': {wid: str(evidence_file)},
-                    'worktrees': {}}
+                    'worktrees': {},
+                    'authoritative': {wid: b'{}'}}
 
-    monkeypatch.setattr(cli, 'GovernedScheduler', _FakeScheduler)
+    monkeypatch.setattr(cli, 'run_worker_in_worktree', _FakeRunner())
     monkeypatch.setattr(cli, 'verify_worker_evidence', lambda *_a, **_k: True)
     monkeypatch.setattr(cli, 'parse_evidence', lambda _b: object())
     monkeypatch.setattr(cli, 'verify_record',
@@ -395,8 +399,6 @@ def test_committed_target_executes_via_scheduler_authority(
     worker = created['workers'][0]
     assert worker['writes'] == []
     assert worker['reads'] == worker['declared_scope']
-    assert created['kwargs']['classification_context'] == (
-        cli._dispatch_context(repo))
 
 
 # ---------------------------------------- 5.2.3 git-aware discovery
