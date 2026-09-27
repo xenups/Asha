@@ -38,9 +38,9 @@ JSON_DOC = '{"repo": "fixture", "kind": "non-python"}\n'
 RUST = "fn main() { println!(\"hi\"); }\n"
 
 
-def _make_repo(tmp: Path, files: dict[str, str]) -> Path:
-    repo = tmp / "repo"
-    repo.mkdir()
+def _make_repo(tmp: Path, files: dict[str, str], name: str = "repo") -> Path:
+    repo = tmp / name
+    repo.mkdir(parents=False, exist_ok=False)
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo,
                    check=True)
     subprocess.run(["git", "config", "user.email", "fixture@example.com"],
@@ -94,20 +94,23 @@ def _seal(repo: Path, tmp: Path, worker: dict[str, Any]) -> dict[str, Any]:
 @pytest.fixture()
 def repo_broken_syntax(tmp_path: Path) -> Path:
     return _make_repo(tmp_path, {"src/broken.py": BROKEN_PY,
-                                 "tests/test_ok.py": GOOD_PY})
+                                 "tests/test_ok.py": GOOD_PY},
+                      name="repo_broken")
 
 
 @pytest.fixture()
 def repo_non_python(tmp_path: Path) -> Path:
     return _make_repo(tmp_path, {"README.md": MARKDOWN,
                                  "data.json": JSON_DOC,
-                                 "src/main.rs": RUST})
+                                 "src/main.rs": RUST},
+                      name="repo_nopy")
 
 
 @pytest.fixture()
 def repo_cold(tmp_path: Path) -> Path:
     return _make_repo(tmp_path, {"src/mod.py": GOOD_PY,
-                                 "tests/test_ok.py": GOOD_PY})
+                                 "tests/test_ok.py": GOOD_PY},
+                      name="repo_cold")
 
 
 def test_gate_verdict_without_ast(repo_broken_syntax: Path) -> None:
