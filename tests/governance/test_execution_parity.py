@@ -42,6 +42,8 @@ BASELINE = {
     "tests/test_ok.py": "def test_ok():\n    assert True\n",
 }
 
+GITIGNORE = ".jspace/\n__pycache__/\n*.pyc\n.pytest_cache/\n"
+
 
 def _git(repo: Path, *args: str) -> str:
     proc = subprocess.run(["git", *args], cwd=repo, capture_output=True,
@@ -56,6 +58,7 @@ def _make_repo(tmp: Path) -> Path:
     _git(repo, "config", "user.email", "fixture@example.com")
     _git(repo, "config", "user.name", "Fixture")
     (repo / "tests").mkdir()
+    (repo / ".gitignore").write_text(GITIGNORE, encoding="utf-8")
     for rel, text in BASELINE.items():
         (repo / rel).write_text(text, encoding="utf-8")
     _git(repo, "add", "-A")
