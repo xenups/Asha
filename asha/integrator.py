@@ -85,10 +85,10 @@ class TreeIntegrator:
         if dirty:
             return None, [], 'worktree not clean before apply:\n' + dirty
         base = _git(self.repo, 'rev-parse', 'HEAD')
-        # Deferred import: scheduler imports this module at package
-        # init; the evidence verifier lives there, so the reverse edge
-        # must stay lazy to keep the package import cycle-free.
-        from .scheduler import verify_worker_evidence
+                # Deferred import: the evidence verifier lives in
+        # governance.worker_execution; it imports this module late, so the
+        # reverse edge stays lazy to keep the package import cycle-free.
+        from .governance.worker_execution import verify_worker_evidence
         picks: list[tuple[str, str, str]] = []
         for path in self.evidences:
             if not path.is_file():
