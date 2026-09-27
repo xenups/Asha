@@ -526,9 +526,6 @@ class DAGCoordinator:
         report["reason"] = None if all_done else (
             fail_reason or "incomplete")
         report["graph"] = self._graph_report()
-        report["authoritative"] = self.authoritative
-        report["ledgers"] = self.ledgers
-        report["routing"] = self.routes
         return report
 
     def _read_blob(self, tree: str, path: str) -> str | None:
