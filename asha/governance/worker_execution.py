@@ -326,9 +326,9 @@ def _derive_authoritative(outcome: dict, worker: dict,
     except (OSError, ValueError):
         return b""
     return evidence.canonicalize_evidence(
-        evidence.AuthoritativeEvidence(
+        evidence.AuthoritativeEvidence.create(
             worker_id=worker["id"],
-            task_id=payload.get("task_id", ""),
+            generation=0,
             base_tree_sha=base_tree,
             target_tree_sha=payload.get("target_tree_sha", ""),
             observed_scope=evidence.ObservedScope(
