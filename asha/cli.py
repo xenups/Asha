@@ -44,6 +44,7 @@ from typing import Any
 
 from . import git_context, scope_resolver, scoping, telemetry, ui, watcher
 from .classifier import classify_task, governance_profile
+from .governance.dag import run_workers_dag
 from .governance.worker_execution import run_worker_in_worktree, verify_worker_evidence
 from .integrator import IntegrationResult, TreeIntegrator
 from .mcp_server import _dispatch_context, _fast_path_enabled
