@@ -375,7 +375,7 @@ def collect_worker_evidence(
                             base: str | None = None,
                             base_tree: str | None = None,
                             classification=None,
-                            uncertain: set[str] = frozenset(),
+                            uncertain: set[str] | frozenset[str] = frozenset(),
                             by_id: dict[str, dict[str, Any]] | None = None,
                             workers: list[dict[str, Any]] | None = None,
                             ) -> dict[str, Any]:
