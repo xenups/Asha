@@ -30,15 +30,11 @@ PY="$REPO_ROOT/$VENV/bin/python"
 # --- 2. Pinned ABI deps + toolchain --------------------------------------
 echo "[asha] installing pinned toolchain (tree-sitter 0.21.3 / 1.10.2 / ast-grep-py 0.45.3, ruff, mypy, pytest)"
 "$PY" -m pip install --quiet --upgrade pip
+# Feature/toolchain extras are declared in pyproject.toml; same pins as CI.
 "$PY" -m pip install --quiet \
-  "tree-sitter==0.21.3" \
-  "tree-sitter-languages==1.10.2" \
-  "ast-grep-py==0.45.3" \
-  "ruff" \
-  "mypy" \
-  "pytest" \
-  "chromadb" \
-  "mem0ai"
+  ".[code-search]" \
+  ".[memory]" \
+  ".[test]"
 
 # --- 3. Fail-closed pin verification --------------------------------------
 echo "[asha] verifying pinned ABI matrix"

@@ -7,6 +7,36 @@ name = "asha"
 version = "0.1.0"
 description = "Asha: governed multi-agent execution harness (stdlib only)"
 requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+# Code-search AST tooling: exercised directly by code_search CLI + tests.
+# These are lazy imports inside asha/code_search.py -- the core package
+# operates without them.
+code-search = [
+    "tree-sitter==0.21.3",
+    "tree-sitter-languages==1.10.2",
+    "ast-grep-py==0.45.3",
+]
+# Real-memory backend (mem0 with embedded chroma). Lazy: memory.py resolves
+# the backend at call time and falls back to NullBackend when absent.
+memory = [
+    "mem0ai==2.1.0",
+    "chromadb==1.5.9",
+]
+# Test/CI toolchain (pytest + static gates). Contains no feature deps.
+test = [
+    "pytest>=7.4",
+    "ruff>=0.16",
+    "mypy==2.3.1",
+    "mypy-baseline==0.7.4",
+]
+# Everything the CI "verify" job installs for full test coverage.
+full = [
+    "asha[code-search]",
+    "asha[memory]",
+    "asha[test]",
+]
 
 [project.scripts]
 asha = "asha.cli:main"

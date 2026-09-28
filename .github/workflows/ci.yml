@@ -31,12 +31,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install pytest ruff mypy==2.3.1
           pip install mypy-baseline==0.7.4
-          # dev-env pins: code_search CLI tests execute these optional
-          # native tools directly (matches the local venv exactly)
-          pip install tree-sitter==0.21.3 tree-sitter-languages==1.10.2 ast-grep-py==0.45.3
-          # offline memory backend: mem0 with mock embedder + local chroma
-          # store (dummy LLM key, infer=False) -- no keys, no downloads
-          pip install mem0ai==2.1.0 chromadb==1.5.9
+          # Feature extras are declared in pyproject.toml ([project.
+          # optional-dependencies]); install the full CI profile explicitly.
+          pip install -e '.[code-search]'
+          pip install -e '.[memory]'
           pip install -e .
 
       # Step 1: static analysis
