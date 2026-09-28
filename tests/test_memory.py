@@ -414,6 +414,21 @@ def test_context_schema_stable(tmp_path: Path) -> None:
             assert record["metadata"]["status"] in ("active", "stale")
 
 
+def test_memory_cli_standalone_import_works_without_mem0(
+        tmp_path: Path) -> None:
+    """Regression lock (I.3 fix): `python asha/memory.py` must import and
+    run from a foreign cwd WITHOUT mem0 installed -- the direct-script
+    path (bare relative import + case-safe sys.path shim) must not break
+    in minimal environments. Runs everywhere, unlike the mem0-gated
+    roundtrip test which skips on mem0-less hosts."""
+    # foreign cwd: the script must not depend on repo-root cwd or PYTHONPATH
+    proc = subprocess.run(
+        [PY, str(ASHA_DIR / "memory.py"), "--root", str(tmp_path), "--help"],
+        cwd=tmp_path, capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    assert "usage:" in proc.stdout
+
+
 # ---- real installed Mem0 roundtrip + CLI smoke ----------------------------
 
 def test_real_mem0_roundtrip_and_cli(tmp_path: Path) -> None:

@@ -140,6 +140,43 @@ class TestUnresolved:
         assert base.source in {"git_tracking", "unresolved"}
 
 
+class TestParentFallback:
+    """Parent-commit fallback (I.3/J.1): with no explicit/CI/upstream base,
+    resolution deterministically falls back to HEAD~1 (legacy-default), so
+    committed-target evaluation still sees the last commit's change."""
+
+    def test_two_commit_no_upstream_falls_back_to_parent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        root = tmp_path / "two"
+        _init(root)
+        (root / "a.py").write_text("VALUE = 2\n", encoding="utf-8")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "second")
+        for var in ("GITHUB_BASE_SHA", "GITHUB_BASE_REF",
+                    "CI_MERGE_REQUEST_TARGET_BRANCH_SHA",
+                    "CI_MERGE_REQUEST_TARGET_BRANCH_NAME"):
+            monkeypatch.delenv(var, raising=False)
+        base = resolve_base(root)
+        assert base.source == "legacy-default"
+        assert base.ref == "HEAD~1"
+        assert base.commit_sha is not None
+
+    def test_single_commit_no_upstream_is_unresolved(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # one commit -> no HEAD~1 -> fallback cannot fire -> unresolved
+        root = tmp_path / "one"
+        _init(root)
+        for var in ("GITHUB_BASE_SHA", "GITHUB_BASE_REF",
+                    "CI_MERGE_REQUEST_TARGET_BRANCH_SHA",
+                    "CI_MERGE_REQUEST_TARGET_BRANCH_NAME"):
+            monkeypatch.delenv(var, raising=False)
+        base = resolve_base(root)
+        assert base.source == "unresolved"
+        assert base.ref is None
+
+
 class TestNoOriginMainGuess:
     def test_origin_main_not_chosen_when_not_intended(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
