@@ -194,7 +194,9 @@ class TestDeterminism:
         v = evaluate(_facts())
         assert isinstance(v, EvaluationVerdict)
         with pytest.raises(AttributeError):
-            v.verdict = VERDICT_FAIL  # frozen (FrozenInstanceError)
+            # frozen (FrozenInstanceError); via setattr so mypy does not
+            # statically reject the deliberate invalid assignment
+            setattr(v, "verdict", VERDICT_FAIL)  # noqa: B010
 
 
 # --------------------------------------------------------------------------
@@ -214,10 +216,10 @@ class TestNoIo:
         tree = _ast.parse(src)
         code_only = src
         for node in _ast.walk(tree):
-            if isinstance(
-                node, (_ast.Str, _ast.Constant)
-            ) and isinstance(getattr(node, "value", None), str):
-                code_only = code_only.replace(node.value, "", 1)
+            if isinstance(node, (_ast.Str, _ast.Constant)):
+                value = getattr(node, "value", None)
+                if isinstance(value, str):
+                    code_only = code_only.replace(value, "", 1)
         for banned in (
             "subprocess",
             "os.",

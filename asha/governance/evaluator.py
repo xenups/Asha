@@ -26,8 +26,8 @@ from typing import Literal
 from asha.contracts.execution import SemanticFacts
 
 # Public verdict interface for the governance chain.
-VERDICT_PASS = "PASS"
-VERDICT_FAIL = "FAIL"
+VERDICT_PASS: Literal["PASS"] = "PASS"
+VERDICT_FAIL: Literal["FAIL"] = "FAIL"
 
 # Facts-only check names (the evaluator's vocabulary of policy-relevant
 # facts; NOT execution identifiers).
