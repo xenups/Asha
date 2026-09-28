@@ -26,7 +26,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-BaseSource = Literal["explicit", "ci", "git_tracking", "unresolved"]
+BaseSource = Literal["explicit", "ci", "git_tracking", "unresolved",
+                     "legacy-default"]
 
 
 @dataclass(frozen=True)
@@ -150,4 +151,18 @@ def resolve_base(root: Path, explicit: str | None = None) -> ResolvedBase:
     hit = git_tracking_base(root)
     if hit is not None:
         return hit
+    # Parent fallback (pre-Phase-E contract, D.1-documented): with no
+    # explicit/CI/upstream base, diff against the direct parent HEAD~1.
+    # This is NOT a branch-name guess (phase-E policy) -- the parent
+    # commit is deterministic, and ship_gate's D.1 restoration already
+    # assumes this "legacy HEAD~1 fallback's effect". Without it the
+    # CLI/scheduler committed-target evaluation degrades to an empty
+    # diff (HEAD vs clean tree) and never sees the change.
+    parent = _resolve_ref(root, "HEAD~1")
+    if parent is not None:
+        # Legacy-pipeline label: the modular side must emit the identical
+        # base_source the legacy default_base produced for ITS HEAD~1
+        # fallback, or test_differential_proof flags semantic drift.
+        return ResolvedBase(ref="HEAD~1", commit_sha=parent,
+                            source="legacy-default")
     return ResolvedBase(ref=None, commit_sha=None, source="unresolved")

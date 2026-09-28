@@ -36,9 +36,11 @@ if __package__ in (None, ""):
     def _asha_norm(entry: str) -> str:
         return (entry or ".").replace(chr(92), "/").rstrip("/").lower()
 
-    _asha_pkg = _asha_norm(__file__).rsplit("/", 1)[0]
-    sys.path = [entry for entry in sys.path if _asha_norm(entry) != _asha_pkg]
-    sys.path.insert(0, _asha_pkg.rsplit("/", 1)[0])
+    _asha_pkg_raw = _asha_norm(__file__).rsplit("/", 1)[0]
+    _asha_root = __file__.rsplit("/", 2)[0]
+    sys.path = [entry for entry in sys.path
+                if _asha_norm(entry) != _asha_pkg_raw]
+    sys.path.insert(0, _asha_root)
 
 import argparse
 import ast
@@ -49,7 +51,10 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from .common import paths as common_paths
+try:  # package mode
+    from .common import paths as common_paths
+except ImportError:  # direct-script mode (repo root on sys.path)
+    from asha.common import paths as common_paths
 
 try:
     from . import scope_resolver  # reuse: _DYNAMIC_RE marker set + PYTHON_SKIP_DIRS

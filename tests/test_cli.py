@@ -606,12 +606,19 @@ def test_main_module_import_has_no_side_effect(tmp_path: Path) -> None:
     """Regression: an unguarded SystemExit(main()) in asha/__main__.py
     ran the whole CLI (417s canonical execution) on plain import and
     killed any importing process with exit 0."""
+    import os as _os
     import sys as _sys
+    env = dict(_os.environ)
+    # `asha` may be uninstalled (repo stdlib-only, CI installs no editable
+    # package): make the sibling import resolvable from an arbitrary cwd
+    # by anchoring PYTHONPATH to this repo's root.
+    env['PYTHONPATH'] = str(Path(__file__).resolve().parents[1]) + \
+        _os.pathsep + env.get('PYTHONPATH', '')
     proc = subprocess.run(
         [_sys.executable, '-c',
          'import asha.__main__; print("IMPORT_OK")'],
         cwd=tmp_path, capture_output=True, text=True, check=False,
-        encoding='utf-8', errors='replace', timeout=120)
+        env=env, encoding='utf-8', errors='replace', timeout=120)
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout == 'IMPORT_OK\n'   # nothing else may be emitted
     assert 'Asha' not in proc.stdout

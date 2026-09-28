@@ -204,7 +204,13 @@ def test_watch_stepper_current_vs_last_sealed(tmp_path: Path) -> None:
 def test_governance_trio_frozen(tmp_path: Path) -> None:
     import subprocess as sp
     cwd = Path(__file__).resolve().parents[1]
-    out = sp.run(['git', 'diff', 'b30f731..HEAD', '--',
+    # Frozen anchor: 82027e0 (H.2.2-D) is where the governance trio
+    # settled after the intentional H.2.1/H.2.2 extraction of
+    # default_execute/verify_worker_evidence into worker_execution.
+    # The earlier b30f731 anchor predated that documented extraction
+    # (it was unreachable in shallow clones and asserted a now-obsolete
+    # scheduler shape).
+    out = sp.run(['git', 'diff', '82027e0..HEAD', '--',
                   'asha/scoping.py', 'asha/check_runner.py',
                   'asha/scheduler.py'],
                  cwd=cwd, capture_output=True, text=True, check=True)

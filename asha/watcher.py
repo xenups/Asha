@@ -194,6 +194,12 @@ def _authority_env() -> dict[str, str]:
     env.setdefault('GIT_TERMINAL_PROMPT', '0')
     env.setdefault('GIT_PAGER', 'cat')
     env.setdefault('GIT_ASKPASS', 'echo')
+    # The child runs ``-m asha`` from the *target* repo's cwd, where the
+    # asha package is not importable unless it is pip-installed or the
+    # Asha repo root is on PYTHONPATH. Anchor it to this file's own repo
+    # so ``python -m asha --json`` works from any working directory.
+    _asha_root = str(Path(__file__).resolve().parent.parent)
+    env['PYTHONPATH'] = _asha_root + os.pathsep + env.get('PYTHONPATH', '')
     return env
 
 
