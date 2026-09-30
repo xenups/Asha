@@ -1,0 +1,29 @@
+{
+  "benchmark_run_id": "k6-20260930",
+  "frozen_spec_sha256": "c39cb9c405f1ffd4057e8fc6cd0cbdba663e02c064fab739e7fc0562428d1112",
+  "harness_sha256": "1be5c30f30e7834cfd0cf0df6b597cbe2d198bbcc370903e066d2ac6dfda5143",
+  "repo_commit": "dc68802554f451c5f5954f260b6de052d3bad100",
+  "environment": {
+    "python": "3.12.1",
+    "pytest": "7.4.4",
+    "ruff": "0.16.9",
+    "mypy": "2.3.1",
+    "git": "2.30.2",
+    "tiktoken": "0.14.0",
+    "tokenizer": "cl100k_base"
+  },
+  "experimental_controls": {
+    "task_repo": "Asha itself (commit dc68802554f451c5f5954f260b6de052d3bad100)",
+    "strategies": [
+      "A1 grep\u00b150",
+      "A2 grep-whole-file",
+      "B1 codegraph 1-hop",
+      "B2 codegraph 2-hop"
+    ],
+    "ground_truth": "symbol-level (required_symbols per task, frozen in harness)",
+    "primary_comparison": "A1 vs B1",
+    "repetition": "retrieval deterministic -> 1 run per cell",
+    "agent_correctness": "deterministic context-sufficiency check (no LLM run declared)"
+  },
+  "generated_at": "2026-09-30T13:33:11.684756+00:00"
+}

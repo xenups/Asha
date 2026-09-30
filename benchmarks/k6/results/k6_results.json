@@ -1,0 +1,295 @@
+{
+  "T1": {
+    "task": "T1",
+    "strategies": {
+      "A1": {
+        "strategy": "A1",
+        "raw_chars": 29330,
+        "raw_lines": 636,
+        "token_count": 6968,
+        "tokens_total": 6968,
+        "tokens_relevant": 90,
+        "tokens_irrelevant": 6878,
+        "noise_ratio": 0.9871,
+        "context_complete": true,
+        "missing_symbols": [],
+        "provided_symbols_count": 664,
+        "extra_symbols_count": 661,
+        "files": [
+          "asha/governance/dag.py",
+          "asha/governance/worker_execution.py"
+        ],
+        "search_ms": 5.8,
+        "build_ms": 0,
+        "slice_ms": 0,
+        "token_reduction_pct_vs_A1": 0.0
+      },
+      "A2": {
+        "strategy": "A2",
+        "raw_chars": 56356,
+        "raw_lines": 1265,
+        "token_count": 11606,
+        "tokens_total": 11606,
+        "tokens_relevant": 76,
+        "tokens_irrelevant": 11530,
+        "noise_ratio": 0.9935,
+        "context_complete": true,
+        "missing_symbols": [],
+        "provided_symbols_count": 931,
+        "extra_symbols_count": 928,
+        "files": [
+          "asha/governance/dag.py",
+          "asha/governance/worker_execution.py"
+        ],
+        "search_ms": 4.1,
+        "build_ms": 0,
+        "slice_ms": 0,
+        "token_reduction_pct_vs_A1": -66.6
+      },
+      "B1": {
+        "strategy": "B1",
+        "raw_chars": 42768,
+        "raw_lines": 859,
+        "token_count": 10311,
+        "tokens_total": 10311,
+        "tokens_relevant": 206,
+        "tokens_irrelevant": 10105,
+        "noise_ratio": 0.98,
+        "context_complete": true,
+        "missing_symbols": [],
+        "provided_symbols_count": 1312,
+        "extra_symbols_count": 1309,
+        "files": [
+          "asha/governance/dag.py",
+          "asha/governance/worker_execution.py"
+        ],
+        "search_ms": 0,
+        "build_ms": 2951.3,
+        "slice_ms": 171.2,
+        "token_reduction_pct_vs_A1": -48.0
+      },
+      "B2": {
+        "strategy": "B2",
+        "raw_chars": 42768,
+        "raw_lines": 859,
+        "token_count": 10311,
+        "tokens_total": 10311,
+        "tokens_relevant": 206,
+        "tokens_irrelevant": 10105,
+        "noise_ratio": 0.98,
+        "context_complete": true,
+        "missing_symbols": [],
+        "provided_symbols_count": 1312,
+        "extra_symbols_count": 1309,
+        "files": [
+          "asha/governance/dag.py",
+          "asha/governance/worker_execution.py"
+        ],
+        "search_ms": 0,
+        "build_ms": 367.6,
+        "slice_ms": 202.6,
+        "token_reduction_pct_vs_A1": -48.0
+      }
+    }
+  },
+  "T2": {
+    "task": "T2",
+    "strategies": {
+      "A1": {
+        "strategy": "A1",
+        "raw_chars": 5297,
+        "raw_lines": 138,
+        "token_count": 1413,
+        "tokens_total": 1413,
+        "tokens_relevant": 56,
+        "tokens_irrelevant": 1357,
+        "noise_ratio": 0.9604,
+        "context_complete": true,
+        "missing_symbols": [],
+        "provided_symbols_count": 232,
+        "extra_symbols_count": 229,
+        "files": [
+          "asha/governance/delta.py"
+        ],
+        "search_ms": 4.6,
+        "build_ms": 0,
+        "slice_ms": 0,
+        "token_reduction_pct_vs_A1": 0.0
+      },
+      "A2": {
+        "strategy": "A2",
+        "raw_chars": 4853,
+        "raw_lines": 138,
+        "token_count": 1149,
+        "tokens_total": 1149,
+        "tokens_relevant": 49,
+        "tokens_irrelevant": 1100,
+        "noise_ratio": 0.9574,
+        "context_complete": true,
+        "missing_symbols": [],
+        "provided_symbols_count": 232,
+        "extra_symbols_count": 229,
+        "files": [
+          "asha/governance/delta.py"
+        ],
+        "search_ms": 5.0,
+        "build_ms": 0,
+        "slice_ms": 0,
+        "token_reduction_pct_vs_A1": 18.7
+      },
+      "B1": {
+        "strategy": "B1",
+        "raw_chars": 754,
+        "raw_lines": 18,
+        "token_count": 186,
+        "tokens_total": 186,
+        "tokens_relevant": 4,
+        "tokens_irrelevant": 182,
+        "noise_ratio": 0.9785,
+        "context_complete": false,
+        "missing_symbols": [
+          "extract_failures",
+          "verdict_for"
+        ],
+        "provided_symbols_count": 36,
+        "extra_symbols_count": 35,
+        "files": [
+          "asha/governance/delta.py"
+        ],
+        "search_ms": 0,
+        "build_ms": 296.6,
+        "slice_ms": 2.5,
+        "token_reduction_pct_vs_A1": 86.8
+      },
+      "B2": {
+        "strategy": "B2",
+        "raw_chars": 754,
+        "raw_lines": 18,
+        "token_count": 186,
+        "tokens_total": 186,
+        "tokens_relevant": 4,
+        "tokens_irrelevant": 182,
+        "noise_ratio": 0.9785,
+        "context_complete": false,
+        "missing_symbols": [
+          "extract_failures",
+          "verdict_for"
+        ],
+        "provided_symbols_count": 36,
+        "extra_symbols_count": 35,
+        "files": [
+          "asha/governance/delta.py"
+        ],
+        "search_ms": 0,
+        "build_ms": 263.6,
+        "slice_ms": 2.4,
+        "token_reduction_pct_vs_A1": 86.8
+      }
+    }
+  },
+  "T3": {
+    "task": "T3",
+    "strategies": {
+      "A1": {
+        "strategy": "A1",
+        "raw_chars": 39642,
+        "raw_lines": 830,
+        "token_count": 9271,
+        "tokens_total": 9271,
+        "tokens_relevant": 96,
+        "tokens_irrelevant": 9175,
+        "noise_ratio": 0.9896,
+        "context_complete": true,
+        "missing_symbols": [],
+        "provided_symbols_count": 930,
+        "extra_symbols_count": 927,
+        "files": [
+          "asha/__init__.py",
+          "asha/governance/dag.py",
+          "asha/governance/worker_execution.py",
+          "asha/runner.py",
+          "asha/scheduler.py"
+        ],
+        "search_ms": 4.6,
+        "build_ms": 0,
+        "slice_ms": 0,
+        "token_reduction_pct_vs_A1": 0.0
+      },
+      "A2": {
+        "strategy": "A2",
+        "raw_chars": 114825,
+        "raw_lines": 2472,
+        "token_count": 23122,
+        "tokens_total": 23122,
+        "tokens_relevant": 107,
+        "tokens_irrelevant": 23015,
+        "noise_ratio": 0.9954,
+        "context_complete": true,
+        "missing_symbols": [],
+        "provided_symbols_count": 1455,
+        "extra_symbols_count": 1452,
+        "files": [
+          "asha/__init__.py",
+          "asha/governance/dag.py",
+          "asha/governance/worker_execution.py",
+          "asha/runner.py",
+          "asha/scheduler.py"
+        ],
+        "search_ms": 4.4,
+        "build_ms": 0,
+        "slice_ms": 0,
+        "token_reduction_pct_vs_A1": -149.4
+      },
+      "B1": {
+        "strategy": "B1",
+        "raw_chars": 5250,
+        "raw_lines": 115,
+        "token_count": 1248,
+        "tokens_total": 1248,
+        "tokens_relevant": 92,
+        "tokens_irrelevant": 1156,
+        "noise_ratio": 0.9263,
+        "context_complete": true,
+        "missing_symbols": [],
+        "provided_symbols_count": 298,
+        "extra_symbols_count": 295,
+        "files": [
+          "asha/__init__.py",
+          "asha/governance/dag.py",
+          "asha/governance/worker_execution.py",
+          "asha/runner.py",
+          "asha/scheduler.py"
+        ],
+        "search_ms": 0,
+        "build_ms": 189.7,
+        "slice_ms": 17.0,
+        "token_reduction_pct_vs_A1": 86.5
+      },
+      "B2": {
+        "strategy": "B2",
+        "raw_chars": 5250,
+        "raw_lines": 115,
+        "token_count": 1248,
+        "tokens_total": 1248,
+        "tokens_relevant": 92,
+        "tokens_irrelevant": 1156,
+        "noise_ratio": 0.9263,
+        "context_complete": true,
+        "missing_symbols": [],
+        "provided_symbols_count": 298,
+        "extra_symbols_count": 295,
+        "files": [
+          "asha/__init__.py",
+          "asha/governance/dag.py",
+          "asha/governance/worker_execution.py",
+          "asha/runner.py",
+          "asha/scheduler.py"
+        ],
+        "search_ms": 0,
+        "build_ms": 254.1,
+        "slice_ms": 20.4,
+        "token_reduction_pct_vs_A1": 86.5
+      }
+    }
+  }
+}
