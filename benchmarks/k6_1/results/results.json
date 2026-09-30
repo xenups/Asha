@@ -1,0 +1,246 @@
+{
+  "T1": {
+    "task": "T1",
+    "name": "Signature Refactor: collect_worker_evidence",
+    "strategies": {
+      "Grep(A1)": {
+        "tokens": 6968,
+        "reduction_vs_grep": 0.0,
+        "context_complete": true,
+        "missing_symbols": []
+      },
+      "CodeGraph-fwd": {
+        "tokens": 10311,
+        "completeness": "COMPLETE",
+        "reasons": [],
+        "context_complete": true,
+        "missing_symbols": [],
+        "reduction_vs_grep": -48.0
+      },
+      "CodeGraph-rev": {
+        "tokens": 3205,
+        "completeness": "INCOMPLETE",
+        "reasons": [
+          "expansion budget 50 exhausted"
+        ],
+        "context_complete": true,
+        "missing_symbols": [],
+        "reduction_vs_grep": 54.0
+      },
+      "CodeGraph-both": {
+        "tokens": 13520,
+        "completeness": "COMPLETE",
+        "context_complete": true,
+        "missing_symbols": [],
+        "fwd_unresolved": [],
+        "rev_unresolved": [],
+        "reduction_vs_grep": -94.0
+      }
+    }
+  },
+  "T2": {
+    "task": "T2",
+    "name": "Data Model Change: FailureIdentity",
+    "strategies": {
+      "Grep(A1)": {
+        "tokens": 1413,
+        "reduction_vs_grep": 0.0,
+        "context_complete": true,
+        "missing_symbols": []
+      },
+      "CodeGraph-fwd": {
+        "tokens": 186,
+        "completeness": "COMPLETE",
+        "reasons": [],
+        "context_complete": false,
+        "missing_symbols": [
+          "extract_failures",
+          "verdict_for"
+        ],
+        "reduction_vs_grep": 86.8
+      },
+      "CodeGraph-rev": {
+        "tokens": 791,
+        "completeness": "COMPLETE",
+        "reasons": [],
+        "context_complete": true,
+        "missing_symbols": [],
+        "reduction_vs_grep": 44.0
+      },
+      "CodeGraph-both": {
+        "tokens": 982,
+        "completeness": "COMPLETE",
+        "context_complete": true,
+        "missing_symbols": [],
+        "fwd_unresolved": [],
+        "rev_unresolved": [],
+        "reduction_vs_grep": 30.5
+      }
+    }
+  },
+  "T3": {
+    "task": "T3",
+    "name": "Workflow Change: default_execute",
+    "strategies": {
+      "Grep(A1)": {
+        "tokens": 9271,
+        "reduction_vs_grep": 0.0,
+        "context_complete": true,
+        "missing_symbols": []
+      },
+      "CodeGraph-fwd": {
+        "tokens": 1248,
+        "completeness": "COMPLETE",
+        "reasons": [],
+        "context_complete": true,
+        "missing_symbols": [],
+        "reduction_vs_grep": 86.5
+      },
+      "CodeGraph-rev": {
+        "tokens": 3065,
+        "completeness": "INCOMPLETE",
+        "reasons": [
+          "expansion budget 50 exhausted"
+        ],
+        "context_complete": true,
+        "missing_symbols": [],
+        "reduction_vs_grep": 66.9
+      },
+      "CodeGraph-both": {
+        "tokens": 4317,
+        "completeness": "COMPLETE",
+        "context_complete": true,
+        "missing_symbols": [],
+        "fwd_unresolved": [],
+        "rev_unresolved": [],
+        "reduction_vs_grep": 53.4
+      }
+    }
+  },
+  "T4": {
+    "task": "T4",
+    "name": "Leaf data model: FailureIdentity.from_dict (consumer rule)",
+    "strategies": {
+      "Grep(A1)": {
+        "tokens": 1069,
+        "reduction_vs_grep": 0.0,
+        "context_complete": true,
+        "missing_symbols": []
+      },
+      "CodeGraph-fwd": {
+        "tokens": 184,
+        "completeness": "COMPLETE",
+        "reasons": [],
+        "context_complete": true,
+        "missing_symbols": [],
+        "reduction_vs_grep": 82.8
+      },
+      "CodeGraph-rev": {
+        "tokens": 72,
+        "completeness": "INCOMPLETE",
+        "reasons": [
+          "no dependencies resolved"
+        ],
+        "context_complete": false,
+        "missing_symbols": [
+          "to_dict"
+        ],
+        "reduction_vs_grep": 93.3
+      },
+      "CodeGraph-both": {
+        "tokens": 260,
+        "completeness": "COMPLETE",
+        "context_complete": true,
+        "missing_symbols": [],
+        "fwd_unresolved": [],
+        "rev_unresolved": [],
+        "reduction_vs_grep": 75.7
+      }
+    }
+  },
+  "T5": {
+    "task": "T5",
+    "name": "Large fn: run_worker_in_worktree (multi-dep)",
+    "strategies": {
+      "Grep(A1)": {
+        "tokens": 7147,
+        "reduction_vs_grep": 0.0,
+        "context_complete": false,
+        "missing_symbols": [
+          "dispatch_runner"
+        ]
+      },
+      "CodeGraph-fwd": {
+        "tokens": 9700,
+        "completeness": "COMPLETE",
+        "reasons": [],
+        "context_complete": true,
+        "missing_symbols": [],
+        "reduction_vs_grep": -35.7
+      },
+      "CodeGraph-rev": {
+        "tokens": 2350,
+        "completeness": "INCOMPLETE",
+        "reasons": [
+          "expansion budget 50 exhausted"
+        ],
+        "context_complete": false,
+        "missing_symbols": [
+          "dispatch_runner"
+        ],
+        "reduction_vs_grep": 67.1
+      },
+      "CodeGraph-both": {
+        "tokens": 12054,
+        "completeness": "COMPLETE",
+        "context_complete": true,
+        "missing_symbols": [],
+        "fwd_unresolved": [],
+        "rev_unresolved": [],
+        "reduction_vs_grep": -68.7
+      }
+    }
+  },
+  "T6": {
+    "task": "T6",
+    "name": "Workflow both-ways: DAGCoordinator.run",
+    "strategies": {
+      "Grep(A1)": {
+        "tokens": 109721,
+        "reduction_vs_grep": 0.0,
+        "context_complete": true,
+        "missing_symbols": []
+      },
+      "CodeGraph-fwd": {
+        "tokens": 10588,
+        "completeness": "COMPLETE",
+        "reasons": [],
+        "context_complete": true,
+        "missing_symbols": [],
+        "reduction_vs_grep": 90.4
+      },
+      "CodeGraph-rev": {
+        "tokens": 1608,
+        "completeness": "INCOMPLETE",
+        "reasons": [
+          "no dependencies resolved"
+        ],
+        "context_complete": false,
+        "missing_symbols": [
+          "DAGCoordinator",
+          "run_workers_dag"
+        ],
+        "reduction_vs_grep": 98.5
+      },
+      "CodeGraph-both": {
+        "tokens": 12200,
+        "completeness": "COMPLETE",
+        "context_complete": true,
+        "missing_symbols": [],
+        "fwd_unresolved": [],
+        "rev_unresolved": [],
+        "reduction_vs_grep": 88.9
+      }
+    }
+  }
+}

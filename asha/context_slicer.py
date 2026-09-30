@@ -39,17 +39,23 @@ class ContextSlice:
     full_bytes: int        # target + FULL sources of every dependency
     surgical_bytes: int     # target + stubs
     symbol_count: int       # resolved symbols whose source was inlined
+    completeness: str = "UNKNOWN"   # COMPLETE | INCOMPLETE | UNKNOWN
+    completeness_reasons: tuple[str, ...] = ()
 
 
 def slice_context(target_source: str, *, target_name: str,
                   target_module: str, graph: CodeGraph,
-                  indices: tuple[ModuleIndex, ...]) -> ContextSlice:
+                  indices: tuple[ModuleIndex, ...],
+                  reverse: bool = False,
+                  max_nodes: int | None = None) -> ContextSlice:
     root = f'sym:{target_module}:{target_name}'
-    reach = closure(graph, (root,), target_module)
+    reach = closure(graph, (root,), target_module, reverse=reverse,
+                    max_nodes=max_nodes)
     by_node = _node_index(indices)
 
     stubs: list[DependencyStub] = []
-    full_parts = [target_source]
+    full_parts = [target_source]      # emitted context: compact stubs
+    full_sources = [target_source]    # full baseline: real sources
     symbol_count = 0
     for node in reach.reachable:
         if node == root:
@@ -60,29 +66,42 @@ def slice_context(target_source: str, *, target_name: str,
                 text = f'# missing symbol index: {node}'
             else:
                 text = stub_for(fact)
+                full_sources.append(fact.source)
             symbol_count += 1
-            full_parts.append(fact.source if fact is not None else text)
+            full_parts.append(text)
         elif node.startswith('mod:'):
             text = f'# module dependency: {node[4:]}'
-            full_parts.append(text)
         elif node.startswith('ext:'):
             text = f'# external dependency: {node[4:]}'
-            full_parts.append(text)
         elif node.startswith('builtin:'):
             text = f'# builtin: {node[8:]}'
-            full_parts.append(text)
         else:
             text = f'# UNRESOLVED dependency: {node}'
-            full_parts.append(text)
+        full_parts.append(text)
+        full_sources.append(text)
         stubs.append(DependencyStub(node=node, text=text))
 
     stubs.sort(key=lambda stub: stub.node)
-    # full baseline: real full sources for resolved, same markers for
-    # boundaries (fair comparison -- boundaries exist in both worlds)
-    full_bytes = len(''.join(full_parts).encode('utf-8'))
+    # full baseline: real full sources for resolved symbols, boundary
+    # markers otherwise (fair comparison -- boundaries exist in both).
+    # EMITTED context (full_parts) stays stub-compact (K.6.1 R2).
+    full_bytes = len(''.join(full_sources).encode('utf-8'))
     surgical_bytes = len(
         (target_source + ''.join(
             stub.text for stub in stubs)).encode('utf-8'))
+    reasons: list[str] = []
+    if reach.budget_exhausted:
+        state = "INCOMPLETE"
+        reasons.append(f"expansion budget {max_nodes} exhausted")
+    elif reach.unresolved:
+        state = "INCOMPLETE"
+        reasons.append(f"{len(reach.unresolved)} unresolved node(s) "
+                       f"did not expand")
+    elif symbol_count == 0 and not stubs:
+        state = "INCOMPLETE"
+        reasons.append("no dependencies resolved")
+    else:
+        state = "COMPLETE"
     return ContextSlice(
         target_name=target_name,
         target_source=target_source,
@@ -91,6 +110,8 @@ def slice_context(target_source: str, *, target_name: str,
         full_bytes=full_bytes,
         surgical_bytes=surgical_bytes,
         symbol_count=symbol_count,
+        completeness=state,
+        completeness_reasons=tuple(reasons),
     )
 
 

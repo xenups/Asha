@@ -1,0 +1,5 @@
+{
+  "status": "NOT_PERFORMED",
+  "reason": "no LLM API key available in container",
+  "model": null
+}

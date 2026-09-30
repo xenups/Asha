@@ -1,0 +1,48 @@
+{
+  "benchmark": "K.6.1",
+  "source_commit": "778e2f9ec7f443a51ca2b5879264e7808b6dc5ed",
+  "tokenizer": "tiktoken cl100k_base 0.14.0",
+  "generated_at": "2026-09-30T14:36:28Z",
+  "files": {
+    "benchmarks/k6_1/EXACT_COMMANDS.md": {
+      "sha256": "c9000f345d939d11ac8698288fc7a37559c937360ae7bde5b08f3da257bd4df1",
+      "bytes": 1675
+    },
+    "benchmarks/k6_1/FROZEN_SPEC.md": {
+      "sha256": "5b4e65242716e7935127fe93f16c0f85e07f2805ebe486550432aa8c28b0dd4c",
+      "bytes": 2478
+    },
+    "benchmarks/k6_1/IMPLEMENTATION.md": {
+      "sha256": "4b1a2d81a7e99d34f4166447d2d7478713f95474e53f44424aabb2a7b3255da1",
+      "bytes": 2451
+    },
+    "benchmarks/k6_1/REPORT.md": {
+      "sha256": "f6c981e86347d8a92f1eda56eb20ff6c43102d6ffd23404ccd553bc7e0d3731c",
+      "bytes": 5647
+    },
+    "benchmarks/k6_1/ROOT_CAUSE.md": {
+      "sha256": "f9ecd8b6824c80747bd9a8e4eceb1fde24df1bfa17c0f5c4aaa53b80bc3457bc",
+      "bytes": 3512
+    },
+    "benchmarks/k6_1/manifest.json": {
+      "sha256": "d50616be765ba33458132d56f7673935d572581856e1efb64b22b475e36cb8ed",
+      "bytes": 1707
+    },
+    "benchmarks/k6_1/results/agent.json": {
+      "sha256": "a9b468346ab89a08d0fb7f613fe60bd3fb05818aa8ad3c749d30277447627834",
+      "bytes": 101
+    },
+    "benchmarks/k6_1/results/results.json": {
+      "sha256": "85ad5e3a5c03be65b58482cb8fafdd9b07056ac7a834a4069f517f9f3ffd9569",
+      "bytes": 6212
+    },
+    "benchmarks/k6_1/run_agent.py": {
+      "sha256": "b239af5fc54ffe75e2e26574a25982228e4beb81c938c5582cbf8cb9ad7c9159",
+      "bytes": 3961
+    },
+    "benchmarks/k6_1/run_k6_1.py": {
+      "sha256": "2e8c45c38da52e4a42ef884a44d707ab27d766d32e281a46fb510d4ebf760456",
+      "bytes": 8193
+    }
+  }
+}

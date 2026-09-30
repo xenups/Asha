@@ -60,6 +60,12 @@ class CodeGraph:
     def edges_from(self, node: str) -> tuple[GraphEdge, ...]:
         return tuple(edge for edge in self.edges if edge.source == node)
 
+    def edges_to(self, node: str) -> tuple[GraphEdge, ...]:
+        """Incoming edges (reverse dependencies / callers). K.6.1: enables
+        bounded reverse traversal for consumer discovery without an index
+        rebuild (the edge data was always present)."""
+        return tuple(edge for edge in self.edges if edge.target == node)
+
 
 @dataclass(frozen=True)
 class ClosureResult:
@@ -70,6 +76,7 @@ class ClosureResult:
     external: tuple[str, ...]         # external boundary (not expanded)
     unresolved: tuple[str, ...]       # unresolved boundary (kept)
     expanded: int
+    budget_exhausted: bool = False    # max_nodes hit before full closure
 
 
 @dataclass(frozen=True)
@@ -324,8 +331,15 @@ def _relative(consumer_module: str, target: str, level: int,
 
 
 def closure(graph: CodeGraph, roots: tuple[str, ...],
-            target_module: str) -> ClosureResult:
-    """BFS with a visited set: cycles terminate, boundaries report."""
+            target_module: str, *, reverse: bool = False,
+            max_nodes: int | None = None) -> ClosureResult:
+    """BFS with a visited set: cycles terminate, boundaries report.
+
+    Direction: forward (dependencies, default) or reverse (callers/
+    consumers) when `reverse=True`. `max_nodes` bounds expansion; when the
+    budget is exhausted the result is reported as budget-exhausted so
+    callers can surface INCOMPLETE/UNKNOWN rather than a false COMPLETE.
+    """
     reachable: set[str] = set()
     unresolved: set[str] = set()
     external: set[str] = set()
@@ -333,6 +347,7 @@ def closure(graph: CodeGraph, roots: tuple[str, ...],
     project: set[str] = set()
     queue = [*roots]
     expanded = 0
+    budget_exhausted = False
     while queue:
         node = queue.pop(0)
         if node in reachable:
@@ -350,9 +365,17 @@ def closure(graph: CodeGraph, roots: tuple[str, ...],
         else:
             project.add(node)
         expanded += 1
-        for edge in graph.edges_from(node):
-            if edge.target not in reachable:
-                queue.append(edge.target)
+        if max_nodes is not None and expanded >= max_nodes:
+            budget_exhausted = True
+            break
+        neighbours = (graph.edges_to(node) if reverse
+                      else graph.edges_from(node))
+        for edge in neighbours:
+            # reverse traversal follows the SOURCE side (callers), forward
+            # follows the TARGET side (dependencies).
+            nxt = edge.source if reverse else edge.target
+            if nxt not in reachable:
+                queue.append(nxt)
     return ClosureResult(
         roots=tuple(roots),
         reachable=tuple(sorted(reachable)),
@@ -361,6 +384,7 @@ def closure(graph: CodeGraph, roots: tuple[str, ...],
         external=tuple(sorted(external)),
         unresolved=tuple(sorted(unresolved)),
         expanded=expanded,
+        budget_exhausted=budget_exhausted,
     )
 
 
