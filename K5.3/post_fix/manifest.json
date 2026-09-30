@@ -1,0 +1,17 @@
+{
+  "benchmark_run_id": "k5-20260930-084609",
+  "spec_sha256": "cf0eab9e2099b62a98fba1d8465a6e36168b08b3ced8925f3a127321bfbaf6ed",
+  "spec_bytes": 8258,
+  "repo_head": "43a4b3262f22e5504044a4a0bd196de131567d27\n",
+  "commit_time": "2026-09-30T08:02:19-04:00\n",
+  "tools": {
+    "python": "Python 3.12.1",
+    "pytest": "pytest 7.4.4",
+    "git": "git version 2.30.2",
+    "ruff": "ruff 0.16.9",
+    "mypy": "mypy 2.3.1 (compiled: yes)"
+  },
+  "harness_revision": "43a4b32\n",
+  "repetitions": 3,
+  "warmup": 1
+}

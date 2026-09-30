@@ -213,6 +213,14 @@ class DAGCoordinator:
                     worker, path, base_c, base_t, self.repo, self.task_id)
             except Exception:
                 baseline_journal = None
+        # Strip verification caches the baseline pass left in the worktree
+        # (__pycache__/.pytest_cache/.ruff_cache/.mypy_cache). Without this
+        # the current pass can read a stale timestamped .pyc for a source
+        # file the worker rewrote within the same wall-clock second, so the
+        # current test run silently executes pre-change bytecode and the
+        # regression is missed (K.5.3: stale-pyc mtime race). Mirrors
+        # run_worker_in_worktree's post-baseline strip exactly.
+        worker_execution._strip_check_caches(path)
         try:
             result = self.execute(worker, path)
         except subprocess.TimeoutExpired:

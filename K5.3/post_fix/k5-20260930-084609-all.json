@@ -1,0 +1,3490 @@
+[
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T1",
+    "path_id": "A",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 574.1,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t1",
+      "head": "d246e7c89fa52585eae73be55128d71ca25beabe\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 0,
+    "measurement_number": 0
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T1",
+    "path_id": "A",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 586.6,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t1",
+      "head": "e1249fe27ac4acde2eac60e6f84689343b5f5946\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 1,
+    "measurement_number": 1
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T1",
+    "path_id": "A",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 585.9,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t1",
+      "head": "cdda14b4fb10d62189cd4afcfceb0f9e5620dad3\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 2,
+    "measurement_number": 2
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T1",
+    "path_id": "A",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 567.7,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t1",
+      "head": "5cd9d0132ecc17b3805d62d199cc765571bad14b\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 3,
+    "measurement_number": 3
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T1",
+    "path_id": "B",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 532.1,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t1",
+      "head": "554e54f40f9d5864b88f229a650b0dd751b7af9c\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 0,
+    "measurement_number": 0
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T1",
+    "path_id": "B",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 568.6,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t1",
+      "head": "e845ef73af4343680bc100b130bfa4f7b167be9e\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 1,
+    "measurement_number": 1
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T1",
+    "path_id": "B",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 576.3,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t1",
+      "head": "8393b8ec35c563504d7f2698ede14259a5a79bcf\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 2,
+    "measurement_number": 2
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T1",
+    "path_id": "B",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 541.2,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t1",
+      "head": "ee7caded3976e883d4803aae15c431468723a6d4\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 3,
+    "measurement_number": 3
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T1",
+    "path_id": "C",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 1042.2,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": true
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t1",
+      "head": "99dc44aebb04b9f84afb5246d96bee1b28e98a18\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": "/tmp/asha-k5/t1/.jspace/6c686ca72082493a-t1/orchestrator/T1-C-0/w1.json",
+    "state_detail": {
+      "state": "DONE",
+      "reason": null
+    },
+    "raw": {
+      "_state": {
+        "state": "DONE",
+        "reason": null
+      },
+      "_evidence_path": "/tmp/asha-k5/t1/.jspace/6c686ca72082493a-t1/orchestrator/T1-C-0/w1.json"
+    },
+    "rep": 0,
+    "measurement_number": 0
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T1",
+    "path_id": "C",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 1030.8,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": true
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t1",
+      "head": "bb7dc18ac143cf9da44a871c56e2dbcc67b264a6\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": "/tmp/asha-k5/t1/.jspace/6c686ca72082493a-t1/orchestrator/T1-C-1/w1.json",
+    "state_detail": {
+      "state": "DONE",
+      "reason": null
+    },
+    "raw": {
+      "_state": {
+        "state": "DONE",
+        "reason": null
+      },
+      "_evidence_path": "/tmp/asha-k5/t1/.jspace/6c686ca72082493a-t1/orchestrator/T1-C-1/w1.json"
+    },
+    "rep": 1,
+    "measurement_number": 1
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T1",
+    "path_id": "C",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 990.1,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": true
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t1",
+      "head": "404b7e808874f0a7c734687fcc56ccba835ee656\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": "/tmp/asha-k5/t1/.jspace/6c686ca72082493a-t1/orchestrator/T1-C-2/w1.json",
+    "state_detail": {
+      "state": "DONE",
+      "reason": null
+    },
+    "raw": {
+      "_state": {
+        "state": "DONE",
+        "reason": null
+      },
+      "_evidence_path": "/tmp/asha-k5/t1/.jspace/6c686ca72082493a-t1/orchestrator/T1-C-2/w1.json"
+    },
+    "rep": 2,
+    "measurement_number": 2
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T1",
+    "path_id": "C",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 1166.9,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": true
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t1",
+      "head": "3181dbc8773bb2b045e5b94ddd2d8488a9bdb02a\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": "/tmp/asha-k5/t1/.jspace/6c686ca72082493a-t1/orchestrator/T1-C-3/w1.json",
+    "state_detail": {
+      "state": "DONE",
+      "reason": null
+    },
+    "raw": {
+      "_state": {
+        "state": "DONE",
+        "reason": null
+      },
+      "_evidence_path": "/tmp/asha-k5/t1/.jspace/6c686ca72082493a-t1/orchestrator/T1-C-3/w1.json"
+    },
+    "rep": 3,
+    "measurement_number": 3
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T2",
+    "path_id": "A",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_BLIND",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_BLIND",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 633.5,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t2",
+      "head": "9f55068f4a7a21350a17cbc11c2adbed48caeddc\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 0,
+    "measurement_number": 0
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T2",
+    "path_id": "A",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_BLIND",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_BLIND",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 625.9,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t2",
+      "head": "5444f601ff3ff20176642dfe74a7fc75f91edaa3\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 1,
+    "measurement_number": 1
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T2",
+    "path_id": "A",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_BLIND",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_BLIND",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 636.3,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t2",
+      "head": "ec6ce22e6277aba7d5664914c5c268f110c15c75\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 2,
+    "measurement_number": 2
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T2",
+    "path_id": "A",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_BLIND",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_BLIND",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 706.6,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t2",
+      "head": "074944b724d717c708266a0551bf3584e7d4dbb2\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 3,
+    "measurement_number": 3
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T2",
+    "path_id": "B",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_NEW_REGRESSION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_NEW_REGRESSION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 2771.7,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t2",
+      "head": "abacefe3c48d5b4e9d0cdaefa9cb32b710913e5f\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 0,
+    "measurement_number": 0
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T2",
+    "path_id": "B",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_NEW_REGRESSION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_NEW_REGRESSION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 2706.9,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t2",
+      "head": "2fd4bf5f4bf1bb1cb02e07ec456c04d88a8bf5bc\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 1,
+    "measurement_number": 1
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T2",
+    "path_id": "B",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_NEW_REGRESSION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_NEW_REGRESSION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 2596.0,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t2",
+      "head": "fe7d398ff8925296a9edc1b6947273cfede34bd5\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 2,
+    "measurement_number": 2
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T2",
+    "path_id": "B",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_NEW_REGRESSION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_NEW_REGRESSION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 2737.6,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t2",
+      "head": "27e3ae87249f7c7237d25377d0539365d14b832f\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 3,
+    "measurement_number": 3
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T2",
+    "path_id": "C",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_NEW_REGRESSION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_NEW_REGRESSION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 3152.1,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": true,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t2",
+      "head": "bc6497cc4044b330f4a8a7fd372127fa36f14db2\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {
+      "state": "FAILED",
+      "reason": "verification_failed:pytest",
+      "verdict": "NEW_FAILURES"
+    },
+    "raw": {
+      "_state": {
+        "state": "FAILED",
+        "reason": "verification_failed:pytest",
+        "verdict": "NEW_FAILURES",
+        "baseline_failures": [],
+        "current_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_f",
+            "code": null,
+            "message": null
+          }
+        ],
+        "delta_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_f",
+            "code": null,
+            "message": null
+          }
+        ]
+      },
+      "_evidence_path": null
+    },
+    "rep": 0,
+    "measurement_number": 0
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T2",
+    "path_id": "C",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_NEW_REGRESSION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_NEW_REGRESSION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 3178.4,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": true,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t2",
+      "head": "7abaaf8b0d84afff0f18b0776129c37682a82121\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {
+      "state": "FAILED",
+      "reason": "verification_failed:pytest",
+      "verdict": "NEW_FAILURES"
+    },
+    "raw": {
+      "_state": {
+        "state": "FAILED",
+        "reason": "verification_failed:pytest",
+        "verdict": "NEW_FAILURES",
+        "baseline_failures": [],
+        "current_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_f",
+            "code": null,
+            "message": null
+          }
+        ],
+        "delta_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_f",
+            "code": null,
+            "message": null
+          }
+        ]
+      },
+      "_evidence_path": null
+    },
+    "rep": 1,
+    "measurement_number": 1
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T2",
+    "path_id": "C",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_NEW_REGRESSION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_NEW_REGRESSION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 3159.7,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": true,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t2",
+      "head": "911d5ed203fe4d5b0b376a91b1690bf984748e40\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {
+      "state": "FAILED",
+      "reason": "verification_failed:pytest",
+      "verdict": "NEW_FAILURES"
+    },
+    "raw": {
+      "_state": {
+        "state": "FAILED",
+        "reason": "verification_failed:pytest",
+        "verdict": "NEW_FAILURES",
+        "baseline_failures": [],
+        "current_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_f",
+            "code": null,
+            "message": null
+          }
+        ],
+        "delta_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_f",
+            "code": null,
+            "message": null
+          }
+        ]
+      },
+      "_evidence_path": null
+    },
+    "rep": 2,
+    "measurement_number": 2
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T2",
+    "path_id": "C",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_NEW_REGRESSION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_NEW_REGRESSION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 3326.5,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": true,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t2",
+      "head": "378f6b00b22638efa37b0804d4f32b9f62830c16\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {
+      "state": "FAILED",
+      "reason": "verification_failed:pytest",
+      "verdict": "NEW_FAILURES"
+    },
+    "raw": {
+      "_state": {
+        "state": "FAILED",
+        "reason": "verification_failed:pytest",
+        "verdict": "NEW_FAILURES",
+        "baseline_failures": [],
+        "current_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_f",
+            "code": null,
+            "message": null
+          }
+        ],
+        "delta_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_f",
+            "code": null,
+            "message": null
+          }
+        ]
+      },
+      "_evidence_path": null
+    },
+    "rep": 3,
+    "measurement_number": 3
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T3",
+    "path_id": "A",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_BLIND",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_BLIND",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 609.5,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t3",
+      "head": "7dd02854e906cb8b79833fcf807eb43fb6dea9c5\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 0,
+    "measurement_number": 0
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T3",
+    "path_id": "A",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_BLIND",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_BLIND",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 566.1,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t3",
+      "head": "0a0d34df6fa8584fee41e9a4f39d64f04eaa6a67\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 1,
+    "measurement_number": 1
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T3",
+    "path_id": "A",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_BLIND",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_BLIND",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 591.2,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t3",
+      "head": "8f80220634b42dbb045ffd63b49dac6cb1785602\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 2,
+    "measurement_number": 2
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T3",
+    "path_id": "A",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_BLIND",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_BLIND",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 650.5,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t3",
+      "head": "8e0aa051f21fe59bdae0c14da75b1529a6265e4f\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 3,
+    "measurement_number": 3
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T3",
+    "path_id": "B",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_BLIND",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_BLIND",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 555.0,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t3",
+      "head": "328efe40c5869649850d66f493842846e30db944\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 0,
+    "measurement_number": 0
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T3",
+    "path_id": "B",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_BLIND",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_BLIND",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 583.6,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t3",
+      "head": "dbaebf124791d5c3e9131d140a66bed0d439ec46\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 1,
+    "measurement_number": 1
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T3",
+    "path_id": "B",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_BLIND",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_BLIND",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 556.9,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t3",
+      "head": "f3a063857a3313e238291a46bd0a448e2dd9b273\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 2,
+    "measurement_number": 2
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T3",
+    "path_id": "B",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_BLIND",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_BLIND",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 583.7,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t3",
+      "head": "443798f20e26e5acc7e7526fe55600ee75a0fd07\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 3,
+    "measurement_number": 3
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T3",
+    "path_id": "C",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 1170.3,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": true,
+      "evidence_reproducible": true
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t3",
+      "head": "6c89ee33ed8574b9105a771cf43053a1e7601884\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": "/tmp/asha-k5/t3/.jspace/0464f0895f97fe53-t3/orchestrator/T3-C-0/w1.json",
+    "state_detail": {
+      "state": "DONE",
+      "reason": null,
+      "verdict": "PRE_EXISTING_ONLY"
+    },
+    "raw": {
+      "_state": {
+        "state": "DONE",
+        "reason": null,
+        "verdict": "PRE_EXISTING_ONLY",
+        "baseline_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_0",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_1",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_2",
+            "code": null,
+            "message": null
+          }
+        ],
+        "current_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_0",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_1",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_2",
+            "code": null,
+            "message": null
+          }
+        ],
+        "delta_failures": []
+      },
+      "_evidence_path": "/tmp/asha-k5/t3/.jspace/0464f0895f97fe53-t3/orchestrator/T3-C-0/w1.json"
+    },
+    "rep": 0,
+    "measurement_number": 0
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T3",
+    "path_id": "C",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 1119.2,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": true,
+      "evidence_reproducible": true
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t3",
+      "head": "d8aea5199f9b2bf189eee3ff9c4273f534ffb65e\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": "/tmp/asha-k5/t3/.jspace/0464f0895f97fe53-t3/orchestrator/T3-C-1/w1.json",
+    "state_detail": {
+      "state": "DONE",
+      "reason": null,
+      "verdict": "PRE_EXISTING_ONLY"
+    },
+    "raw": {
+      "_state": {
+        "state": "DONE",
+        "reason": null,
+        "verdict": "PRE_EXISTING_ONLY",
+        "baseline_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_0",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_1",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_2",
+            "code": null,
+            "message": null
+          }
+        ],
+        "current_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_0",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_1",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_2",
+            "code": null,
+            "message": null
+          }
+        ],
+        "delta_failures": []
+      },
+      "_evidence_path": "/tmp/asha-k5/t3/.jspace/0464f0895f97fe53-t3/orchestrator/T3-C-1/w1.json"
+    },
+    "rep": 1,
+    "measurement_number": 1
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T3",
+    "path_id": "C",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 1114.5,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": true,
+      "evidence_reproducible": true
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t3",
+      "head": "b1eabc87b613ce76f7038cebac5b4f83721c74b1\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": "/tmp/asha-k5/t3/.jspace/0464f0895f97fe53-t3/orchestrator/T3-C-2/w1.json",
+    "state_detail": {
+      "state": "DONE",
+      "reason": null,
+      "verdict": "PRE_EXISTING_ONLY"
+    },
+    "raw": {
+      "_state": {
+        "state": "DONE",
+        "reason": null,
+        "verdict": "PRE_EXISTING_ONLY",
+        "baseline_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_0",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_1",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_2",
+            "code": null,
+            "message": null
+          }
+        ],
+        "current_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_0",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_1",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_2",
+            "code": null,
+            "message": null
+          }
+        ],
+        "delta_failures": []
+      },
+      "_evidence_path": "/tmp/asha-k5/t3/.jspace/0464f0895f97fe53-t3/orchestrator/T3-C-2/w1.json"
+    },
+    "rep": 2,
+    "measurement_number": 2
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T3",
+    "path_id": "C",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 1137.9,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": true,
+      "evidence_reproducible": true
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t3",
+      "head": "bbe00e3cbcce30c8164493239504061a12679587\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": "/tmp/asha-k5/t3/.jspace/0464f0895f97fe53-t3/orchestrator/T3-C-3/w1.json",
+    "state_detail": {
+      "state": "DONE",
+      "reason": null,
+      "verdict": "PRE_EXISTING_ONLY"
+    },
+    "raw": {
+      "_state": {
+        "state": "DONE",
+        "reason": null,
+        "verdict": "PRE_EXISTING_ONLY",
+        "baseline_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_0",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_1",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_2",
+            "code": null,
+            "message": null
+          }
+        ],
+        "current_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_0",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_1",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_2",
+            "code": null,
+            "message": null
+          }
+        ],
+        "delta_failures": []
+      },
+      "_evidence_path": "/tmp/asha-k5/t3/.jspace/0464f0895f97fe53-t3/orchestrator/T3-C-3/w1.json"
+    },
+    "rep": 3,
+    "measurement_number": 3
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T4",
+    "path_id": "A",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_BLIND",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_BLIND",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 638.8,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t4",
+      "head": "c5b4861a497cc70d6d29db3d7b76577961430480\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 0,
+    "measurement_number": 0
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T4",
+    "path_id": "A",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_BLIND",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_BLIND",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 623.9,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t4",
+      "head": "e1fe64dcef4d5484be1d300e533814f1e04cf6b9\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 1,
+    "measurement_number": 1
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T4",
+    "path_id": "A",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_BLIND",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_BLIND",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 628.3,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t4",
+      "head": "83be59835b9887dd03c7a7cfc987867a33e9ded2\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 2,
+    "measurement_number": 2
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T4",
+    "path_id": "A",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_BLIND",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_BLIND",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 633.5,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t4",
+      "head": "4d55cf9070d7d1fcfd11a79776b8f45addf9dfa4\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 3,
+    "measurement_number": 3
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T4",
+    "path_id": "B",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_NEW_REGRESSION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_NEW_REGRESSION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 2717.3,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t4",
+      "head": "a7f2a89e8cf576227768f7529ae3ebe2076dc16c\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 0,
+    "measurement_number": 0
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T4",
+    "path_id": "B",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_NEW_REGRESSION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_NEW_REGRESSION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 2718.3,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t4",
+      "head": "a3b2d8013f5e276775ca7fd2a291a2ac191db88b\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 1,
+    "measurement_number": 1
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T4",
+    "path_id": "B",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_NEW_REGRESSION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_NEW_REGRESSION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 2768.3,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t4",
+      "head": "9ce6ea885329522ef7d771dcc95bddc434ded1fd\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 2,
+    "measurement_number": 2
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T4",
+    "path_id": "B",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_NEW_REGRESSION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_NEW_REGRESSION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 2668.9,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t4",
+      "head": "87100118dcd63a43fec8ccf496694ac8ae6c27af\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": [
+        "pytest"
+      ]
+    },
+    "rep": 3,
+    "measurement_number": 3
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T4",
+    "path_id": "C",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_NEW_REGRESSION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_NEW_REGRESSION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 3412.2,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": true,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t4",
+      "head": "ea935dfa025696d70ca76ad59168b56da270a81c\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {
+      "state": "FAILED",
+      "reason": "verification_failed:pytest",
+      "verdict": "NEW_FAILURES"
+    },
+    "raw": {
+      "_state": {
+        "state": "FAILED",
+        "reason": "verification_failed:pytest",
+        "verdict": "NEW_FAILURES",
+        "baseline_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_0",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_1",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_2",
+            "code": null,
+            "message": null
+          }
+        ],
+        "current_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_f",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_0",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_1",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_2",
+            "code": null,
+            "message": null
+          }
+        ],
+        "delta_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_f",
+            "code": null,
+            "message": null
+          }
+        ]
+      },
+      "_evidence_path": null
+    },
+    "rep": 0,
+    "measurement_number": 0
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T4",
+    "path_id": "C",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_NEW_REGRESSION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_NEW_REGRESSION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 3191.3,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": true,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t4",
+      "head": "fae2243bb3c533f94c3c80ac2b6ba4bd2a7e8441\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {
+      "state": "FAILED",
+      "reason": "verification_failed:pytest",
+      "verdict": "NEW_FAILURES"
+    },
+    "raw": {
+      "_state": {
+        "state": "FAILED",
+        "reason": "verification_failed:pytest",
+        "verdict": "NEW_FAILURES",
+        "baseline_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_0",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_1",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_2",
+            "code": null,
+            "message": null
+          }
+        ],
+        "current_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_f",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_0",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_1",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_2",
+            "code": null,
+            "message": null
+          }
+        ],
+        "delta_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_f",
+            "code": null,
+            "message": null
+          }
+        ]
+      },
+      "_evidence_path": null
+    },
+    "rep": 1,
+    "measurement_number": 1
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T4",
+    "path_id": "C",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_NEW_REGRESSION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_NEW_REGRESSION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 3297.9,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": true,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t4",
+      "head": "e1ab391c525068206528dc95baf4523a75a7880a\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {
+      "state": "FAILED",
+      "reason": "verification_failed:pytest",
+      "verdict": "NEW_FAILURES"
+    },
+    "raw": {
+      "_state": {
+        "state": "FAILED",
+        "reason": "verification_failed:pytest",
+        "verdict": "NEW_FAILURES",
+        "baseline_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_0",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_1",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_2",
+            "code": null,
+            "message": null
+          }
+        ],
+        "current_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_f",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_0",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_1",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_2",
+            "code": null,
+            "message": null
+          }
+        ],
+        "delta_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_f",
+            "code": null,
+            "message": null
+          }
+        ]
+      },
+      "_evidence_path": null
+    },
+    "rep": 2,
+    "measurement_number": 2
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T4",
+    "path_id": "C",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_NEW_REGRESSION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_NEW_REGRESSION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 3150.0,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": true,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t4",
+      "head": "982397f8771c2f5fbebbb2d20fce98885793e2cf\n"
+    },
+    "patch_sha256": "8a236b63d9931844",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {
+      "state": "FAILED",
+      "reason": "verification_failed:pytest",
+      "verdict": "NEW_FAILURES"
+    },
+    "raw": {
+      "_state": {
+        "state": "FAILED",
+        "reason": "verification_failed:pytest",
+        "verdict": "NEW_FAILURES",
+        "baseline_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_0",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_1",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_2",
+            "code": null,
+            "message": null
+          }
+        ],
+        "current_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_f",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_0",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_1",
+            "code": null,
+            "message": null
+          },
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_old_2",
+            "code": null,
+            "message": null
+          }
+        ],
+        "delta_failures": [
+          {
+            "check": "pytest",
+            "location": "tests/test_app.py::test_f",
+            "code": null,
+            "message": null
+          }
+        ]
+      },
+      "_evidence_path": null
+    },
+    "rep": 3,
+    "measurement_number": 3
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T5",
+    "path_id": "A",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 594.6,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t5",
+      "head": "160983fd9b40e75128385528bc857afea21a466c\n"
+    },
+    "patch_sha256": "d61e505363ccf970",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 0,
+    "measurement_number": 0
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T5",
+    "path_id": "A",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 576.3,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t5",
+      "head": "eef6b632152c93aa1571ec6f16393ca3174be0d1\n"
+    },
+    "patch_sha256": "d61e505363ccf970",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 1,
+    "measurement_number": 1
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T5",
+    "path_id": "A",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 583.6,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t5",
+      "head": "f1d216d0a43b003638adb3b314c9a5b1563cf2d5\n"
+    },
+    "patch_sha256": "d61e505363ccf970",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 2,
+    "measurement_number": 2
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T5",
+    "path_id": "A",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 647.0,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t5",
+      "head": "96c2ce6eea9789107371b6e506d8b9bbc41ef35d\n"
+    },
+    "patch_sha256": "d61e505363ccf970",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 3,
+    "measurement_number": 3
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T5",
+    "path_id": "B",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_SCOPE_VIOLATION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_SCOPE_VIOLATION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 72.3,
+      "scope_violated": true,
+      "scope_violation_detected": true,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t5",
+      "head": "ece76cb80aedcda7ad2eec517ea9fbb1d2694173\n"
+    },
+    "patch_sha256": "d61e505363ccf970",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {},
+    "rep": 0,
+    "measurement_number": 0
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T5",
+    "path_id": "B",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_SCOPE_VIOLATION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_SCOPE_VIOLATION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 69.1,
+      "scope_violated": true,
+      "scope_violation_detected": true,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t5",
+      "head": "ece76cb80aedcda7ad2eec517ea9fbb1d2694173\n"
+    },
+    "patch_sha256": "d61e505363ccf970",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {},
+    "rep": 1,
+    "measurement_number": 1
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T5",
+    "path_id": "B",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_SCOPE_VIOLATION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_SCOPE_VIOLATION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 80.1,
+      "scope_violated": true,
+      "scope_violation_detected": true,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t5",
+      "head": "ece76cb80aedcda7ad2eec517ea9fbb1d2694173\n"
+    },
+    "patch_sha256": "d61e505363ccf970",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {},
+    "rep": 2,
+    "measurement_number": 2
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T5",
+    "path_id": "B",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_SCOPE_VIOLATION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_SCOPE_VIOLATION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 44.3,
+      "scope_violated": true,
+      "scope_violation_detected": true,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t5",
+      "head": "fc61d28e37e1b65561c76ce6388e121fcb1f15e3\n"
+    },
+    "patch_sha256": "d61e505363ccf970",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {},
+    "rep": 3,
+    "measurement_number": 3
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T5",
+    "path_id": "C",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_SCOPE_VIOLATION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_SCOPE_VIOLATION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 662.8,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t5",
+      "head": "fc61d28e37e1b65561c76ce6388e121fcb1f15e3\n"
+    },
+    "patch_sha256": "d61e505363ccf970",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {
+      "state": "INVALID_EVIDENCE",
+      "reason": "scope_violation:services/compose_orchestrator/app.py"
+    },
+    "raw": {
+      "_state": {
+        "state": "INVALID_EVIDENCE",
+        "reason": "scope_violation:services/compose_orchestrator/app.py"
+      },
+      "_evidence_path": null
+    },
+    "rep": 0,
+    "measurement_number": 0
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T5",
+    "path_id": "C",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_SCOPE_VIOLATION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_SCOPE_VIOLATION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 579.4,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t5",
+      "head": "ea6c03bb9889686518efb740cf12871df5d6ba3c\n"
+    },
+    "patch_sha256": "d61e505363ccf970",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {
+      "state": "INVALID_EVIDENCE",
+      "reason": "scope_violation:services/compose_orchestrator/app.py"
+    },
+    "raw": {
+      "_state": {
+        "state": "INVALID_EVIDENCE",
+        "reason": "scope_violation:services/compose_orchestrator/app.py"
+      },
+      "_evidence_path": null
+    },
+    "rep": 1,
+    "measurement_number": 1
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T5",
+    "path_id": "C",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_SCOPE_VIOLATION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_SCOPE_VIOLATION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 629.1,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t5",
+      "head": "cb38b031373037d60c810255a71563e4fd5e9da0\n"
+    },
+    "patch_sha256": "d61e505363ccf970",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {
+      "state": "INVALID_EVIDENCE",
+      "reason": "scope_violation:services/compose_orchestrator/app.py"
+    },
+    "raw": {
+      "_state": {
+        "state": "INVALID_EVIDENCE",
+        "reason": "scope_violation:services/compose_orchestrator/app.py"
+      },
+      "_evidence_path": null
+    },
+    "rep": 2,
+    "measurement_number": 2
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T5",
+    "path_id": "C",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_SCOPE_VIOLATION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_SCOPE_VIOLATION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 554.4,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t5",
+      "head": "0abd9e28adc62f20b0e6294c8054047785069c3a\n"
+    },
+    "patch_sha256": "d61e505363ccf970",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {
+      "state": "INVALID_EVIDENCE",
+      "reason": "scope_violation:services/compose_orchestrator/app.py"
+    },
+    "raw": {
+      "_state": {
+        "state": "INVALID_EVIDENCE",
+        "reason": "scope_violation:services/compose_orchestrator/app.py"
+      },
+      "_evidence_path": null
+    },
+    "rep": 3,
+    "measurement_number": 3
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T6",
+    "path_id": "A",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 664.8,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t6",
+      "head": "a337513fde36cf017ad6195be94b7685e813549f\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 0,
+    "measurement_number": 0
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T6",
+    "path_id": "A",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 581.7,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t6",
+      "head": "6befe914fd3bf6cf23971a8e50696e54d0e63f3a\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 1,
+    "measurement_number": 1
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T6",
+    "path_id": "A",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 653.8,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t6",
+      "head": "ea94e6a61edd95bc88bb7d5633de7ef3343ea876\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 2,
+    "measurement_number": 2
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T6",
+    "path_id": "A",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 693.2,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t6",
+      "head": "f66de988ecfb77f5ee30966478f75f209fde9a63\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 3,
+    "measurement_number": 3
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T6",
+    "path_id": "B",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 617.9,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t6",
+      "head": "4a4e665dcb08b5b8b7b552bdeba80a5c9f2b5855\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 0,
+    "measurement_number": 0
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T6",
+    "path_id": "B",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 534.9,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t6",
+      "head": "562532b3399ffe9ac17380b46c2ca0ecab89cf90\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 1,
+    "measurement_number": 1
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T6",
+    "path_id": "B",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 731.9,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t6",
+      "head": "201d05b9e7c33ff2649bd497866e12b01c53d71f\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 2,
+    "measurement_number": 2
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T6",
+    "path_id": "B",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 531.1,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t6",
+      "head": "761a6c14825f03196a71c57fb6e6e7c2c5728ec0\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 3,
+    "measurement_number": 3
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T6",
+    "path_id": "C",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 1058.0,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": true
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t6",
+      "head": "7c5dcbaba4ec8ab02e749e08669a8b34e0df8b33\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": "/tmp/asha-k5/t6/.jspace/0bb1d24729b08f2c-t6/orchestrator/T6-C-0/w1.json",
+    "state_detail": {
+      "state": "DONE",
+      "reason": null
+    },
+    "raw": {
+      "_state": {
+        "state": "DONE",
+        "reason": null
+      },
+      "_evidence_path": "/tmp/asha-k5/t6/.jspace/0bb1d24729b08f2c-t6/orchestrator/T6-C-0/w1.json"
+    },
+    "rep": 0,
+    "measurement_number": 0
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T6",
+    "path_id": "C",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 1058.7,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": true
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t6",
+      "head": "75171a5dc456bd3d3224913f837f90d931bc4546\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": "/tmp/asha-k5/t6/.jspace/0bb1d24729b08f2c-t6/orchestrator/T6-C-1/w1.json",
+    "state_detail": {
+      "state": "DONE",
+      "reason": null
+    },
+    "raw": {
+      "_state": {
+        "state": "DONE",
+        "reason": null
+      },
+      "_evidence_path": "/tmp/asha-k5/t6/.jspace/0bb1d24729b08f2c-t6/orchestrator/T6-C-1/w1.json"
+    },
+    "rep": 1,
+    "measurement_number": 1
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T6",
+    "path_id": "C",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 1063.3,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": true
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t6",
+      "head": "bfccc8258c2f66b0aa576d2294d75c63ab1bbde5\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": "/tmp/asha-k5/t6/.jspace/0bb1d24729b08f2c-t6/orchestrator/T6-C-2/w1.json",
+    "state_detail": {
+      "state": "DONE",
+      "reason": null
+    },
+    "raw": {
+      "_state": {
+        "state": "DONE",
+        "reason": null
+      },
+      "_evidence_path": "/tmp/asha-k5/t6/.jspace/0bb1d24729b08f2c-t6/orchestrator/T6-C-2/w1.json"
+    },
+    "rep": 2,
+    "measurement_number": 2
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T6",
+    "path_id": "C",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 1112.7,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": true
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t6",
+      "head": "a20efaacd0c9103c3416a79209ed267a6998b411\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": "/tmp/asha-k5/t6/.jspace/0bb1d24729b08f2c-t6/orchestrator/T6-C-3/w1.json",
+    "state_detail": {
+      "state": "DONE",
+      "reason": null
+    },
+    "raw": {
+      "_state": {
+        "state": "DONE",
+        "reason": null
+      },
+      "_evidence_path": "/tmp/asha-k5/t6/.jspace/0bb1d24729b08f2c-t6/orchestrator/T6-C-3/w1.json"
+    },
+    "rep": 3,
+    "measurement_number": 3
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T7",
+    "path_id": "A",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 532.9,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t7",
+      "head": "7ec8e888d65f76cfc3726e4fd901aa95585c2a2c\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 0,
+    "measurement_number": 0
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T7",
+    "path_id": "A",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 624.8,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t7",
+      "head": "28512e4621eb7199d995ea0f0c22c1406d578789\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 1,
+    "measurement_number": 1
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T7",
+    "path_id": "A",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 565.7,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t7",
+      "head": "300ea9912adc64307b132644826adef62053dbfb\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 2,
+    "measurement_number": 2
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T7",
+    "path_id": "A",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 598.4,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t7",
+      "head": "70ac8db55a0f1ec20ce6e44b2c6b7a3ad297c263\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 3,
+    "measurement_number": 3
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T7",
+    "path_id": "B",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 530.6,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t7",
+      "head": "e66d53b4730c2e31762c1d664a969d568afe5a6a\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 0,
+    "measurement_number": 0
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T7",
+    "path_id": "B",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 591.1,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t7",
+      "head": "b562a5a930a1806a46e7627d26478841605be35e\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 1,
+    "measurement_number": 1
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T7",
+    "path_id": "B",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 553.0,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t7",
+      "head": "0c97d91d21957699a696def45483580e70da7056\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 2,
+    "measurement_number": 2
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T7",
+    "path_id": "B",
+    "expected_execution_verdict": "DONE",
+    "expected_detection_classification": "CLEAN_PASS",
+    "observed_execution_verdict": "DONE",
+    "observed_detection_classification": "CLEAN_PASS",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 605.0,
+      "execution_started": true,
+      "execution_prevented": false,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t7",
+      "head": "127adb0e052f77082c8f05b677e71d916dfd9261\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {},
+    "raw": {
+      "_failed_checks": []
+    },
+    "rep": 3,
+    "measurement_number": 3
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T7",
+    "path_id": "C",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_ENV_VIOLATION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_ENV_VIOLATION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 64.3,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t7",
+      "head": "5dfdd19cee9786b2f4df3d124046b0826a6a1b75\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {
+      "state": "INVALID_EVIDENCE",
+      "reason": "internal: no service-local Python at /tmp/asha-t7-wt-66b8c9c2d8d0/w1/.venv/bin/python for /tmp/asha-t7-wt-66b8c9c2d8d0/w1 and ASHA_ALLOW_SYSTEM_PYTHON_FALLBACK disables the system-Python fallback"
+    },
+    "raw": {
+      "_state": {
+        "state": "INVALID_EVIDENCE",
+        "reason": "internal: no service-local Python at /tmp/asha-t7-wt-66b8c9c2d8d0/w1/.venv/bin/python for /tmp/asha-t7-wt-66b8c9c2d8d0/w1 and ASHA_ALLOW_SYSTEM_PYTHON_FALLBACK disables the system-Python fallback"
+      },
+      "_evidence_path": null
+    },
+    "rep": 0,
+    "measurement_number": 0
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T7",
+    "path_id": "C",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_ENV_VIOLATION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_ENV_VIOLATION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 204.4,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t7",
+      "head": "0da0ea05a564d1785a5fee4b4690e8687b03c570\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {
+      "state": "INVALID_EVIDENCE",
+      "reason": "internal: no service-local Python at /tmp/asha-t7-wt-0112b63d6e18/w1/.venv/bin/python for /tmp/asha-t7-wt-0112b63d6e18/w1 and ASHA_ALLOW_SYSTEM_PYTHON_FALLBACK disables the system-Python fallback"
+    },
+    "raw": {
+      "_state": {
+        "state": "INVALID_EVIDENCE",
+        "reason": "internal: no service-local Python at /tmp/asha-t7-wt-0112b63d6e18/w1/.venv/bin/python for /tmp/asha-t7-wt-0112b63d6e18/w1 and ASHA_ALLOW_SYSTEM_PYTHON_FALLBACK disables the system-Python fallback"
+      },
+      "_evidence_path": null
+    },
+    "rep": 1,
+    "measurement_number": 1
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T7",
+    "path_id": "C",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_ENV_VIOLATION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_ENV_VIOLATION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 68.1,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t7",
+      "head": "1fe21f48cde9f968f92db2f17e9e5575b0050376\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {
+      "state": "INVALID_EVIDENCE",
+      "reason": "internal: no service-local Python at /tmp/asha-t7-wt-3ed212601602/w1/.venv/bin/python for /tmp/asha-t7-wt-3ed212601602/w1 and ASHA_ALLOW_SYSTEM_PYTHON_FALLBACK disables the system-Python fallback"
+    },
+    "raw": {
+      "_state": {
+        "state": "INVALID_EVIDENCE",
+        "reason": "internal: no service-local Python at /tmp/asha-t7-wt-3ed212601602/w1/.venv/bin/python for /tmp/asha-t7-wt-3ed212601602/w1 and ASHA_ALLOW_SYSTEM_PYTHON_FALLBACK disables the system-Python fallback"
+      },
+      "_evidence_path": null
+    },
+    "rep": 2,
+    "measurement_number": 2
+  },
+  {
+    "benchmark_run_id": "k5-20260930-084609",
+    "task_id": "T7",
+    "path_id": "C",
+    "expected_execution_verdict": "BLOCKED",
+    "expected_detection_classification": "REJECT_ENV_VIOLATION",
+    "observed_execution_verdict": "BLOCKED",
+    "observed_detection_classification": "REJECT_ENV_VIOLATION",
+    "policy_compliance": true,
+    "metrics": {
+      "execution_time_ms": 106.0,
+      "execution_started": true,
+      "execution_prevented": true,
+      "delta_calculated": false,
+      "evidence_reproducible": false
+    },
+    "repo": {
+      "root": "/tmp/asha-k5/t7",
+      "head": "bd35ce11e6ef99b1e355e6cb79ee2067de1f5fba\n"
+    },
+    "patch_sha256": "afda8fb3ac489395",
+    "environment": {
+      "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+      "ALLOW_FALLBACK": "unset"
+    },
+    "evidence_path": null,
+    "state_detail": {
+      "state": "INVALID_EVIDENCE",
+      "reason": "internal: no service-local Python at /tmp/asha-t7-wt-00f7fdaf3573/w1/.venv/bin/python for /tmp/asha-t7-wt-00f7fdaf3573/w1 and ASHA_ALLOW_SYSTEM_PYTHON_FALLBACK disables the system-Python fallback"
+    },
+    "raw": {
+      "_state": {
+        "state": "INVALID_EVIDENCE",
+        "reason": "internal: no service-local Python at /tmp/asha-t7-wt-00f7fdaf3573/w1/.venv/bin/python for /tmp/asha-t7-wt-00f7fdaf3573/w1 and ASHA_ALLOW_SYSTEM_PYTHON_FALLBACK disables the system-Python fallback"
+      },
+      "_evidence_path": null
+    },
+    "rep": 3,
+    "measurement_number": 3
+  }
+]

@@ -1,0 +1,52 @@
+{
+  "benchmark_run_id": "k5-T8-single-shot",
+  "task_id": "T8",
+  "path_id": "T8-Grep/T8-AST",
+  "probe_repo": "/tmp/k5-t8-_e1a7lxb",
+  "patch": "def render_manifest( (signature rename \u2192 alias import)",
+  "results": {
+    "grep": {
+      "true_targets": [
+        "tests/test_other.py",
+        "tests/test_render.py"
+      ],
+      "hits": [
+        "tests/test_other.py",
+        "tests/test_render.py"
+      ],
+      "true_positive": [
+        "tests/test_other.py",
+        "tests/test_render.py"
+      ],
+      "false_positive": [],
+      "missed_targets": [],
+      "precision": 1.0,
+      "recall": 1.0,
+      "search_time_ms": 3.3,
+      "graph_build_time_ms": 0.0,
+      "memory_usage_bytes": 0
+    },
+    "ast": {
+      "true_targets": [
+        "tests/test_other.py",
+        "tests/test_render.py"
+      ],
+      "hits": [
+        "tests/test_other.py",
+        "tests/test_render.py"
+      ],
+      "true_positive": [
+        "tests/test_other.py",
+        "tests/test_render.py"
+      ],
+      "false_positive": [],
+      "missed_targets": [],
+      "precision": 1.0,
+      "recall": 1.0,
+      "search_time_ms": 3.1,
+      "graph_build_time_ms": 0.0,
+      "memory_usage_bytes": 0
+    }
+  },
+  "note": "T8 excluded from A/B/C aggregate per spec Phase 6."
+}

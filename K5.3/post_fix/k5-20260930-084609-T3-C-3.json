@@ -1,0 +1,83 @@
+{
+  "benchmark_run_id": "k5-20260930-084609",
+  "task_id": "T3",
+  "path_id": "C",
+  "expected_execution_verdict": "DONE",
+  "expected_detection_classification": "CLEAN_PASS",
+  "observed_execution_verdict": "DONE",
+  "observed_detection_classification": "CLEAN_PASS",
+  "policy_compliance": true,
+  "metrics": {
+    "execution_time_ms": 1137.9,
+    "execution_started": true,
+    "execution_prevented": false,
+    "delta_calculated": true,
+    "evidence_reproducible": true
+  },
+  "repo": {
+    "root": "/tmp/asha-k5/t3",
+    "head": "bbe00e3cbcce30c8164493239504061a12679587\n"
+  },
+  "patch_sha256": "afda8fb3ac489395",
+  "environment": {
+    "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+    "ALLOW_FALLBACK": "unset"
+  },
+  "evidence_path": "/tmp/asha-k5/t3/.jspace/0464f0895f97fe53-t3/orchestrator/T3-C-3/w1.json",
+  "state_detail": {
+    "state": "DONE",
+    "reason": null,
+    "verdict": "PRE_EXISTING_ONLY"
+  },
+  "raw": {
+    "_state": {
+      "state": "DONE",
+      "reason": null,
+      "verdict": "PRE_EXISTING_ONLY",
+      "baseline_failures": [
+        {
+          "check": "pytest",
+          "location": "tests/test_app.py::test_old_0",
+          "code": null,
+          "message": null
+        },
+        {
+          "check": "pytest",
+          "location": "tests/test_app.py::test_old_1",
+          "code": null,
+          "message": null
+        },
+        {
+          "check": "pytest",
+          "location": "tests/test_app.py::test_old_2",
+          "code": null,
+          "message": null
+        }
+      ],
+      "current_failures": [
+        {
+          "check": "pytest",
+          "location": "tests/test_app.py::test_old_0",
+          "code": null,
+          "message": null
+        },
+        {
+          "check": "pytest",
+          "location": "tests/test_app.py::test_old_1",
+          "code": null,
+          "message": null
+        },
+        {
+          "check": "pytest",
+          "location": "tests/test_app.py::test_old_2",
+          "code": null,
+          "message": null
+        }
+      ],
+      "delta_failures": []
+    },
+    "_evidence_path": "/tmp/asha-k5/t3/.jspace/0464f0895f97fe53-t3/orchestrator/T3-C-3/w1.json"
+  },
+  "rep": 3,
+  "measurement_number": 3
+}
