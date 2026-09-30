@@ -16,6 +16,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+from asha.governance.env_resolver import (
+    EnvironmentResolver,
+    ServiceEnvironment,
+    resolve_env_for_file,
+)
+
 TAIL_CHARS = 2000
 
 # How each check's `scope` field is reported in evidence.json.
@@ -61,6 +67,65 @@ def _commands(root: Path, names: list[str], changed_py: list[str]) -> list[tuple
     return commands
 
 
+
+
+def _service_env(root: Path, changed_py: list[str]) -> ServiceEnvironment | None:
+    """Resolve the service environment for the check run.
+
+    ALL changed Python files must belong to the SAME service: a worker's
+    check run executes every changed file inside ONE interpreter, so a
+    scope that spans two services would check at least one file with the
+    wrong environment. That case fails closed (never silently picks the
+    first service). With no changed files the repository root is the
+    service root. Returns None when the environment could not be resolved
+    (fail-closed policy disabled fallback already raised; a missing .venv
+    with fallback enabled yields a non-hermetic environment which is still
+    returned).
+    """
+    if not changed_py:
+        return resolve_env_for_file(root, root)
+    first_root = EnvironmentResolver().service_root_for(
+        root, root / changed_py[0])
+    for path in changed_py[1:]:
+        other_root = EnvironmentResolver().service_root_for(
+            root, root / path)
+        if other_root != first_root:
+            raise CheckRunnerError(
+                "cross-service check run: changed files span "
+                f"{first_root} and {other_root}; a worker may only "
+                "execute checks within one service"
+            )
+    return resolve_env_for_file(root, root / changed_py[0])
+
+
+def _env_argv(env: ServiceEnvironment | None, name: str, argv: list[str]) -> list[str]:
+    """Swap the interpreter for the resolved environment.
+
+    pytest uses the local pytest launcher when present (it carries the
+    service's plugin context); every other check uses the service Python.
+    The command shape (module invocation) is preserved.
+    """
+    if env is None:
+        return argv
+    if not argv:
+        return argv
+    if name == "pytest" and env.pytest_bin is not None:
+        return [str(env.pytest_bin), *argv[1:]]
+    if env.is_hermetic:
+        return [str(env.python_bin), *argv[1:]]
+    return argv
+
+
+def _env_cwd_env(env: ServiceEnvironment | None, root: Path) -> tuple[Path, dict[str, str]]:
+    """Execution cwd + environment for a resolved service.
+
+    cwd = service_root when hermetic (the service's own layout), else the
+    repository root (historical behavior). env = service env vars merged
+    (isolated copy; the process environment is never mutated)."""
+    if env is not None and env.is_hermetic:
+        return env.service_root, dict(env.env_vars)
+    return root, os.environ.copy()
+
 def run(root: Path | str, resolved: dict) -> list[dict]:
     """Execute the mandatory checks for a resolved scope."""
     root = Path(root).resolve()
@@ -68,6 +133,8 @@ def run(root: Path | str, resolved: dict) -> list[dict]:
     changed_py = [f for f in resolved['affected_files']
                   if f.endswith(('.py', '.pyi')) and (root / f).is_file()]
     results: list[dict] = []
+    env = _service_env(root, changed_py)
+    cwd, proc_env = _env_cwd_env(env, root)
     for name, argv in _commands(root, names, changed_py):
         entry: dict = {
             'name': name,
@@ -80,10 +147,11 @@ def run(root: Path | str, resolved: dict) -> list[dict]:
             entry['note'] = 'no applicable target'
             results.append(entry)
             continue
+        argv = _env_argv(env, name, argv)
         started = time.monotonic()
         try:
-            proc = subprocess.run(argv, cwd=root, capture_output=True,
-                                  text=True, timeout=600)
+            proc = subprocess.run(argv, cwd=cwd, capture_output=True,
+                                  text=True, timeout=600, env=proc_env)
         except (OSError, subprocess.TimeoutExpired) as exc:
             entry['status'] = 'failed'
             entry['exit_code'] = -1
@@ -140,11 +208,13 @@ def run_scoped(
     shadowed-module rule mirrored from run()), never policy.
     """
     root = Path(root).resolve()
-    py = sys.executable
     changed_py = [
         file for file in changed_files
         if file.endswith(('.py', '.pyi')) and (root / file).is_file()
     ]
+    env = _service_env(root, changed_py)
+    py = str(env.python_bin) if env is not None and env.is_hermetic else sys.executable
+    cwd, proc_env = _env_cwd_env(env, root)
     scoped_mypy = [
         file for file in mypy_targets
         if file.endswith(('.py', '.pyi')) and (root / file).is_file()
@@ -156,9 +226,8 @@ def run_scoped(
         ('mypy', [py, '-m', 'mypy', *scoped_mypy] if scoped_mypy else []),
     ]
     results: list[dict[str, Any]] = []
-    env = os.environ.copy()
-    env['PATH'] = str(root) + os.pathsep + env.get('PATH', '')
     for name, command in commands:
+        command = _env_argv(env, name, command)
         entry: dict[str, Any] = {
             'name': name,
             'scope': _SCOPED_CHECK_SCOPE[name],
@@ -177,8 +246,8 @@ def run_scoped(
         started = time.monotonic()
         try:
             proc = subprocess.run(
-                command, cwd=root, capture_output=True, text=True,
-                encoding='utf-8', errors='replace', timeout=timeout, env=env,
+                command, cwd=cwd, capture_output=True, text=True,
+                encoding='utf-8', errors='replace', timeout=timeout, env=proc_env,
             )
         except subprocess.TimeoutExpired:
             entry['status'] = 'failed'

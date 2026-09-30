@@ -29,6 +29,7 @@ import subprocess
 import threading
 from collections.abc import Iterable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextlib import suppress as _suppress
 from graphlib import CycleError, TopologicalSorter
 from typing import Any
 
@@ -62,6 +63,7 @@ class DAGCoordinator:
         *,
         task_id: str,
         keep_worktrees: bool = False,
+        preserve_on_failure: bool = False,
         fast_path_enabled: bool = False,
         classification_context: tuple[Any, ...] = (),
     ) -> None:
@@ -69,6 +71,7 @@ class DAGCoordinator:
         self.workers = list(workers)
         self.task_id = task_id
         self.keep_worktrees = keep_worktrees
+        self.preserve_on_failure = preserve_on_failure
         self.fast_path_enabled = fast_path_enabled
         self.classification_context = tuple(classification_context)
         self.by_id: dict[str, dict[str, Any]] = {
@@ -187,9 +190,29 @@ class DAGCoordinator:
 
     # -- execution primitives (delegated) -----------------------------------
 
+    @staticmethod
+    def _merge_verdict_fields(target: dict[str, Any],
+                              outcome: dict[str, Any]) -> None:
+        """Copy Delta Check verdict fields from a worker outcome into the
+        DAG states entry (isolated helper: keeps flow analysis of the
+        scheduling loop free of extra assignments)."""
+        for extra in ("verdict", "baseline_failures",
+                      "current_failures", "delta_failures"):
+            if outcome.get(extra) is not None:
+                target[extra] = outcome[extra]
+
     def _run_one(self, worker: dict[str, Any], path: Any, *,
                  base: str | None = None,
                  base_tree: str | None = None) -> dict[str, Any]:
+        baseline_journal: dict | None = None
+        base_c = base or self.dispatcher.base_commit
+        base_t = base_tree or self.dispatcher.base_tree
+        if base_c and base_t:
+            try:
+                baseline_journal = worker_execution.baseline_checks(
+                    worker, path, base_c, base_t, self.repo, self.task_id)
+            except Exception:
+                baseline_journal = None
         try:
             result = self.execute(worker, path)
         except subprocess.TimeoutExpired:
@@ -210,7 +233,10 @@ class DAGCoordinator:
             worker, path, rc, tail, self.task_id, self.evidence_dir,
             base=base, base_tree=base_tree,
             uncertain=set(self.worker_graph["uncertain"]),
-            by_id=self.by_id, workers=self.workers)
+            by_id=self.by_id, workers=self.workers,
+            baseline_checks=(
+                (baseline_journal or {}).get("checks")
+                if baseline_journal else None))
 
     def _run_one_fast(self, worker: dict[str, Any]) -> dict[str, Any]:
         with self._fast_lock:
@@ -435,7 +461,7 @@ class DAGCoordinator:
                                        return_when=FIRST_COMPLETED)
                     batch: list[tuple[str, str | None, str, str]] = []
                     wave = set(finished)
-                    handled: set = set()
+                    handled: set[Future[Any]] = set()
                     while wave:
                         for fut in wave:
                             handled.add(fut)
@@ -450,6 +476,8 @@ class DAGCoordinator:
                             self.conflicts.finish(wid)
                             self._set(wid, str(outcome["state"]),
                                       outcome.get("reason"))
+                            type(self)._merge_verdict_fields(
+                                self.states[wid], outcome)
                             if outcome.get("evidence"):
                                 self.evidence_paths[wid] = str(
                                     outcome["evidence"])
@@ -467,8 +495,8 @@ class DAGCoordinator:
                                 abort = True
                                 fail_reason = fail_reason or (
                                     f"{wid}:{outcome['state']}")
-                        wave = {f for f in list(futures) if f.done()} \
-                            - handled
+                        wave = {f for f in list(futures)
+                                if f.done()} - handled
                         if not wave and futures:
                             extra, _ = wait(futures, timeout=_WAVE_OVERLAP_S)
                             wave = set(extra) - handled
@@ -504,6 +532,16 @@ class DAGCoordinator:
             else:
                 entry.update(state="BLOCKED", reason="not_dispatchable")
 
+        if self.preserve_on_failure:
+            for wid, entry in self.states.items():
+                if entry["state"] in ("FAILED", "INVALID_EVIDENCE"):
+                    run_dir = (common_paths.get_orchestrator_dir(self.repo)
+                               / _safe_id(wid))
+                    worker = self.by_id.get(wid, {})
+                    exec_path = self.dispatcher.paths.get(wid, self.repo)
+                    with _suppress(Exception):
+                        worker_execution.persist_failure_evidence(
+                            worker, exec_path, entry, run_dir)
         self.dispatcher.cleanup()
         report["worktrees"] = {wid: str(path)
                                for wid, path in self.dispatcher.paths.items()}
@@ -533,6 +571,7 @@ def run_workers_dag(
     fast_path_enabled: bool = False,
     classification_context: tuple[Any, ...] = (),
     execute_hook=None,
+    preserve_on_failure: bool = False,
 ) -> dict[str, Any]:
     """Facade: minimal DAG coordinator for multi-worker governed runs.
 
@@ -542,7 +581,8 @@ def run_workers_dag(
     coordinator = DAGCoordinator(
         repo, validate_workers(workers), task_id=task_id, keep_worktrees=keep_worktrees,
         fast_path_enabled=fast_path_enabled,
-        classification_context=classification_context)
+        classification_context=classification_context,
+        preserve_on_failure=preserve_on_failure)
     if execute_hook is not None:
         coordinator.execute = execute_hook  # type: ignore[attr-defined]
     return coordinator.run()

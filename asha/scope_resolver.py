@@ -88,6 +88,42 @@ class ScopeError(Exception):
     """Git/parse failure while resolving scope (fail-closed)."""
 
 
+def normalize_declared_scope(scope) -> list[str]:
+    """Normalize a declared scope into a list of repo-relative paths.
+
+    Accepted forms:
+      * string: one path, or comma-separated paths
+      * list:   list[str] of paths
+    Each entry is whitespace-stripped, a leading / is removed, and
+    empty entries (accidental whitespace/commas) are dropped. Relative
+    paths are returned verbatim (never resolved against a root here);
+    classification semantics are unchanged after normalization. A
+    non-empty path that is not a valid repo-relative path is kept -- the
+    caller's existing validation rules still apply to it.
+    """
+    if isinstance(scope, str):
+        entries = scope.split(',')
+    elif isinstance(scope, (list, tuple)):
+        entries = list(scope)
+    else:
+        raise ScopeError(
+            'declared_scope must be a string or list of strings, '
+            f'got {type(scope).__name__}'
+        )
+    normalized: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, str):
+            raise ScopeError(
+                'declared_scope entries must be strings, '
+                f'got {type(entry).__name__}'
+            )
+        item = entry.strip().lstrip('/')
+        if not item:
+            continue  # empty entry from whitespace/trailing comma
+        normalized.append(item)
+    return normalized
+
+
 def _git(root: Path, *args: str) -> str:
     proc = subprocess.run(['git', *args], cwd=root, capture_output=True,
                           text=True, timeout=60)
@@ -337,6 +373,8 @@ def resolve(root: Path | str, base: str | None = None,
     # proven in tests/test_evidence_optimization.py).
     if paths is None:
         paths = changed_files(root, base)
+    else:
+        paths = normalize_declared_scope(paths)
     per_file: dict[str, str] = {}
     reasons: list[str] = []
     uncertain = False

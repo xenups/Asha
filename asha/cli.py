@@ -440,6 +440,9 @@ def run_spec_cmd(argv: list[str]) -> int:
     run_p.add_argument('--keep-worktrees', action='store_true',
                        help='debug: skip worktree removal (disk cost stays '
                             'until removed manually; reported)')
+    run_p.add_argument('--preserve-on-failure', action='store_true',
+                       help='debug: keep execution.log + diff.patch + '
+                            'worker-status.json for failed workers')
     run_p.add_argument('--apply', action='store_true',
                        help='atomically apply verified worker results onto '
                             'the target branch after the integration gate '
@@ -458,7 +461,9 @@ def run_spec_cmd(argv: list[str]) -> int:
             raise OrchestratorError('spec.workers must be a list')
         report = run_workers_dag(
             Path(args.root), workers, task_id=task_id,
-            keep_worktrees=args.keep_worktrees)
+            keep_worktrees=args.keep_worktrees,
+            preserve_on_failure=(
+                args.preserve_on_failure or args.keep_worktrees))
         if args.apply:
             report['integration'] = _integration_summary(
                 Path(args.root), report).as_dict()

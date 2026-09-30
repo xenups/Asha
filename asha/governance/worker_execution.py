@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import tempfile
+from contextlib import suppress as _suppress
 from pathlib import Path
 from typing import Any
 
@@ -201,6 +202,67 @@ def scoping_decision(root: Path,
     return decision
 
 
+def _strip_check_caches(path: Path) -> None:
+    """Remove verification cache artifacts (pytest/ruff/mypy) that the
+    baseline check pass leaves in the worktree, at any depth. Without
+    this, untracked __pycache__/.pytest_cache/.ruff_cache dirs would
+    surface in collect_worker_evidence's observed scope as violations
+    for workers whose declared scope does not include them."""
+    import shutil
+    for name in ("__pycache__", ".pytest_cache", ".ruff_cache",
+                 ".mypy_cache"):
+        for target in path.rglob(name):
+            shutil.rmtree(target, ignore_errors=True)
+
+
+def baseline_checks(
+    worker: dict[str, Any],
+    path: Path,
+    base: str,
+    base_tree: str,
+    repo: Path,
+    task_id: str,
+) -> dict:
+    """Run verification on the CLEAN worktree (== base tree) BEFORE the
+    worker executes. Captures pre-existing failures with the same
+    environment, check command, configuration and relevant scope as the
+    current pass -- the baseline for Delta Check.
+
+    The worktree at this point is at base_commit, so the baseline
+    corresponds exactly to the repository's pre-worker state. Identity
+    fields (repo, service env, command, config) are recorded so a
+    baseline is never silently reused for a different environment.
+    """
+    resolved = scope_resolver.resolve(
+        path, base=base, paths=scope_resolver.changed_files(path, base=base))
+    cls = classify_independence(str(worker.get("id")), resolved,
+                                set(), {worker["id"]: worker}, [worker])
+    decision = scoping_decision(path, resolved, cls)
+    checks = _run_checks(decision, path, resolved)
+    return {
+        "checks": checks,
+        "resolved": resolved,
+        "decision_mode": getattr(decision, "mode", None),
+        "repo": str(Path(repo).resolve()),
+        "base": base,
+        "base_tree": base_tree,
+        "task_id": task_id,
+    }
+
+
+def _run_checks(decision, path: Path, resolved: dict) -> list[dict]:
+    """Run the check matrix for a resolved scope (shared by baseline and
+    current passes; identical machinery, identical environment)."""
+    if decision.eligible:
+        return check_runner.run_scoped(
+            path,
+            changed_files=list(resolved["affected_files"]),
+            targeted_tests=list(decision.targeted_tests),
+            mypy_targets=list(decision.mypy_targets),
+        )
+    return check_runner.run(path, resolved)
+
+
 def run_worker_in_worktree(
     repo: Path,
     worker: dict[str, Any],
@@ -209,6 +271,7 @@ def run_worker_in_worktree(
     keep_worktrees: bool = False,
     fast_path: bool = False,
     fast_path_classification: str = "UNKNOWN",
+    preserve_on_failure: bool = False,
 ) -> dict[str, Any]:
     """Execute ONE worker through the modular path (H.2.1-C/D).
 
@@ -261,6 +324,15 @@ def run_worker_in_worktree(
         else:
             path = dispatcher.create(wid)
             created_path = path
+            baseline_journal: dict | None = None
+            try:
+                baseline_journal = baseline_checks(
+                    worker, path, base_commit, base_tree, repo, task_id)
+                _strip_check_caches(path)
+            except Exception:
+                # baseline must never mask the worker failure; a failed
+                # baseline yields UNKNOWN (fail closed) downstream
+                baseline_journal = None
             try:
                 result = default_execute(worker, path)
             except subprocess.TimeoutExpired:
@@ -283,19 +355,76 @@ def run_worker_in_worktree(
             outcome = collect_worker_evidence(
                 worker, path, rc, tail, task_id,
                 common_paths.get_orchestrator_dir(repo) / _safe_id(task_id),
-                base=base_commit, base_tree=base_tree)
+                base=base_commit, base_tree=base_tree,
+                baseline_checks=(
+                    (baseline_journal or {}).get("checks")
+                    if baseline_journal else None))
         states[wid] = outcome
         if outcome.get("evidence"):
             evidence_paths[wid] = outcome["evidence"]
             authoritative[wid] = _derive_authoritative(
                 outcome, worker, base_tree)
     finally:
+        if preserve_on_failure and outcome and outcome.get("state") in (
+                "FAILED", "INVALID_EVIDENCE"):
+            run_dir = (common_paths.get_orchestrator_dir(repo)
+                       / _safe_id(task_id))
+            exec_path = created_path if created_path is not None else repo
+            with _suppress(Exception):
+                persist_failure_evidence(
+                    worker, exec_path, outcome, run_dir)
         dispatcher.cleanup()
 
     return _report(task_id, states, evidence_paths, authoritative,
                    dispatcher, created_path, fast_path=fast_path,
                    fast_path_classification=fast_path_classification)
 
+
+
+
+def persist_failure_evidence(
+    worker: dict[str, Any],
+    path: Path,
+    outcome: dict[str, Any],
+    run_dir: Path,
+) -> None:
+    """Persist execution evidence for a failed worker.
+
+    Called BEFORE worktree cleanup so the real artifacts survive:
+      * execution.log      -- combined stdout/stderr of the worker command
+      * diff.patch         -- repository/worktree diff at the failure point
+      * worker-status.json -- the outcome dict (state, reason, exit code)
+    Writes are atomic (temp sibling + os.replace). Best-effort: a
+    persistence failure must not mask the worker's own failure.
+    """
+    run_dir.mkdir(parents=True, exist_ok=True)
+    tail = outcome.get("output_tail") or ""
+    # execution.log: full combined output is not retained (only the tail
+    # survives collect_worker_evidence); persist what we have plus the
+    # exit code and reason so the failure is reproducible.
+    log_lines = [
+        f"state: {outcome.get('state')}",
+        f"reason: {outcome.get('reason')}",
+        f"exit_status: {outcome.get('exit_status')}",
+        "",
+        tail,
+    ]
+    log_path = run_dir / "execution.log"
+    log_path.write_text("\n".join(log_lines), encoding="utf-8")
+    # diff.patch: worktree diff vs base when the worktree still exists.
+    try:
+        diff = _git(path, "diff", "HEAD", strip=False)
+    except Exception:
+        diff = ""
+    if diff:
+        (run_dir / "diff.patch").write_text(diff, encoding="utf-8")
+    status_path = run_dir / "worker-status.json"
+    _atomic_json(status_path, {
+        "worker_id": worker.get("id"),
+        "state": outcome.get("state"),
+        "reason": outcome.get("reason"),
+        "exit_status": outcome.get("exit_status"),
+    })
 
 def _split_result(result) -> tuple[int, str]:
     if isinstance(result, tuple):
@@ -378,6 +507,7 @@ def collect_worker_evidence(
                             uncertain: set[str] | frozenset[str] = frozenset(),
                             by_id: dict[str, dict[str, Any]] | None = None,
                             workers: list[dict[str, Any]] | None = None,
+                            baseline_checks: list[dict] | None = None,
                             ) -> dict[str, Any]:
     """Extracted GovernedScheduler._collect. `evidence_dir` is the
     scheduler-owned orchestrator dir (external Zone-2), NOT the ship
@@ -396,6 +526,7 @@ def collect_worker_evidence(
         dirty = [line for line in
                  _git(path, "status", "--porcelain").splitlines()
                  if line.strip()]
+        delta_ran = False
         if dirty:
             _commit_all(path, f"orchestrator: worker {wid}")
         commit_line, tree_line = _git(path, "rev-parse", "HEAD",
@@ -421,25 +552,48 @@ def collect_worker_evidence(
                 str(wid), resolved, set(uncertain), by,
                 workers if workers is not None else [worker])
         decision = scoping_decision(path, resolved, cls)
-        if decision.eligible:
-            checks = check_runner.run_scoped(
-                path,
-                changed_files=list(resolved["affected_files"]),
-                targeted_tests=list(decision.targeted_tests),
-                mypy_targets=list(decision.mypy_targets),
-            )
-        else:
-            checks = check_runner.run(path, resolved)
+        checks = _run_checks(decision, path, resolved)
         failed = [entry["name"] for entry in checks
                   if entry["status"] == "failed"]
-        if failed:
-            return {"state": "FAILED",
-                    "reason": "verification_failed:" + ",".join(failed),
-                    "evidence": None}
         if checks and all(entry["status"] == "skipped"
                           for entry in checks):
             return {"state": "INVALID_EVIDENCE",
                     "reason": "no_verification_ran", "evidence": None}
+        if failed:
+            from asha.governance import delta
+            baseline_checks = (list(baseline_checks)
+                               if baseline_checks is not None else None)
+            cur_fails = delta.extract_failures(checks)
+            base_fails = (delta.extract_failures(baseline_checks)
+                          if baseline_checks is not None else None)
+            verdict = delta.verdict_for(
+                cur_fails, base_fails, has_failed_checks=bool(failed))
+            new_fails = delta.delta_failures(cur_fails, base_fails)
+            outcome: dict[str, Any] = {
+                "state": "FAILED",
+                "reason": "verification_failed:" + ",".join(failed),
+                "evidence": None,
+                "verdict": verdict,
+                "baseline_failures": (
+                    [f.to_dict() for f in sorted(base_fails,
+                                               key=lambda i: i.location)]
+                    if base_fails is not None else None),
+                "current_failures": [
+                    f.to_dict() for f in sorted(cur_fails,
+                                                key=lambda i: i.location)],
+                "delta_failures": [
+                    f.to_dict() for f in sorted(new_fails,
+                                                key=lambda i: i.location)],
+            }
+            delta_ran = True
+            pre_existing_only = verdict == "PRE_EXISTING_ONLY"
+            if not pre_existing_only:
+                return outcome
+            # Pre-existing-only failures are NOT attributed to this worker:
+            # the worker introduced no new failures, so its verification
+            # still passes. Fall through to the evidence seal below so the
+            # delta decision (baseline/current/verdict) is persisted and
+            # auditable; the payload carries the failure lists.
         diff = _git(path, "diff", effective_base,
                     target_commit, strip=False)
         payload: dict[str, Any] = {
@@ -463,6 +617,18 @@ def collect_worker_evidence(
             "diff": diff,
             "exit_status": rc,
         }
+        if delta_ran:
+            payload["verdict"] = verdict
+            payload["baseline_failures"] = (
+                [f.to_dict() for f in sorted(base_fails,
+                                             key=lambda i: i.location)]
+                if base_fails is not None else None)
+            payload["current_failures"] = [
+                f.to_dict() for f in sorted(cur_fails,
+                                             key=lambda i: i.location)]
+            payload["delta_failures"] = [
+                f.to_dict() for f in sorted(new_fails,
+                                             key=lambda i: i.location)]
         payload["validation_mode"] = decision.mode
         if decision.eligible:
             payload["targeted_tests"] = list(decision.targeted_tests)
@@ -481,5 +647,19 @@ def collect_worker_evidence(
         return {"state": "INVALID_EVIDENCE",
                 "reason": f"{type(exc).__name__}: {exc}",
                 "evidence": None}
-    return {"state": "DONE", "reason": None, "evidence": str(evi_path),
-            "observed": list(observed), "target_tree": target_tree}
+    done: dict[str, Any] = {
+        "state": "DONE", "reason": None, "evidence": str(evi_path),
+        "observed": list(observed), "target_tree": target_tree}
+    if delta_ran:
+        done["verdict"] = verdict
+        done["baseline_failures"] = (
+            [f.to_dict() for f in sorted(base_fails,
+                                         key=lambda i: i.location)]
+            if base_fails is not None else None)
+        done["current_failures"] = [
+            f.to_dict() for f in sorted(cur_fails,
+                                         key=lambda i: i.location)]
+        done["delta_failures"] = [
+            f.to_dict() for f in sorted(new_fails,
+                                         key=lambda i: i.location)]
+    return done
