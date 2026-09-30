@@ -1,0 +1,83 @@
+{
+  "benchmark_run_id": "k5-20260930-074312",
+  "task_id": "T4",
+  "path_id": "C",
+  "expected_execution_verdict": "BLOCKED",
+  "expected_detection_classification": "REJECT_NEW_REGRESSION",
+  "observed_execution_verdict": "DONE",
+  "observed_detection_classification": "CLEAN_PASS",
+  "policy_compliance": false,
+  "metrics": {
+    "execution_time_ms": 3547.0,
+    "execution_started": true,
+    "execution_prevented": false,
+    "delta_calculated": true,
+    "evidence_reproducible": true
+  },
+  "repo": {
+    "root": "/tmp/asha-k5/t4",
+    "head": "66243ddb2cf0b7bfe607a763de6c96e7a6abcdc3\n"
+  },
+  "patch_sha256": "8a236b63d9931844",
+  "environment": {
+    "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+    "ALLOW_FALLBACK": "unset"
+  },
+  "evidence_path": "/tmp/asha-k5/t4/.jspace/d0696eb52c7247ea-t4/orchestrator/T4-C-1/w1.json",
+  "state_detail": {
+    "state": "DONE",
+    "reason": null,
+    "verdict": "PRE_EXISTING_ONLY"
+  },
+  "raw": {
+    "_state": {
+      "state": "DONE",
+      "reason": null,
+      "verdict": "PRE_EXISTING_ONLY",
+      "baseline_failures": [
+        {
+          "check": "pytest",
+          "location": "tests/test_app.py::test_old_0",
+          "code": null,
+          "message": null
+        },
+        {
+          "check": "pytest",
+          "location": "tests/test_app.py::test_old_1",
+          "code": null,
+          "message": null
+        },
+        {
+          "check": "pytest",
+          "location": "tests/test_app.py::test_old_2",
+          "code": null,
+          "message": null
+        }
+      ],
+      "current_failures": [
+        {
+          "check": "pytest",
+          "location": "tests/test_app.py::test_old_0",
+          "code": null,
+          "message": null
+        },
+        {
+          "check": "pytest",
+          "location": "tests/test_app.py::test_old_1",
+          "code": null,
+          "message": null
+        },
+        {
+          "check": "pytest",
+          "location": "tests/test_app.py::test_old_2",
+          "code": null,
+          "message": null
+        }
+      ],
+      "delta_failures": []
+    },
+    "_evidence_path": "/tmp/asha-k5/t4/.jspace/d0696eb52c7247ea-t4/orchestrator/T4-C-1/w1.json"
+  },
+  "rep": 1,
+  "measurement_number": 1
+}

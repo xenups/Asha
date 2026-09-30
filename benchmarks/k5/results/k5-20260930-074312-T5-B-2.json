@@ -1,0 +1,33 @@
+{
+  "benchmark_run_id": "k5-20260930-074312",
+  "task_id": "T5",
+  "path_id": "B",
+  "expected_execution_verdict": "BLOCKED",
+  "expected_detection_classification": "REJECT_SCOPE_VIOLATION",
+  "observed_execution_verdict": "BLOCKED",
+  "observed_detection_classification": "REJECT_SCOPE_VIOLATION",
+  "policy_compliance": true,
+  "metrics": {
+    "execution_time_ms": 88.4,
+    "scope_violated": true,
+    "scope_violation_detected": true,
+    "execution_started": true,
+    "execution_prevented": true,
+    "delta_calculated": false,
+    "evidence_reproducible": false
+  },
+  "repo": {
+    "root": "/tmp/asha-k5/t5",
+    "head": "da4888d839cf6b2dd8b5f0a42fb512a17876e329\n"
+  },
+  "patch_sha256": "d61e505363ccf970",
+  "environment": {
+    "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+    "ALLOW_FALLBACK": "unset"
+  },
+  "evidence_path": null,
+  "state_detail": {},
+  "raw": {},
+  "rep": 2,
+  "measurement_number": 2
+}

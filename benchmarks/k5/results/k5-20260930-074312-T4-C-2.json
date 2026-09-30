@@ -1,0 +1,96 @@
+{
+  "benchmark_run_id": "k5-20260930-074312",
+  "task_id": "T4",
+  "path_id": "C",
+  "expected_execution_verdict": "BLOCKED",
+  "expected_detection_classification": "REJECT_NEW_REGRESSION",
+  "observed_execution_verdict": "BLOCKED",
+  "observed_detection_classification": "REJECT_NEW_REGRESSION",
+  "policy_compliance": true,
+  "metrics": {
+    "execution_time_ms": 3700.2,
+    "execution_started": true,
+    "execution_prevented": true,
+    "delta_calculated": true,
+    "evidence_reproducible": false
+  },
+  "repo": {
+    "root": "/tmp/asha-k5/t4",
+    "head": "2251611aa56612570d2e7dc48ea89b64dc403bdb\n"
+  },
+  "patch_sha256": "8a236b63d9931844",
+  "environment": {
+    "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+    "ALLOW_FALLBACK": "unset"
+  },
+  "evidence_path": null,
+  "state_detail": {
+    "state": "FAILED",
+    "reason": "verification_failed:pytest",
+    "verdict": "NEW_FAILURES"
+  },
+  "raw": {
+    "_state": {
+      "state": "FAILED",
+      "reason": "verification_failed:pytest",
+      "verdict": "NEW_FAILURES",
+      "baseline_failures": [
+        {
+          "check": "pytest",
+          "location": "tests/test_app.py::test_old_0",
+          "code": null,
+          "message": null
+        },
+        {
+          "check": "pytest",
+          "location": "tests/test_app.py::test_old_1",
+          "code": null,
+          "message": null
+        },
+        {
+          "check": "pytest",
+          "location": "tests/test_app.py::test_old_2",
+          "code": null,
+          "message": null
+        }
+      ],
+      "current_failures": [
+        {
+          "check": "pytest",
+          "location": "tests/test_app.py::test_f",
+          "code": null,
+          "message": null
+        },
+        {
+          "check": "pytest",
+          "location": "tests/test_app.py::test_old_0",
+          "code": null,
+          "message": null
+        },
+        {
+          "check": "pytest",
+          "location": "tests/test_app.py::test_old_1",
+          "code": null,
+          "message": null
+        },
+        {
+          "check": "pytest",
+          "location": "tests/test_app.py::test_old_2",
+          "code": null,
+          "message": null
+        }
+      ],
+      "delta_failures": [
+        {
+          "check": "pytest",
+          "location": "tests/test_app.py::test_f",
+          "code": null,
+          "message": null
+        }
+      ]
+    },
+    "_evidence_path": null
+  },
+  "rep": 2,
+  "measurement_number": 2
+}

@@ -1,0 +1,40 @@
+{
+  "benchmark_run_id": "k5-20260930-074312",
+  "task_id": "T6",
+  "path_id": "C",
+  "expected_execution_verdict": "DONE",
+  "expected_detection_classification": "CLEAN_PASS",
+  "observed_execution_verdict": "DONE",
+  "observed_detection_classification": "CLEAN_PASS",
+  "policy_compliance": true,
+  "metrics": {
+    "execution_time_ms": 1127.7,
+    "execution_started": true,
+    "execution_prevented": false,
+    "delta_calculated": false,
+    "evidence_reproducible": true
+  },
+  "repo": {
+    "root": "/tmp/asha-k5/t6",
+    "head": "eef1c9df0859d515a3129bc5350b6907503c9bc7\n"
+  },
+  "patch_sha256": "afda8fb3ac489395",
+  "environment": {
+    "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+    "ALLOW_FALLBACK": "unset"
+  },
+  "evidence_path": "/tmp/asha-k5/t6/.jspace/0bb1d24729b08f2c-t6/orchestrator/T6-C-2/w1.json",
+  "state_detail": {
+    "state": "DONE",
+    "reason": null
+  },
+  "raw": {
+    "_state": {
+      "state": "DONE",
+      "reason": null
+    },
+    "_evidence_path": "/tmp/asha-k5/t6/.jspace/0bb1d24729b08f2c-t6/orchestrator/T6-C-2/w1.json"
+  },
+  "rep": 2,
+  "measurement_number": 2
+}

@@ -1,0 +1,21 @@
+{
+  "benchmark_run_id": "k5-20260930-074312",
+  "frozen_spec_sha256": "cf0eab9e2099b62a98fba1d8465a6e36168b08b3ced8925f3a127321bfbaf6ed",
+  "harness_sha256": "01cdaaf02e38c20fdb5c37eff8a7b6843d07a62d3e421a0c52ce4019c510d6d8",
+  "runner_sha256": "ad4453c3ab5eeeb5a7a8d0a43f557cb281a47301d9356dbb430f7f211ab6fa50",
+  "t8_probe_sha256": "9f9a72e37b4cdd372e344edbf28c623028ee2125c6258bd6cfb59bff46837a5e",
+  "repo_commit": "785493f0fdb21507f7eb16d62cca6567e52eeeec",
+  "environment": {
+    "python": "3.12.1",
+    "pytest": "7.4.4",
+    "ruff": "0.16.9",
+    "mypy": "2.3.1",
+    "git": "2.30.2",
+    "host": "baltic.void-star.co",
+    "os": "Linux (container)"
+  },
+  "warmup_runs": 1,
+  "measured_reps": 3,
+  "harness_revision_note": "All A/B/C executions use PRODUCTION asha.worktree/check_runner/governance code; Path C = run_workers_dag(..., preserve_on_failure=False) = production default",
+  "generated_at": "2026-09-30T11:47:36.520799+00:00"
+}

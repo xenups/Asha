@@ -1,0 +1,40 @@
+{
+  "benchmark_run_id": "k5-20260930-074312",
+  "task_id": "T7",
+  "path_id": "C",
+  "expected_execution_verdict": "BLOCKED",
+  "expected_detection_classification": "REJECT_ENV_VIOLATION",
+  "observed_execution_verdict": "BLOCKED",
+  "observed_detection_classification": "REJECT_ENV_VIOLATION",
+  "policy_compliance": true,
+  "metrics": {
+    "execution_time_ms": 59.3,
+    "execution_started": true,
+    "execution_prevented": true,
+    "delta_calculated": false,
+    "evidence_reproducible": false
+  },
+  "repo": {
+    "root": "/tmp/asha-k5/t7",
+    "head": "517aa570dacd2c95727f154fc6160fc324a351a0\n"
+  },
+  "patch_sha256": "afda8fb3ac489395",
+  "environment": {
+    "PYTHON": "/home/amir/src/Asha/.venv/bin/python",
+    "ALLOW_FALLBACK": "unset"
+  },
+  "evidence_path": null,
+  "state_detail": {
+    "state": "INVALID_EVIDENCE",
+    "reason": "internal: no service-local Python at /tmp/asha-t7-wt-0de0eadd4539/w1/.venv/bin/python for /tmp/asha-t7-wt-0de0eadd4539/w1 and ASHA_ALLOW_SYSTEM_PYTHON_FALLBACK disables the system-Python fallback"
+  },
+  "raw": {
+    "_state": {
+      "state": "INVALID_EVIDENCE",
+      "reason": "internal: no service-local Python at /tmp/asha-t7-wt-0de0eadd4539/w1/.venv/bin/python for /tmp/asha-t7-wt-0de0eadd4539/w1 and ASHA_ALLOW_SYSTEM_PYTHON_FALLBACK disables the system-Python fallback"
+    },
+    "_evidence_path": null
+  },
+  "rep": 3,
+  "measurement_number": 3
+}
