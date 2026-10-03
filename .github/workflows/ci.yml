@@ -50,6 +50,22 @@ jobs:
       - name: Typecheck (mypy, baseline-gated)
         run: mypy asha/ tests/ | mypy-baseline filter
 
-      # Step 3: full suite (worktree + evidence tests need the identity above)
+      # Step 3: full suite (worktree + evidence tests need the identity above).
+      # Empty collection must FAIL the job, not pass silently: pytest's
+      # own exit 5 ("no tests collected") is propagated, and the collected
+      # count is asserted explicitly so a runner wrapper that masks exit
+      # codes can never make an empty suite look green.
       - name: Test (pytest)
-        run: pytest tests/ -v
+        run: |
+          set +e
+          pytest tests/ -v > /tmp/pytest.log 2>&1
+          status=$?
+          set -e
+          collected=$(grep -oE '[0-9]+ passed' /tmp/pytest.log | tail -1 | grep -oE '[0-9]+' || echo 0)
+          echo "pytest_exit=$status collected=$collected"
+          tail -40 /tmp/pytest.log
+          if [ "$collected" -eq 0 ]; then
+            echo "::error::CI collected 0 tests -- empty suite must not pass silently"
+            exit 1
+          fi
+          exit $status
