@@ -394,8 +394,17 @@ def resolve(root: Path | str, base: str | None = None,
         uncertain = uncertain or flag
 
     if not paths:
-        scope = 'S0'
-        reasons.append('no changes detected')
+        if base is None:
+            # D.1 empty-diff guardrail: an unresolved base with no
+            # detected changes means the diff is HEAD vs a clean tree --
+            # sealing S0/pytest alone would be a vacuous PASS. Elevate to
+            # the full S2 matrix so committed runtime files can never skip
+            # lint/type checks silently (mirrors ship_gate restoration).
+            scope = 'S2'
+            reasons.append('unresolved base + empty diff -> full S2 (D.1)')
+        else:
+            scope = 'S0'
+            reasons.append('no changes detected')
     else:
         scope = max(per_file.values(), key=lambda level: LEVEL_RANK[level])
 
