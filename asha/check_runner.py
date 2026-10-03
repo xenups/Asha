@@ -110,7 +110,11 @@ def _env_argv(env: ServiceEnvironment | None, name: str, argv: list[str]) -> lis
     if not argv:
         return argv
     if name == "pytest" and env.pytest_bin is not None:
-        return [str(env.pytest_bin), *argv[1:]]
+        # pytest_bin is the launcher itself: `-m pytest` is a marker
+        # filter, not a module flag -- drop argv[1:3] or pytest would
+        # select only tests marked "pytest" (silently exit 5).
+        rest = argv[3:] if len(argv) > 3 and argv[1] == "-m" and argv[2] == "pytest" else argv[1:]
+        return [str(env.pytest_bin), *rest]
     if env.is_hermetic:
         return [str(env.python_bin), *argv[1:]]
     return argv
@@ -125,6 +129,31 @@ def _env_cwd_env(env: ServiceEnvironment | None, root: Path) -> tuple[Path, dict
     if env is not None and env.is_hermetic:
         return env.service_root, dict(env.env_vars)
     return root, os.environ.copy()
+
+def _exec_path_args(env: ServiceEnvironment | None, root: Path,
+                    repo_relative: list[str]) -> list[str]:
+    """Translate repo-relative paths into the execution cwd's coordinate
+    system (conversion happens only at the execution boundary; governance
+    representations stay repo-relative).
+
+    Hermetic service (cwd = service_root): a path under the service root
+    becomes service-relative; a path outside it fails closed -- silently
+    rewriting it would run a test with the wrong interpreter. Non-hermetic
+    and root cwd: paths are passed through unchanged (historical behavior).
+    """
+    if env is None or not env.is_hermetic or env.service_root == root:
+        return list(repo_relative)
+    prefix = str(env.service_root.relative_to(root)) + '/'
+    out: list[str] = []
+    for rel in repo_relative:
+        if rel.startswith(prefix):
+            out.append(rel[len(prefix):])
+        else:
+            raise CheckRunnerError(
+                'test path outside selected service: '
+                f'{rel} not under {env.service_root.relative_to(root)}/'
+            )
+    return out
 
 def run(root: Path | str, resolved: dict) -> list[dict]:
     """Execute the mandatory checks for a resolved scope."""
@@ -222,7 +251,7 @@ def run_scoped(
     ]
     commands: list[tuple[str, list[str]]] = [
         ('ruff', [py, '-m', 'ruff', 'check', *changed_py] if changed_py else []),
-        ('pytest', [py, '-m', 'pytest', *targeted_tests, '-q', '--tb=line'] if targeted_tests else []),
+        ('pytest', [py, '-m', 'pytest', *_exec_path_args(env, root, targeted_tests), '-q', '--tb=line'] if targeted_tests else []),
         ('mypy', [py, '-m', 'mypy', *scoped_mypy] if scoped_mypy else []),
     ]
     results: list[dict[str, Any]] = []

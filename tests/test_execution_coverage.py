@@ -250,7 +250,7 @@ def test_pytest_bin_is_direct_launcher_when_present(monorepo: Path) -> None:
     argv = _env_argv(
         env, "pytest", ["/sys/bin/python", "-m", "pytest", "tests/", "-q"])
     assert argv[0] == str(env.pytest_bin)
-    assert argv[1:] == ["-m", "pytest", "tests/", "-q"]
+    assert argv[1:] == ["tests/", "-q"]  # direct launcher: -m is a marker filter
     # non-pytest checks use python_bin
     argv2 = _env_argv(
         env, "ruff", ["/sys/bin/python", "-m", "ruff", "check", "."])
