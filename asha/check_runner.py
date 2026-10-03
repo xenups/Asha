@@ -143,7 +143,11 @@ def _exec_path_args(env: ServiceEnvironment | None, root: Path,
     """
     if env is None or not env.is_hermetic or env.service_root == root:
         return list(repo_relative)
-    prefix = str(env.service_root.relative_to(root)) + '/'
+    # Normalize to forward slashes: on Windows Path.relative_to() yields
+    # backslash paths while governance repo-relative paths are always
+    # forward-slash. Matching on as_posix() keeps the translation
+    # platform-independent (see test_exec_path_args on win32).
+    prefix = env.service_root.relative_to(root).as_posix() + '/'
     out: list[str] = []
     for rel in repo_relative:
         if rel.startswith(prefix):
@@ -151,7 +155,7 @@ def _exec_path_args(env: ServiceEnvironment | None, root: Path,
         else:
             raise CheckRunnerError(
                 'test path outside selected service: '
-                f'{rel} not under {env.service_root.relative_to(root)}/'
+                f'{rel} not under {env.service_root.relative_to(root).as_posix()}/'
             )
     return out
 
