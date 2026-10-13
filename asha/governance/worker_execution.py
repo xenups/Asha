@@ -203,16 +203,39 @@ def scoping_decision(root: Path,
 
 
 def _strip_check_caches(path: Path) -> None:
-    """Remove verification cache artifacts (pytest/ruff/mypy) that the
-    baseline check pass leaves in the worktree, at any depth. Without
-    this, untracked __pycache__/.pytest_cache/.ruff_cache dirs would
-    surface in collect_worker_evidence's observed scope as violations
-    for workers whose declared scope does not include them."""
+    """Remove verification cache artifacts (pytest/ruff/mypy, plus the
+    K.6 codegraph cache) that the baseline check pass leaves in the
+    worktree. Without this, untracked __pycache__/.pytest_cache/.ruff_cache
+    dirs would surface in collect_worker_evidence's observed scope as
+    violations for workers whose declared scope does not include them.
+    The codegraph cache (.k6graph-test) is removed from the worktree root
+    ONLY -- its exact test-pinned location; no recursive sweep, so a
+    same-named directory anywhere else is never touched."""
     import shutil
+    shutil.rmtree(path / ".k6graph-test", ignore_errors=True)
     for name in ("__pycache__", ".pytest_cache", ".ruff_cache",
                  ".mypy_cache"):
         for target in path.rglob(name):
             shutil.rmtree(target, ignore_errors=True)
+
+
+def _failed_check_details(checks: list[dict]) -> list[dict]:
+    """Compact retained diagnostics for checks that failed: name, exit
+    code, explicit note (e.g. a timeout) and a trimmed diagnostic tail.
+    Attached to the FAILED worker outcome so a rejected worker keeps the
+    evidence needed to explain WHY verification failed -- without it the
+    `evidence=None` branch discards every check output (rehearsal v2)."""
+    details: list[dict] = []
+    for entry in checks:
+        if entry.get("status") != "failed":
+            continue
+        details.append({
+            "name": entry.get("name"),
+            "exit_code": entry.get("exit_code"),
+            "note": entry.get("note"),
+            "output_tail": (entry.get("output_tail") or "")[-500:],
+        })
+    return details
 
 
 def baseline_checks(
@@ -584,6 +607,8 @@ def collect_worker_evidence(
                 "delta_failures": [
                     f.to_dict() for f in sorted(new_fails,
                                                 key=lambda i: i.location)],
+                # retained failure diagnostics (name/exit/note/tail)
+                "details": _failed_check_details(checks),
             }
             delta_ran = True
             pre_existing_only = verdict == "PRE_EXISTING_ONLY"

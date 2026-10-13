@@ -197,7 +197,8 @@ class DAGCoordinator:
         DAG states entry (isolated helper: keeps flow analysis of the
         scheduling loop free of extra assignments)."""
         for extra in ("verdict", "baseline_failures",
-                      "current_failures", "delta_failures"):
+                      "current_failures", "delta_failures",
+                      "details"):
             if outcome.get(extra) is not None:
                 target[extra] = outcome[extra]
 

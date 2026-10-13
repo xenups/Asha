@@ -39,6 +39,7 @@ if str(REPO_ROOT) not in sys.path:
 
 import asha
 from asha import evidence
+from asha.governance import worker_execution
 
 GITIGNORE = (".jspace/\n__pycache__/\n*.pyc\n.pytest_cache/\n"
              ".mypy_cache/\n.ruff_cache/\n")
@@ -749,3 +750,34 @@ def test_rename_within_declared_scope_still_completes(tmp_path: Path) -> None:
     assert set(payload["observed_scope"]) == {
         "tests/test_ok.py", "tests/test_moved_ok.py"}
     assert set(report["completed"]) == {"A"}
+
+
+def test_strip_check_caches_removes_root_k6graph_cache(
+        tmp_path: Path) -> None:
+    """K.6 contamination guard: the baseline pytest pass leaves a
+    .k6graph-test codegraph cache at the WORKTREE ROOT (test_k61 pins it
+    to repo root); _strip_check_caches must remove exactly that path so
+    _commit_all's `git add -A` cannot stage it into the worker commit
+    (scheduler scope law would then reject the worker). Unrelated
+    user data -- including a nested directory that happens to share the
+    name -- must survive byte-for-byte."""
+    root = tmp_path / "worktree"
+    root_cache = root / ".k6graph-test"
+    root_cache.mkdir(parents=True)
+    for name in ("meta.json", "files.json", "modules.json",
+                 "graph.json"):
+        (root_cache / name).write_text(name, encoding="utf-8")
+    nested = root / "src" / ".k6graph-test"
+    nested.mkdir(parents=True)
+    (nested / "keep.txt").write_text("nested", encoding="utf-8")
+    user = root / "user-data"
+    user.mkdir()
+    payload = user / "notes.bin"
+    payload.write_bytes(b"\x00\x01k6")
+
+    worker_execution._strip_check_caches(root)
+
+    assert not root_cache.exists()
+    assert nested.exists()
+    assert (nested / "keep.txt").read_text(encoding="utf-8") == "nested"
+    assert payload.read_bytes() == b"\x00\x01k6"
