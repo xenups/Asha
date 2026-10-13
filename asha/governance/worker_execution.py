@@ -262,7 +262,9 @@ def baseline_checks(
     cls = classify_independence(str(worker.get("id")), resolved,
                                 set(), {worker["id"]: worker}, [worker])
     decision = scoping_decision(path, resolved, cls)
-    checks = _run_checks(decision, path, resolved)
+    checks = _run_checks(
+        decision, path, resolved,
+        timeout_s=check_runner.BASELINE_TIMEOUT_S)
     return {
         "checks": checks,
         "resolved": resolved,
@@ -428,7 +430,8 @@ def baseline_checks_recorded(
     return journal
 
 
-def _run_checks(decision, path: Path, resolved: dict) -> list[dict]:
+def _run_checks(decision, path: Path, resolved: dict,
+                timeout_s: int = check_runner.CHECK_TIMEOUT_S) -> list[dict]:
     """Run the check matrix for a resolved scope (shared by baseline and
     current passes; identical machinery, identical environment)."""
     if decision.eligible:
@@ -438,7 +441,7 @@ def _run_checks(decision, path: Path, resolved: dict) -> list[dict]:
             targeted_tests=list(decision.targeted_tests),
             mypy_targets=list(decision.mypy_targets),
         )
-    return check_runner.run(path, resolved)
+    return check_runner.run(path, resolved, timeout_s=timeout_s)
 
 
 def run_worker_in_worktree(

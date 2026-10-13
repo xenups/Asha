@@ -31,6 +31,14 @@ TAIL_CHARS = 2000
 # 900s = measured runtime + ~20% headroom. Timeout itself stays
 # FAILED + verdict UNKNOWN -- never a pass, never PRE_EXISTING_ONLY.
 CHECK_TIMEOUT_S = 900
+# Baseline passes run concurrently (one per worker thread, ThreadPoolExecutor)
+# and each is a full-suite run: measured 874-895s solo, >900s under pair
+# contention (rehearsal-v4 baseline artifacts: exit -1, zero identities).
+# Baseline gets 2x solo margin; worker verification keeps CHECK_TIMEOUT_S.
+# ponytail: if a concurrent pair still exceeds this, compute ONE shared
+# baseline (requires proof of validity across worker worktrees) or serialize
+# the baseline passes.
+BASELINE_TIMEOUT_S = 1800
 
 # How each check's `scope` field is reported in evidence.json.
 CHECK_SCOPE = {
@@ -188,7 +196,8 @@ def _timeout_tail(exc: subprocess.TimeoutExpired, timeout: int) -> str:
     return _redact_env(joined[-TAIL_CHARS:])
 
 
-def run(root: Path | str, resolved: dict) -> list[dict]:
+def run(root: Path | str, resolved: dict,
+        timeout_s: int = CHECK_TIMEOUT_S) -> list[dict]:
     """Execute the mandatory checks for a resolved scope."""
     root = Path(root).resolve()
     names = resolved['checks']
@@ -213,7 +222,7 @@ def run(root: Path | str, resolved: dict) -> list[dict]:
         started = time.monotonic()
         try:
             proc = subprocess.run(argv, cwd=cwd, capture_output=True,
-                                  text=True, timeout=CHECK_TIMEOUT_S,
+                                  text=True, timeout=timeout_s,
                                   env=proc_env)
         except (OSError, subprocess.TimeoutExpired) as exc:
             entry['status'] = 'failed'
@@ -222,9 +231,9 @@ def run(root: Path | str, resolved: dict) -> list[dict]:
                 # Explicit timeout outcome with retained diagnostics
                 # (partial output + command + budget), never an
                 # unexplained empty tail.
-                entry['note'] = f'timed out after {CHECK_TIMEOUT_S}s'
+                entry['note'] = f'timed out after {timeout_s}s'
                 entry['output_tail'] = _timeout_tail(
-                    exc, CHECK_TIMEOUT_S)
+                    exc, timeout_s)
             else:
                 entry['output_tail'] = str(exc)
             entry['duration_ms'] = int((time.monotonic() - started) * 1000)
