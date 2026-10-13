@@ -23,6 +23,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from contextlib import suppress as _suppress
 from pathlib import Path
@@ -273,6 +274,160 @@ def baseline_checks(
     }
 
 
+def persist_baseline_evidence(
+    journal: dict | None,
+    *,
+    error: str | None,
+    worker: dict[str, Any],
+    path: Path,
+    base: str,
+    base_tree: str,
+    repo: Path,
+    task_id: str,
+) -> None:
+    """Best-effort baseline diagnostic artifact. NEVER raises.
+
+    Persists the in-memory baseline journal BEFORE worker evidence
+    collection can discard it (the rehearsal-v3 gap): raw check records
+    (status, exit code, timeout note, bounded/redacted output tail), the
+    parse result, and the execution outcome, independently of the worker
+    verdict.
+
+    State model — the three layers stay separate and there is NO
+    ``clean``/verdict field in the payload:
+      * ``execution``: "ok" | "exception" (the baseline pass itself;
+        null ``checks`` only when it failed before any check ran)
+      * ``checks``: raw records preserved verbatim (malformed entries
+        are kept marked, never dropped)
+      * ``parse``: "completed" | "error" | "not_run" + identities
+    An empty identity list is NEVER proof of a clean baseline; the only
+    verified-clean reading is: execution ok AND checks non-empty AND all
+    passed AND parse completed AND zero identities. A MISSING artifact
+    means unknown — never success, never "baseline skipped".
+    Write failure: reported on stderr with the ``Asha:`` prefix (the
+    CLI's established convention) and swallowed — it can never alter the
+    worker result, verdict, or authorization, and a success-shaped file
+    is never fabricated on failure.
+    Path: <state>/<repo-id>/orchestrator/<task>/<worker>.baseline.json
+    (atomic replace, last-writer-wins — same convention as
+    worker-status.json).
+    """
+    try:
+        checks: list | None = None
+        if journal is not None:
+            raw = journal.get("checks")
+            checks = []
+            if isinstance(raw, list):
+                for entry in raw:
+                    try:
+                        record = dict(entry)
+                        tail = record.get("output_tail")
+                        if isinstance(tail, str) and tail:
+                            # idempotent defense: run() already redacts and
+                            # bounds this tail — byte-identical when pre-processed
+                            record["output_tail"] = check_runner._redact_env(
+                                tail[-check_runner.TAIL_CHARS:]
+                            )
+                        checks.append(record)
+                    except Exception:
+                        checks.append(
+                            {"malformed": repr(entry)[:500]}
+                        )
+        parse: dict[str, Any] = {
+            "status": "not_run",
+            "identity_count": 0,
+            "identities": [],
+            "error": None,
+        }
+        if journal is not None:
+            try:
+                from asha.governance import delta
+
+                identities = delta.extract_failures(checks or [])
+                parse = {
+                    "status": "completed",
+                    "identity_count": len(identities),
+                    "identities": [
+                        f.to_dict()
+                        for f in sorted(identities, key=lambda i: i.location)
+                    ],
+                    "error": None,
+                }
+            except Exception as exc:
+                parse = {
+                    "status": "error",
+                    "identity_count": 0,
+                    "identities": [],
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+        payload = {
+            "schema": "baseline-evidence/v1",
+            "observed_at": evidence.now_iso(),
+            "task_id": task_id,
+            "worker_id": worker.get("id"),
+            "worktree": str(Path(path).resolve()),
+            "base_commit": base,
+            "base_tree": base_tree,
+            "execution": "ok" if journal is not None else "exception",
+            "error": error,
+            "checks": checks,
+            "parse": parse,
+        }
+        run_dir = (
+            common_paths.get_orchestrator_dir(Path(repo)) / _safe_id(task_id)
+        )
+        _atomic_json(
+            run_dir
+            / (_safe_id(str(worker.get("id") or "worker")) + ".baseline.json"),
+            payload,
+        )
+    except Exception as exc:
+        print(
+            f"Asha: baseline evidence write failed: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+
+
+def baseline_checks_recorded(
+    worker: dict[str, Any],
+    path: Path,
+    base: str,
+    base_tree: str,
+    repo: Path,
+    task_id: str,
+) -> dict | None:
+    """``baseline_checks()`` + best-effort diagnostic artifact, preserving
+    the exact exception contract of BOTH original call sites.
+
+    * A baseline exception is swallowed here (``except Exception`` →
+      None) exactly as ``dag._run_one`` and ``run_worker_in_worktree``
+      did, but recorded in the artifact as ``execution:"exception"``.
+    * ``persist_baseline_evidence`` never raises, so persistence can
+      never change the worker result, verdict, or authorization.
+    * A missing artifact means unknown — never clean, never skipped.
+    """
+    journal: dict | None = None
+    error: str | None = None
+    try:
+        journal = baseline_checks(
+            worker, path, base, base_tree, repo, task_id
+        )
+    except Exception as exc:
+        journal = None
+        error = f"{type(exc).__name__}: {exc}"
+    persist_baseline_evidence(
+        journal,
+        error=error,
+        worker=worker,
+        path=path,
+        base=base,
+        base_tree=base_tree,
+        repo=repo,
+        task_id=task_id,
+    )
+    return journal
+
+
 def _run_checks(decision, path: Path, resolved: dict) -> list[dict]:
     """Run the check matrix for a resolved scope (shared by baseline and
     current passes; identical machinery, identical environment)."""
@@ -349,12 +504,27 @@ def run_worker_in_worktree(
             created_path = path
             baseline_journal: dict | None = None
             try:
-                baseline_journal = baseline_checks(
+                baseline_journal = baseline_checks_recorded(
                     worker, path, base_commit, base_tree, repo, task_id)
-                _strip_check_caches(path)
-            except Exception:
+                if baseline_journal is not None:
+                    _strip_check_caches(path)
+            except Exception as exc:
                 # baseline must never mask the worker failure; a failed
                 # baseline yields UNKNOWN (fail closed) downstream
+                if baseline_journal is None:
+                    # helper failed before/while recording: best-effort
+                    # exception artifact (persist_baseline_evidence
+                    # never raises, so results/verdict stay untouched)
+                    persist_baseline_evidence(
+                        None,
+                        error=f"{type(exc).__name__}: {exc}",
+                        worker=worker,
+                        path=path,
+                        base=base_commit,
+                        base_tree=base_tree,
+                        repo=repo,
+                        task_id=task_id,
+                    )
                 baseline_journal = None
             try:
                 result = default_execute(worker, path)
