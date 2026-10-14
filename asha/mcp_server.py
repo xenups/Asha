@@ -963,6 +963,8 @@ def _dispatch_context(root: Path) -> tuple[dict[str, Any], ...]:
         return ()
     # records live one level deeper: cache/orchestrator/<task>/<wid>.json
     for path in sorted(cache.rglob("*.json")):
+        if path.name.endswith(".baseline.json"):
+            continue  # Ignore Phase 1 baseline artifacts
         peer_id = f"record:{path.stem}"
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))

@@ -450,6 +450,22 @@ def test_dispatch_classifies_against_real_recorded_envelope(
     assert payload['runtime_mode'] == 'full_governance'
 
 
+def test_dispatch_context_ignores_baseline_artifacts(tmp_path: Path) -> None:
+    """Cluster E regression (Phase 1 interplay): worker execution seals
+    <wid>.baseline.json beside <wid>.json in the orchestrator dir.
+    Baseline artifacts are NOT execution records: without this filter
+    they enter as None-surface peers and poison every REAL->REAL
+    classification into UNKNOWN (missing_signal_other_surface)."""
+    repo = _make_repo(tmp_path)
+    _seed_record(repo, 'rr1', ['a.py'], ['b.py'])
+    baseline = _cache_dir(repo, 'seed-task') / 'rr1.baseline.json'
+    baseline.write_text(json.dumps({'schema': 'baseline-evidence/v1'}),
+                        encoding='utf-8')
+    peers = server._dispatch_context(repo)
+    assert [peer['id'] for peer in peers] == ['rr1']
+    assert peers[0]['writes'] == ['b.py']
+
+
 # ---------------------------------------------------------------------
 # 4. Telemetry (JSONL, privacy, fail-safe)
 # ---------------------------------------------------------------------
