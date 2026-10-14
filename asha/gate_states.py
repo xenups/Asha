@@ -246,7 +246,8 @@ class GateEvidence:
                     'phase2 policy requires semantic review evidence '
                     '(reviewer artifact missing) -- fail closed')
             semantic_review.validate_artifact(
-                self.semantic_review, snapshot_id=self.snapshot_id)
+                self.semantic_review, snapshot_id=self.snapshot_id,
+                policy_version=self.policy_version)
             semantic_review.validate_findings(self.findings)
 
     def by_name(self) -> dict[str, CheckResult]:
@@ -323,7 +324,8 @@ def validate_evidence(evidence: object) -> GateEvidence:
         snapshot_id = evidence.get('snapshot_id')
         semantic_review.validate_artifact(
             evidence.get('semantic_review'),
-            snapshot_id=snapshot_id if isinstance(snapshot_id, str) else '')
+            snapshot_id=snapshot_id if isinstance(snapshot_id, str) else '',
+            policy_version=str(evidence['policy_version']))
         semantic_review.validate_findings(findings)
     return GateEvidence(
         snapshot_id=str(evidence['snapshot_id']),

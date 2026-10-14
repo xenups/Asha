@@ -148,14 +148,17 @@ def validate_findings(entries: object) -> list[dict]:
             for index, entry in enumerate(entries)]
 
 
-def validate_artifact(artifact: object, *, snapshot_id: str) -> dict:
+def validate_artifact(artifact: object, *, snapshot_id: str,
+                      policy_version: str) -> dict:
     """Validate the reviewer artifact's identity fields and findings.
 
     The artifact must be a dict carrying schema/identity plus a findings
     list; its snapshot_id MUST equal the audited snapshot the decision
-    binds to. Anything else raises GateContractError (INVALID_EVIDENCE
-    at the gate). The severity partition itself is decided by
-    gate_states.evaluate() -- never here.
+    binds to, and its stamped policy_version MUST equal the policy the
+    gate is enforcing (an artifact produced under a foreign policy is
+    not evidence for this one). Anything else raises GateContractError
+    (INVALID_EVIDENCE at the gate). The severity partition itself is
+    decided by gate_states.evaluate() -- never here.
     """
     if not isinstance(artifact, dict):
         raise GateContractError(
@@ -171,6 +174,15 @@ def validate_artifact(artifact: object, *, snapshot_id: str) -> dict:
         raise GateContractError(
             f'unknown semantic review schema {artifact["schema"]!r}; '
             f'expected {REVIEW_SCHEMA!r}')
+    artifact_policy = artifact['policy_version']
+    if not isinstance(artifact_policy, str) or not artifact_policy.strip():
+        raise GateContractError(
+            'semantic review evidence requires a non-empty '
+            'policy_version (fail closed)')
+    if artifact_policy != policy_version:
+        raise GateContractError(
+            'semantic review evidence was produced under policy '
+            f'{artifact_policy!r}, expected {policy_version!r}')
     artifact_snapshot = artifact['snapshot_id']
     if not isinstance(artifact_snapshot, str) or not artifact_snapshot.strip():
         raise GateContractError(

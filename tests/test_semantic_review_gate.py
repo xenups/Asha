@@ -277,6 +277,33 @@ def test_unknown_artifact_schema_is_invalid() -> None:
                                                  schema="semantic-review/v0")))
 
 
+def test_artifact_policy_version_mismatch_is_invalid(
+        tmp_path: Path) -> None:
+    """C6: the artifact's stamped policy_version must equal the policy
+    the gate enforces; a foreign-policy artifact is INVALID_EVIDENCE,
+    never a silently accepted review (audit observation on
+    semantic_review.validate_artifact)."""
+    # contract boundary: 'phase1' stamp under phase2 evidence
+    with pytest.raises(gate_states.GateContractError):
+        gate_states.validate_evidence(
+            _evidence_payload(artifact=_artifact("a" * 64,
+                                                 policy_version="phase1")))
+    # direct contract call carries the expected policy explicitly
+    with pytest.raises(gate_states.GateContractError):
+        semantic_review.validate_artifact(
+            _artifact("a" * 64, policy_version="phase1"),
+            snapshot_id="a" * 64, policy_version="phase2")
+    # end-to-end: a reviewer that stamps a foreign policy version
+    repo = _make_repo(tmp_path)
+
+    def _reviewer(root: Path, snapshot_id: str, timeout_s: int) -> dict:
+        return _artifact(snapshot_id, policy_version="phase1")
+    with pytest.raises(evidence.EvidenceError) as exc:
+        ship_gate.gate_ship(repo, reviewer=_reviewer)
+    assert "INVALID_EVIDENCE" in str(exc.value)
+    assert _sealed(repo)["authorized_to_ship"] is False
+
+
 def test_malformed_finding_in_payload_is_invalid() -> None:
     payload = _evidence_payload((_finding(problem=""),))
     with pytest.raises(gate_states.GateContractError):
