@@ -37,7 +37,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from asha import audit_snapshot, check_runner, evidence, gate_states, scope_resolver
-from asha.governance import semantic_review
+from asha.governance import live_reviewer, semantic_review
 
 # Policy/rule-set version the sealed decision is bound to. Bumped whenever
 # the authorization rules below change, so an old artifact can never be
@@ -171,6 +171,12 @@ def gate_ship(root: Path, *, no_execute: bool = False,
     # The audited source snapshot: taken BEFORE execution so a target that
     # changes while checks run is detectable at seal time.
     audited_id = audit_snapshot.snapshot_id_of(root)
+    if reviewer is None and not no_execute:
+        # Phase 3: auto-resolve the live executor ONLY when its env config
+        # is active (ASHA_SEMANTIC_REVIEW=live + key). Disabled or
+        # unconfigured stays None -> phase2's 'missing artifact' fail-
+        # closed path (INVALID_EVIDENCE). No mock fallback exists here.
+        reviewer = live_reviewer.resolve_live_reviewer()
     if no_execute:
         checks: list[dict] = []
         reviewer_artifact: dict | None = None
