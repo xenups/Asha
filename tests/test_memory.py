@@ -26,6 +26,13 @@ if str(REPO_ROOT) not in sys.path:
 from asha import memory, project_map, scope_resolver
 from asha.governance import ship_gate as gate_ship
 
+
+def _clean_reviewer(root: Path, snapshot_id: str, timeout_s: int) -> dict:
+    """Stub semantic reviewer: clean, identity-bound review (phase2)."""
+    return {"schema": "semantic-review/v1", "snapshot_id": snapshot_id,
+            "policy_version": gate_ship.POLICY_VERSION, "status": "ok",
+            "findings": []}
+
 GITIGNORE = (".jspace/\n__pycache__/\n*.pyc\n.pytest_cache/\n"
              ".mypy_cache/\n.ruff_cache/\n")
 
@@ -332,7 +339,7 @@ def test_memory_failure_non_fatal(tmp_path: Path) -> None:
     # the gate runs to its own verdict independent of memory state — on this
     # clean baseline repo it authorizes; the failure reason must never
     # mention memory (was: control.py check --stage work refusal)
-    payload = gate_ship.gate_ship(repo)
+    payload = gate_ship.gate_ship(repo, reviewer=_clean_reviewer)
     assert "memory" not in str(payload).lower()
 
     # (d) real resolve_backend never raises (Mem0 or Null):

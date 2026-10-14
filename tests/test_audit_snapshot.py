@@ -106,6 +106,7 @@ def _contract(snapshot_id: str = "a" * 64,
                   ("mypy", "passed", ""),
               ),
               findings: tuple[dict, ...] = (),
+              policy_version: str | None = None,
               ) -> gate_states.GateEvidence:
     """Build a valid evidence contract; callers vary one field at a time.
 
@@ -115,11 +116,25 @@ def _contract(snapshot_id: str = "a" * 64,
     ``failed`` (the scoped-timeout shape) -- matching what
     ``check_runner`` produces. Rows that need non-default exit codes (the
     F4 adversarial cases) call ``gate_states.CheckResult`` directly.
+
+    Phase 2: the default policy (ship_gate.POLICY_VERSION) is 'phase2',
+    so a valid semantic-review artifact bound to this snapshot_id is
+    synthesized automatically; pass ``policy_version="phase1"`` to build
+    legacy-shaped evidence (findings allowed without an artifact).
     """
+    policy = (policy_version if policy_version is not None
+              else ship_gate.POLICY_VERSION)
+    artifact = {
+        "schema": "semantic-review/v1",
+        "snapshot_id": snapshot_id,
+        "policy_version": policy,
+        "status": "ok",
+        "findings": list(findings),
+    }
     return gate_states.GateEvidence(
         snapshot_id=snapshot_id,
         evidence_schema=evidence.SCHEMA,
-        policy_version=ship_gate.POLICY_VERSION,
+        policy_version=policy,
         required_checks=required,
         checks=tuple(
             gate_states.CheckResult(
@@ -127,7 +142,32 @@ def _contract(snapshot_id: str = "a" * 64,
                 exit_code=0 if status in ("passed", "skipped") else None)
             for name, status, note in checks),
         findings=findings,
+        semantic_review=artifact,
     )
+
+
+def _finding(severity: str = "MEDIUM") -> dict:
+    """A schema-valid reviewer finding; callers vary only the severity."""
+    return {
+        "severity": severity,
+        "file_path": "pkg/leaf.py",
+        "line_range": "1-2",
+        "problem": "test problem",
+        "why_it_matters": "test consequence",
+        "failure_scenario": "test scenario",
+        "recommended_fix": "test fix",
+    }
+
+
+def _clean_reviewer(root: Path, snapshot_id: str, timeout_s: int) -> dict:
+    """Stub semantic reviewer: a clean, identity-bound review."""
+    return {
+        "schema": "semantic-review/v1",
+        "snapshot_id": snapshot_id,
+        "policy_version": ship_gate.POLICY_VERSION,
+        "status": "ok",
+        "findings": [],
+    }
 
 
 # ------------------------------------------------ 1-6 snapshot integrity
@@ -367,7 +407,7 @@ def test_9b_gate_denies_on_execution_failure_end_to_end(
 
     monkeypatch.setattr(ship_gate.check_runner, "run", fake_run)
     with pytest.raises(evidence.EvidenceError) as exc:
-        ship_gate.gate_ship(repo)
+        ship_gate.gate_ship(repo, reviewer=_clean_reviewer)
     assert "EXECUTION_FAILED" in str(exc.value)
     sealed = _sealed(repo)
     assert sealed["authorized_to_ship"] is False
@@ -454,7 +494,7 @@ def test_11_post_audit_modification_is_stale_review(tmp_path: Path,
 
     monkeypatch.setattr(ship_gate.check_runner, "run", mutating_run)
     with pytest.raises(evidence.EvidenceError) as exc:
-        ship_gate.gate_ship(repo)
+        ship_gate.gate_ship(repo, reviewer=_clean_reviewer)
     assert "STALE_REVIEW" in str(exc.value)
     sealed = _sealed(repo)
     assert sealed["authorized_to_ship"] is False
@@ -497,7 +537,7 @@ def test_12_checks_that_mutate_the_target_are_detected(tmp_path: Path,
 
     monkeypatch.setattr(ship_gate.check_runner, "run", mutating_run)
     with pytest.raises(evidence.EvidenceError):
-        ship_gate.gate_ship(repo)
+        ship_gate.gate_ship(repo, reviewer=_clean_reviewer)
     sealed = _sealed(repo)
     assert sealed["gate_state"] == "STALE_REVIEW"
     assert sealed["snapshot_id"] == audited, (
@@ -509,17 +549,37 @@ def test_12_checks_that_mutate_the_target_are_detected(tmp_path: Path,
 # ------------------------------------------------ 13 single auth path
 
 def test_13_only_completed_clean_authorizes() -> None:
-    """Case 13: the authorization set is exactly one state, and findings
-    never authorize on their own."""
+    """Case 13: the authorization set that is unconditional across
+    policies is exactly one state, and findings follow the severity
+    policy: BLOCKER/HIGH deny; MEDIUM/LOW-only findings authorize under
+    phase2 with the state recorded; phase1 still denies all findings."""
     assert gate_states.STATE_ALLOWS_SHIP == frozenset(
         {gate_states.GateState.COMPLETED_CLEAN})
-    with_findings = gate_states.evaluate(_contract(
-        findings=({"rule": "R1", "path": "pkg/leaf.py"},)), authorized_snapshot_id="a" * 64)
-    assert with_findings.state is gate_states.GateState.COMPLETED_WITH_FINDINGS
-    assert with_findings.authorized_to_ship is False
     for state in gate_states.GateState:
         if state is not gate_states.GateState.COMPLETED_CLEAN:
             assert state not in gate_states.STATE_ALLOWS_SHIP
+
+    # phase2, blocking severity -> deny
+    blocked = gate_states.evaluate(_contract(findings=(_finding("BLOCKER"),)),
+                                   authorized_snapshot_id="a" * 64)
+    assert blocked.state is gate_states.GateState.COMPLETED_WITH_FINDINGS
+    assert blocked.authorized_to_ship is False
+    assert blocked.blocking_findings
+
+    # phase2, non-blocking severity -> authorize WITH the state recorded
+    # and the rule documented in gate_reasons (approved Phase 2 policy).
+    allowed = gate_states.evaluate(_contract(findings=(_finding("MEDIUM"),)),
+                                   authorized_snapshot_id="a" * 64)
+    assert allowed.state is gate_states.GateState.COMPLETED_WITH_FINDINGS
+    assert allowed.authorized_to_ship is True
+    assert "SEVERITY_BLOCKS_SHIP" in allowed.reasons[0]
+
+    # phase1 (legacy policy): findings never authorize on their own
+    legacy = gate_states.evaluate(
+        _contract(findings=(_finding("LOW"),), policy_version="phase1"),
+        authorized_snapshot_id="a" * 64)
+    assert legacy.state is gate_states.GateState.COMPLETED_WITH_FINDINGS
+    assert legacy.authorized_to_ship is False
 
 
 def test_13b_no_second_authorization_path_in_source() -> None:
@@ -639,7 +699,14 @@ def test_13g_forged_single_skip_denies() -> None:
                 "checks": [{"name": "ruff", "status": "passed", "exit_code": 0},
                            {"name": "pytest", "status": "passed", "exit_code": 0},
                            {"name": "mypy", "status": "skipped",
-                            "exit_code": skip_code}]}
+                            "exit_code": skip_code}],
+                # phase2: a clean, identity-bound review artifact so the
+                # FORGED SKIP itself (not the missing artifact) decides
+                "findings": [],
+                "semantic_review": {"schema": "semantic-review/v1",
+                                    "snapshot_id": "a" * 64,
+                                    "policy_version": ship_gate.POLICY_VERSION,
+                                    "status": "ok", "findings": []}}
     for bad_code in (None, 5, 1, -1, "forged-string", True, False):
         with _pt.raises(gate_states.GateContractError):
             gate_states.validate_evidence(build(bad_code))
@@ -712,7 +779,7 @@ def test_13c_gate_state_is_derived_not_accepted(tmp_path: Path,
         ]
 
     monkeypatch.setattr(ship_gate.check_runner, "run", padded_run)
-    payload = ship_gate.gate_ship(repo)
+    payload = ship_gate.gate_ship(repo, reviewer=_clean_reviewer)
     assert payload["authorized_to_ship"] is True
     assert payload["gate_state"] == "COMPLETED_CLEAN"
     assert payload["gate_reasons"] == []
@@ -729,7 +796,7 @@ def test_14_complete_valid_clean_audit_authorizes(tmp_path: Path) -> None:
     """Case 14: an unchanged, fully-checked snapshot still ships. The
     hardening must not make a legitimate run unshippable."""
     repo = _make_repo(tmp_path)
-    payload = ship_gate.gate_ship(repo)
+    payload = ship_gate.gate_ship(repo, reviewer=_clean_reviewer)
     assert payload["authorized_to_ship"] is True
     assert payload["gate_state"] == "COMPLETED_CLEAN"
     assert payload["snapshot_id"] == audit_snapshot.snapshot_id_of(repo)
@@ -760,7 +827,7 @@ def test_14b_tampered_artifact_still_denies(tmp_path: Path) -> None:
     _write(repo, "bad.py", "import os\n")  # ruff F401 -> failing check
     _commit_all(repo, "introduce lint failure")
     with pytest.raises(evidence.EvidenceError):
-        ship_gate.gate_ship(repo)
+        ship_gate.gate_ship(repo, reviewer=_clean_reviewer)
     artifact = _evidence_file(repo)
     payload = json.loads(artifact.read_text(encoding="utf-8"))
     assert payload["authorized_to_ship"] is False
@@ -771,7 +838,7 @@ def test_14b_tampered_artifact_still_denies(tmp_path: Path) -> None:
     artifact.write_text(json.dumps(payload, indent=2, sort_keys=True),
                         encoding="utf-8")
     with pytest.raises(evidence.EvidenceError) as exc:
-        ship_gate.gate_ship(repo)
+        ship_gate.gate_ship(repo, reviewer=_clean_reviewer)
     assert "evidence_sha256" in str(exc.value) or "mismatch" in str(exc.value)
 
 
@@ -791,7 +858,7 @@ def test_15_syntax_error_in_audited_snapshot_denies(tmp_path: Path) -> None:
     _write(repo, "pkg/broken.py", "def broken(:\n    pass\n")
     _commit_all(repo, "introduce syntax error")
     with pytest.raises(evidence.EvidenceError) as exc:
-        ship_gate.gate_ship(repo)
+        ship_gate.gate_ship(repo, reviewer=_clean_reviewer)
     assert "EXECUTION_FAILED" in str(exc.value), str(exc.value)
     sealed = _sealed(repo)
     assert sealed["authorized_to_ship"] is False
