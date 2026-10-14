@@ -21,10 +21,14 @@ Vocabulary (no defaults, no implicit success):
     COMPLETED_CLEAN          every required check completed successfully
                              AND the evidence passed validation.
     COMPLETED_WITH_FINDINGS  every required check completed, but at least
-                             one reported findings. Phase 1 defines NO
-                             permissive severity policy, so this state is
-                             NOT authorization on its own: the gate denies
-                             unless a policy explicitly allows it.
+                             one reported findings. Policy decides:
+                             'phase1' has NO severity policy, so this
+                             state is never authorization. 'phase2'
+                             partitions findings by severity
+                             (SEVERITY_BLOCKS_SHIP = {BLOCKER, HIGH}):
+                             any blocking finding denies; MEDIUM/LOW-only
+                             findings authorize with the state recorded
+                             and the rule documented in gate_reasons.
     INVALID_EVIDENCE         evidence is malformed, incomplete, bound to a
                              different snapshot/policy, or internally
                              inconsistent.
@@ -53,10 +57,14 @@ class GateState(Enum):
     STALE_REVIEW = 'STALE_REVIEW'
 
 
-# The ONLY state that grants authorization. COMPLETED_WITH_FINDINGS is
-# deliberately absent: Phase 1 has no severity policy, so findings never
-# authorize by themselves (spec: "do not invent a permissive severity
-# policy").
+# The ONLY state that grants authorization UNCONDITIONALLY (under every
+# policy). COMPLETED_WITH_FINDINGS is deliberately absent here: policy
+# 'phase1' has no severity policy, so findings never authorize by
+# themselves (spec: "do not invent a permissive severity policy").
+# Policy 'phase2' grants authorization from COMPLETED_WITH_FINDINGS too,
+# but ONLY when no finding severity is in semantic_review.
+# SEVERITY_BLOCKS_SHIP -- GateDecision.authorized_to_ship below encodes
+# that policy condition; this set stays the unconditional core.
 STATE_ALLOWS_SHIP: frozenset[GateState] = frozenset({GateState.COMPLETED_CLEAN})
 
 # Per-check execution status vocabulary (mirrors check_runner exactly).
@@ -206,6 +214,10 @@ class GateEvidence:
     required_checks: tuple[str, ...]
     checks: tuple[CheckResult, ...]
     findings: tuple[dict, ...] = field(default_factory=tuple)
+    # Phase 2: the semantic-reviewer artifact whose findings are listed
+    # above. Required (non-None, identity-valid, bound to snapshot_id)
+    # under policy 'phase2'; absent under legacy 'phase1' payloads.
+    semantic_review: dict | None = None
 
     def __post_init__(self) -> None:
         if not self.snapshot_id:
@@ -223,6 +235,19 @@ class GateEvidence:
         names = [check.name for check in self.checks]
         if len(set(names)) != len(names):
             raise GateContractError('checks contains duplicate entries')
+        if self.policy_version == 'phase2':
+            # Phase 2 contract: semantic review evidence is mandatory and
+            # bound to THIS snapshot; findings must satisfy the strict
+            # Finding schema. Lazy import: semantic_review imports
+            # GateContractError from this module at its top level.
+            from asha.governance import semantic_review
+            if self.semantic_review is None:
+                raise GateContractError(
+                    'phase2 policy requires semantic review evidence '
+                    '(reviewer artifact missing) -- fail closed')
+            semantic_review.validate_artifact(
+                self.semantic_review, snapshot_id=self.snapshot_id)
+            semantic_review.validate_findings(self.findings)
 
     def by_name(self) -> dict[str, CheckResult]:
         return {check.name: check for check in self.checks}
@@ -288,6 +313,18 @@ def validate_evidence(evidence: object) -> GateEvidence:
                 f'finding #{index} must be an object, got '
                 f'{type(item).__name__}; malformed findings are rejected '
                 '(fail closed)')
+    if str(evidence.get('policy_version', '')) == 'phase2':
+        # Phase 2: the reviewer artifact and its findings are validated
+        # HERE as well as in GateEvidence.__post_init__ (defense in
+        # depth -- this is the dict-entry boundary ship_gate feeds).
+        # Wrong/missing artifact identity or a malformed finding raises
+        # GateContractError -> INVALID_EVIDENCE at the gate.
+        from asha.governance import semantic_review
+        snapshot_id = evidence.get('snapshot_id')
+        semantic_review.validate_artifact(
+            evidence.get('semantic_review'),
+            snapshot_id=snapshot_id if isinstance(snapshot_id, str) else '')
+        semantic_review.validate_findings(findings)
     return GateEvidence(
         snapshot_id=str(evidence['snapshot_id']),
         evidence_schema=evidence['evidence_schema'],
@@ -295,26 +332,47 @@ def validate_evidence(evidence: object) -> GateEvidence:
         required_checks=tuple(str(name) for name in required),
         checks=tuple(checks),
         findings=tuple(dict(item) for item in findings),
+        semantic_review=evidence.get('semantic_review'),
     )
 
 
 @dataclass(frozen=True)
 class GateDecision:
-    """The typed outcome plus the facts that produced it."""
+    """The typed outcome plus the facts that produced it.
+
+    ``policy_version`` and ``blocking_findings`` are recorded facts the
+    authorization property derives from -- never authorization itself.
+    ``policy_version`` defaults to 'phase1' (the restrictive policy:
+    findings never authorize).
+    """
 
     state: GateState
     reasons: tuple[str, ...] = ()
+    blocking_findings: tuple[str, ...] = ()
+    policy_version: str = 'phase1'
 
     @property
     def authorized_to_ship(self) -> bool:
-        """Derived, never accepted as input."""
-        return self.state in STATE_ALLOWS_SHIP
+        """Derived, never accepted as input.
+
+        phase1: authorization iff state in STATE_ALLOWS_SHIP.
+        phase2: COMPLETED_CLEAN, or COMPLETED_WITH_FINDINGS with ZERO
+        blocking (BLOCKER/HIGH) findings -- findings are recorded, the
+        severity rule is documented in ``reasons``.
+        """
+        if self.state in STATE_ALLOWS_SHIP:
+            return True
+        return (self.state is GateState.COMPLETED_WITH_FINDINGS
+                and not self.blocking_findings
+                and self.policy_version == 'phase2')
 
     def as_dict(self) -> dict:
         return {
             'gate_state': self.state.value,
             'authorized_to_ship': self.authorized_to_ship,
             'reasons': list(self.reasons),
+            'blocking_findings': list(self.blocking_findings),
+            'policy_version': self.policy_version,
         }
 
 
@@ -399,7 +457,36 @@ def evaluate(evidence: GateEvidence,
             'checks failed: ' + ', '.join(failed),))
 
     if evidence.findings:
-        return GateDecision(GateState.COMPLETED_WITH_FINDINGS, (
-            (f'{len(evidence.findings)} finding(s) reported; Phase 1 has no '
-            'policy that authorizes shipping with findings'),))
-    return GateDecision(GateState.COMPLETED_CLEAN, ())
+        # Severity partition. Lazy import keeps gate_states import-safe:
+        # semantic_review imports GateContractError from this module at
+        # ITS top level (one-directional lazy edge).
+        from asha.governance.semantic_review import (
+            BLOCKING_SEVERITY_STRINGS,
+        )
+        blocking = tuple(sorted(
+            f'{entry.get("file_path", "?")}:{entry.get("severity", "?")}'
+            for entry in evidence.findings
+            if isinstance(entry, dict)
+            and entry.get('severity') in BLOCKING_SEVERITY_STRINGS))
+        if blocking:
+            return GateDecision(
+                GateState.COMPLETED_WITH_FINDINGS,
+                (f'{len(evidence.findings)} finding(s); blocking '
+                 f'(BLOCKER/HIGH): ' + ', '.join(blocking)
+                 + ' -- authorization denied',),
+                blocking_findings=blocking,
+                policy_version=evidence.policy_version)
+        if evidence.policy_version == 'phase2':
+            return GateDecision(
+                GateState.COMPLETED_WITH_FINDINGS,
+                ((f'{len(evidence.findings)} finding(s), none blocking; '
+                  'authorized under phase2 policy '
+                  'SEVERITY_BLOCKS_SHIP={BLOCKER, HIGH}'),),
+                policy_version=evidence.policy_version)
+        return GateDecision(
+            GateState.COMPLETED_WITH_FINDINGS,
+            ((f'{len(evidence.findings)} finding(s) reported; Phase 1 has '
+              'no policy that authorizes shipping with findings'),),
+            policy_version=evidence.policy_version)
+    return GateDecision(GateState.COMPLETED_CLEAN, (),
+                        policy_version=evidence.policy_version)
