@@ -17,4 +17,5 @@ __pycache__/
 .jspace/reports/
 .jspace/execution/
 *.tmp
+.k6graph-test/
 benchmarks/results/

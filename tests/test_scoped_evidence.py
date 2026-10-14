@@ -24,6 +24,8 @@ import pytest
 
 from asha import check_runner, evidence, replay, scoping
 from asha.common import paths as common_paths
+from asha.governance.delta import extract_failures, verdict_for
+from asha.governance.worker_execution import _failed_check_details
 from asha.scheduler import GovernedScheduler, _safe_id, verify_worker_evidence
 from asha.types import OrchestratorError
 
@@ -787,3 +789,153 @@ def test_worker_metadata_keys_are_additive_only(
         'diff', 'exit_status', 'validation_mode',
     }
     assert payload['authorized_to_ship'] is False
+
+
+# ---------------------------------------------------------------------------
+# Verification-reliability regressions (pre-v3): ruff concise strategy and
+# explicit timeout evidence on BOTH execution paths
+# ---------------------------------------------------------------------------
+
+def test_run_scoped_ruff_requests_concise_and_identity_parses(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The engine must explicitly request ruff's concise output and the
+    real (installed ruff 0.16.8) concise output must parse to a stable
+    path:line:col identity -- the rehearsal-v2 failure mode."""
+    repo = _repo(tmp_path, {'probe.py': 'import os\n'})
+    seen: list[list[str]] = []
+    real_run = subprocess.run
+
+    def spy(cmd, **kwargs):
+        seen.append(list(cmd))
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(check_runner.subprocess, 'run', spy)
+    entries = check_runner.run_scoped(
+        repo,
+        changed_files=['probe.py'],
+        targeted_tests=[],
+        mypy_targets=[],
+    )
+    assert any('--output-format=concise' in c for c in seen[-1]) or any(
+        '--output-format=concise' in c for argv in seen for c in argv)
+    ruff = next(e for e in entries if e['name'] == 'ruff')
+    assert ruff['status'] == 'failed' and ruff['exit_code'] != 0
+    ids = extract_failures([ruff])
+    assert len(ids) == 1
+    assert next(iter(ids)).location.startswith('probe.py:1:')
+
+
+def test_run_timeout_is_explicit_with_retained_tail(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unscoped path: a pytest timeout must yield FAILED with an
+    explicit timeout note, exit_code -1, and a tail retaining the
+    partial output -- never an empty unexplained diagnostic set."""
+    repo = _repo(tmp_path)
+    real_run = subprocess.run
+
+    def spy(cmd, **kwargs):
+        if 'pytest' in list(cmd):
+            raise subprocess.TimeoutExpired(
+                cmd=cmd, timeout=900, output='partial-progress')
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(check_runner.subprocess, 'run', spy)
+    entries = check_runner.run(
+        repo, {'checks': ['pytest'], 'affected_files': []})
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry['name'] == 'pytest'
+    assert entry['status'] == 'failed'
+    assert entry['exit_code'] == -1
+    assert entry['note'].startswith('timed out after')
+    assert 'partial-progress' in entry['output_tail']
+    assert 'timed out' in entry['output_tail']
+
+
+def test_run_scoped_timeout_is_explicit_with_retained_tail(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Scoped path: same timeout contract (FAILED, note, -1, retained
+    partial output) as the unscoped runner."""
+    repo = _repo(tmp_path, {
+        'tests/test_leaf_consumer.py': 'def test_ok():\n    assert True\n',
+    })
+    real_run = subprocess.run
+
+    def spy(cmd, **kwargs):
+        if 'pytest' in list(cmd):
+            raise subprocess.TimeoutExpired(
+                cmd=cmd, timeout=900, output='scoped-progress')
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(check_runner.subprocess, 'run', spy)
+    entries = check_runner.run_scoped(
+        repo,
+        changed_files=[],
+        targeted_tests=['tests/test_leaf_consumer.py'],
+        mypy_targets=[],
+    )
+    pytest_entries = [e for e in entries if e['name'] == 'pytest']
+    assert pytest_entries
+    entry = pytest_entries[0]
+    assert entry['status'] == 'failed'
+    # scoped-path contract (existing test): no exit code for a timeout
+    assert entry['exit_code'] is None
+    assert entry['note'].startswith('timed out after')
+    assert 'scoped-progress' in entry['output_tail']
+    assert 'timed out' in entry['output_tail']
+
+
+def test_timeout_tail_redacts_synthetic_secret_on_both_paths(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pre-v3 redaction regression (review finding): a secret-like value
+    that appears in a timed-out command's captured output must NOT reach
+    the retained `output_tail` -- on BOTH run() and run_scoped() -- while
+    the timeout note, failed-check details, and the fail-closed UNKNOWN
+    classification all survive. Synthetic values only; no real env vars
+    or credentials are read, printed, or asserted."""
+    synthetic_secret = "SYNTHETIC-SUPER-SECRET-VALUE-9f3a"
+    # _redact_env only scrubs secret-NAMED variables with len >= 6
+    monkeypatch.setenv("CI_SYNTHETIC_TOKEN", synthetic_secret)
+    # 1. the raw secret IS present in the simulated subprocess output
+    partial_output = (
+        f"collecting...\nrequest header: Authorization: Bearer {synthetic_secret}\n")
+    assert synthetic_secret in partial_output
+    real_run = subprocess.run
+
+    def spy(cmd, **kwargs):
+        if 'pytest' in list(cmd):
+            raise subprocess.TimeoutExpired(
+                cmd=cmd, timeout=check_runner.CHECK_TIMEOUT_S,
+                output=partial_output)
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(check_runner.subprocess, 'run', spy)
+    repo = _repo(tmp_path, {
+        'tests/test_secret_timeout.py':
+            'def test_ok():\n    assert True\n',
+    })
+    run_entry = check_runner.run(
+        repo, {'checks': ['pytest'], 'affected_files': []})[0]
+    scoped_entries = check_runner.run_scoped(
+        repo, changed_files=[],
+        targeted_tests=['tests/test_secret_timeout.py'],
+        mypy_targets=[])
+    scoped_entry = next(e for e in scoped_entries
+                        if e['name'] == 'pytest')
+
+    for entry in (run_entry, scoped_entry):
+        # 5. both execution paths
+        assert synthetic_secret not in entry['output_tail']
+        assert '[REDACTED]' in entry['output_tail']
+        # 3. timeout note + details remain useful and classified
+        assert entry['status'] == 'failed'
+        assert entry['note'].startswith('timed out after')
+        details = _failed_check_details([entry])
+        assert details and details[0]['name'] == 'pytest'
+        assert details[0]['note'].startswith('timed out after')
+        assert synthetic_secret not in details[0]['output_tail']
+        assert '[REDACTED]' in details[0]['output_tail']
+        # 4. fail-closed: redaction never turns a timeout into success
+        assert extract_failures([entry]) == frozenset()
+        assert verdict_for(extract_failures([entry]), frozenset(),
+                           has_failed_checks=True) == 'UNKNOWN'

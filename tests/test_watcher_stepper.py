@@ -204,17 +204,18 @@ def test_watch_stepper_current_vs_last_sealed(tmp_path: Path) -> None:
 def test_governance_trio_frozen(tmp_path: Path) -> None:
     import subprocess as sp
     cwd = Path(__file__).resolve().parents[1]
-    # Frozen anchor: e7f70d2 (Phase K.1-K.4 settled state) is where the
-    # governance trio settled after the service environment resolver,
-    # cross-service fail-closed guard, and Delta Check landed in
-    # check_runner/worker_execution (user-approved Phase K work:
-    # feat(governance): service env resolver, execution coverage, delta
-    # checks). Previous anchor 82027e0 (H.2.2-D) predated the documented
-    # H.2.1/H.2.2 extraction of default_execute/verify_worker_evidence
-    # into worker_execution; the even earlier b30f731 anchor predated
-    # that extraction entirely. The anchor is advanced only when the
-    # trio settles after an intentional, review-approved refactor.
-    out = sp.run(['git', 'diff', 'e7f70d2..HEAD', '--',
+    # Frozen anchor: 4215bdd (Phase 1 + Phase 2 approved governance
+    # state): covers the user-approved Phase 1 hardening of
+    # check_runner.py -- 6c450a4 (verification diagnostics and cache
+    # isolation) and be55c50 (baseline timeout 1800s) -- which is what
+    # advanced the anchor past e7f70d2 (Phase K.1-K.4 settled state:
+    # service environment resolver, cross-service fail-closed guard,
+    # and Delta Check in check_runner/worker_execution). Earlier
+    # anchors: 82027e0 (H.2.2-D, pre default_execute extraction) and
+    # b30f731 (pre worker_execution extraction). The anchor is
+    # advanced only when the trio settles after an intentional,
+    # review-approved refactor.
+    out = sp.run(['git', 'diff', '4215bdd..HEAD', '--',
                   'asha/scoping.py', 'asha/check_runner.py',
                   'asha/scheduler.py'],
                  cwd=cwd, capture_output=True, text=True, check=True)

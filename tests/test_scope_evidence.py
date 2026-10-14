@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PY = sys.executable
 
 from asha.common import paths as common_paths
-from asha.governance.ship_gate import gate_ship
+from asha.governance.ship_gate import POLICY_VERSION, gate_ship
 
 
 def _evidence_file(repo: Path) -> Path:
@@ -102,9 +102,15 @@ def _ready_ledger(repo: Path) -> None:
     return None
 
 
+def _clean_reviewer(root: Path, snapshot_id: str, timeout_s: int) -> dict:
+    """Stub semantic reviewer: clean, identity-bound review (phase2)."""
+    return {"schema": "semantic-review/v1", "snapshot_id": snapshot_id,
+            "policy_version": POLICY_VERSION, "status": "ok", "findings": []}
+
+
 def _ship(repo: Path) -> dict:
     """Run the ship gate in-process (extracted control.py surface)."""
-    return gate_ship(repo)
+    return gate_ship(repo, reviewer=_clean_reviewer)
 
 
 # ---- STEP 0 contract -----------------------------------------------------

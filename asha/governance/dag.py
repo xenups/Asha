@@ -197,7 +197,8 @@ class DAGCoordinator:
         DAG states entry (isolated helper: keeps flow analysis of the
         scheduling loop free of extra assignments)."""
         for extra in ("verdict", "baseline_failures",
-                      "current_failures", "delta_failures"):
+                      "current_failures", "delta_failures",
+                      "details"):
             if outcome.get(extra) is not None:
                 target[extra] = outcome[extra]
 
@@ -209,7 +210,7 @@ class DAGCoordinator:
         base_t = base_tree or self.dispatcher.base_tree
         if base_c and base_t:
             try:
-                baseline_journal = worker_execution.baseline_checks(
+                baseline_journal = worker_execution.baseline_checks_recorded(
                     worker, path, base_c, base_t, self.repo, self.task_id)
             except Exception:
                 baseline_journal = None

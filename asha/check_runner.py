@@ -24,6 +24,22 @@ from asha.governance.env_resolver import (
 
 TAIL_CHARS = 2000
 
+# Single-check timeout budget. Measured evidence: the full suite takes
+# 734s on the reference host (rehearsal-v2 reproduction in a retained
+# worker worktree), so the former 600s budget rejected every
+# full-scope worker with an unattributable UNKNOWN delta verdict.
+# 900s = measured runtime + ~20% headroom. Timeout itself stays
+# FAILED + verdict UNKNOWN -- never a pass, never PRE_EXISTING_ONLY.
+CHECK_TIMEOUT_S = 900
+# Baseline passes run concurrently (one per worker thread, ThreadPoolExecutor)
+# and each is a full-suite run: measured 874-895s solo, >900s under pair
+# contention (rehearsal-v4 baseline artifacts: exit -1, zero identities).
+# Baseline gets 2x solo margin; worker verification keeps CHECK_TIMEOUT_S.
+# ponytail: if a concurrent pair still exceeds this, compute ONE shared
+# baseline (requires proof of validity across worker worktrees) or serialize
+# the baseline passes.
+BASELINE_TIMEOUT_S = 1800
+
 # How each check's `scope` field is reported in evidence.json.
 CHECK_SCOPE = {
     'ruff': 'changed_files',
@@ -42,7 +58,12 @@ def _commands(root: Path, names: list[str], changed_py: list[str]) -> list[tuple
     for name in names:
         if name == 'ruff':
             target = changed_py if changed_py else ['.']
-            commands.append((name, [py, '-m', 'ruff', 'check', *target]))
+            # concise keeps _DIAG_RE's path:line:col identity stable
+            # (ruff 0.16.x emits full/` --> path:line:col` layout by
+            # default, which is intentionally NOT parsed -- zero
+            # identities must stay fail-closed UNKNOWN, never a pass).
+            commands.append((name, [py, '-m', 'ruff', 'check',
+                                    '--output-format=concise', *target]))
         elif name == 'pytest':
             commands.append((name, [py, '-m', 'pytest', 'tests/', '-q']))
         elif name == 'mypy':
@@ -159,7 +180,24 @@ def _exec_path_args(env: ServiceEnvironment | None, root: Path,
             )
     return out
 
-def run(root: Path | str, resolved: dict) -> list[dict]:
+
+def _timeout_tail(exc: subprocess.TimeoutExpired, timeout: int) -> str:
+    """Retained diagnostics for a timed-out check command: the partial
+    output produced before the kill plus the exception text (which
+    carries the exact command and the budget), trimmed to TAIL_CHARS
+    and passed through the secret redactor (this tail is retained in
+    the FAILED worker outcome and reaches the run report).
+    Without this a timeout surfaces as an empty diagnostic set and the
+    delta verdict degrades to an unexplained UNKNOWN."""
+    partial = exc.stdout or ""
+    if isinstance(partial, bytes):
+        partial = partial.decode("utf-8", "replace")
+    joined = (str(partial) + ("\n" if partial else "") + str(exc))
+    return _redact_env(joined[-TAIL_CHARS:])
+
+
+def run(root: Path | str, resolved: dict,
+        timeout_s: int = CHECK_TIMEOUT_S) -> list[dict]:
     """Execute the mandatory checks for a resolved scope."""
     root = Path(root).resolve()
     names = resolved['checks']
@@ -184,18 +222,29 @@ def run(root: Path | str, resolved: dict) -> list[dict]:
         started = time.monotonic()
         try:
             proc = subprocess.run(argv, cwd=cwd, capture_output=True,
-                                  text=True, timeout=600, env=proc_env)
+                                  text=True, timeout=timeout_s,
+                                  env=proc_env)
         except (OSError, subprocess.TimeoutExpired) as exc:
             entry['status'] = 'failed'
             entry['exit_code'] = -1
-            entry['output_tail'] = str(exc)
+            if isinstance(exc, subprocess.TimeoutExpired):
+                # Explicit timeout outcome with retained diagnostics
+                # (partial output + command + budget), never an
+                # unexplained empty tail.
+                entry['note'] = f'timed out after {timeout_s}s'
+                entry['output_tail'] = _timeout_tail(
+                    exc, timeout_s)
+            else:
+                entry['output_tail'] = str(exc)
             entry['duration_ms'] = int((time.monotonic() - started) * 1000)
             results.append(entry)
             continue
         entry['exit_code'] = proc.returncode
         entry['status'] = 'passed' if proc.returncode == 0 else 'failed'
         combined = (proc.stdout or '') + (proc.stderr or '')
-        entry['output_tail'] = combined[-TAIL_CHARS:]
+        # same secret redaction as the scoped path (tail is retained in
+        # evidence and, on failure, in the FAILED outcome's details)
+        entry['output_tail'] = _redact_env(combined[-TAIL_CHARS:])
         entry['duration_ms'] = int((time.monotonic() - started) * 1000)
         results.append(entry)
     return results
@@ -227,7 +276,7 @@ def run_scoped(
     changed_files: list[str],
     targeted_tests: list[str],
     mypy_targets: list[str],
-    timeout: int = 600,
+    timeout: int = CHECK_TIMEOUT_S,
 ) -> list[dict[str, Any]]:
     """Dumb executor of an affirmative eligibility decision (spec 1.1).
 
@@ -254,7 +303,8 @@ def run_scoped(
         and not ((root / file).with_suffix('') / '__init__.py').is_file()
     ]
     commands: list[tuple[str, list[str]]] = [
-        ('ruff', [py, '-m', 'ruff', 'check', *changed_py] if changed_py else []),
+        ('ruff', [py, '-m', 'ruff', 'check', '--output-format=concise',
+                  *changed_py] if changed_py else []),
         ('pytest', [py, '-m', 'pytest', *_exec_path_args(env, root, targeted_tests), '-q', '--tb=line'] if targeted_tests else []),
         ('mypy', [py, '-m', 'mypy', *scoped_mypy] if scoped_mypy else []),
     ]
@@ -282,9 +332,10 @@ def run_scoped(
                 command, cwd=cwd, capture_output=True, text=True,
                 encoding='utf-8', errors='replace', timeout=timeout, env=proc_env,
             )
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
             entry['status'] = 'failed'
             entry['note'] = f'timed out after {timeout}s'
+            entry['output_tail'] = _timeout_tail(exc, timeout)
             entry['duration_ms'] = int((time.monotonic() - started) * 1000)
             results.append(entry)
             continue

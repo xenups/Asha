@@ -12,13 +12,14 @@ from pathlib import Path
 
 import pytest
 
-from asha.governance.dag import run_workers_dag
+from asha.governance.dag import DAGCoordinator, run_workers_dag
 from asha.governance.delta import (
     FailureIdentity,
     delta_failures,
     extract_failures,
     verdict_for,
 )
+from asha.governance.worker_execution import _failed_check_details
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -288,3 +289,85 @@ def test_case5b_integration_new_failure_blocks(
                        "'def test_n():\n    assert False\n')")]}
     report = run_workers_dag(root, [worker], task_id="t-new-fail")
     assert report["states"]["w1"]["state"] == "FAILED"
+
+
+# ---------------------------------------------------------------------------
+# Verification-reliability regressions (pre-v3): ruff format, timeout,
+# failure-evidence retention
+# ---------------------------------------------------------------------------
+
+def test_ruff_full_format_f401_extracts_no_identity_and_fails_closed() -> None:
+    """Ruff 0.16.x's default FULL layout (observed in rehearsal v2,
+    including the ` --> path:line:column` location line) is not a
+    supported identity format: extraction yields ZERO identities, and a
+    failed check with zero identities must stay UNKNOWN -- never
+    NO_FAILURES and never PRE_EXISTING_ONLY (fail-closed)."""
+    full_format = (
+        "F401 [*] `os` imported but unused\n"
+        " --> rehearsal_negative_probe.py:1:8\n"
+        "  |\n"
+        "1 | import os\n"
+        "  | ^^^^^^^^\n"
+        "Found 1 error.\n"
+    )
+    checks = [{"name": "ruff", "status": "failed", "exit_code": 1,
+               "output_tail": full_format}]
+    assert extract_failures(checks) == frozenset()
+    verdict = verdict_for(extract_failures(checks), frozenset(),
+                          has_failed_checks=True)
+    assert verdict == "UNKNOWN"
+
+
+def test_ruff_concise_f401_extracts_stable_identity() -> None:
+    """Concise layout (now requested explicitly via
+    --output-format=concise) parses to a stable path:line:col identity."""
+    concise = ("rehearsal_negative_probe.py:1:8: F401 [*] `os` imported "
+               "but unused\nFound 1 error.\n")
+    ids = extract_failures([{"name": "ruff", "status": "failed",
+                             "exit_code": 1, "output_tail": concise}])
+    assert len(ids) == 1
+    assert next(iter(ids)).location == "rehearsal_negative_probe.py:1:8"
+
+
+def test_timeout_entry_is_unknown_never_pre_existing() -> None:
+    """A timed-out check produces zero identities; with failed checks
+    present the verdict must be UNKNOWN -- with an empty baseline AND
+    with a missing (None) baseline. Timeout is never a pass and never
+    PRE_EXISTING_ONLY."""
+    checks = [{"name": "pytest", "status": "failed", "exit_code": -1,
+               "note": "timed out after 900s",
+               "output_tail": "....\ntimed out after 900s"}]
+    cur = extract_failures(checks)
+    assert cur == frozenset()
+    assert verdict_for(cur, frozenset(),
+                       has_failed_checks=True) == "UNKNOWN"
+    assert verdict_for(cur, None, has_failed_checks=True) == "UNKNOWN"
+
+
+def test_failed_check_details_survive_and_merge_into_states() -> None:
+    """The FAILED outcome must retain compact failure diagnostics
+    (name/exit/note/tail) and the DAG merge must carry them into the
+    report's states entry -- rehearsal v2 lost all of it (evidence=None)."""
+    checks = [
+        {"name": "ruff", "status": "passed", "exit_code": 0,
+         "output_tail": "1 passed"},
+        {"name": "pytest", "status": "failed", "exit_code": -1,
+         "note": "timed out after 900s",
+         "output_tail": "partial...\ntimed out after 900s"},
+        {"name": "mypy", "status": "failed", "exit_code": 1,
+         "output_tail": "x.py:1: error: boom"},
+    ]
+    details = _failed_check_details(checks)
+    assert [d["name"] for d in details] == ["pytest", "mypy"]
+    assert details[0]["note"] == "timed out after 900s"
+    assert "timed out" in details[0]["output_tail"]
+    assert details[1]["exit_code"] == 1
+    outcome = {"state": "FAILED",
+               "reason": "verification_failed:pytest,mypy",
+               "verdict": "UNKNOWN",
+               "baseline_failures": [], "current_failures": [],
+               "delta_failures": [], "details": details}
+    target: dict = {}
+    DAGCoordinator._merge_verdict_fields(target, outcome)
+    assert target["details"] == details
+    assert target["verdict"] == "UNKNOWN"
