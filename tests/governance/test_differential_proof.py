@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -435,6 +436,13 @@ def test_g8_evidence_raw_hash_not_forced(repo: Path) -> None:
 # matrix render (documentation aid, not a test)
 # ----------------------------------------------------------------------
 
+def _rmtree_chmod_retry(func, path, _exc_info):
+    """shutil.rmtree onerror handler: clear Windows read-only bits
+    (.git object files) and retry the unlink before failing."""
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
 def test_differential_matrix(repo: Path) -> None:
     rows = []
     for scenario in SCENARIOS:
@@ -444,6 +452,8 @@ def test_differential_matrix(repo: Path) -> None:
         r = _differential(fresh, scenario)
         rows.append((scenario, r["legacy"]["verdict"],
                      r["modular"]["verdict"], r["equivalent"]))
-        shutil.rmtree(fresh)
+        # Windows: .git objects are read-only and may be AV-locked in
+        # temp cleanup; chmod then retry before failing the matrix.
+        shutil.rmtree(fresh, onerror=_rmtree_chmod_retry)
     for scenario, lv, mv, eq in rows:
         assert eq, f"matrix row {scenario} diverged"

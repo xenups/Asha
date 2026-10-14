@@ -140,7 +140,8 @@ def test_resolution_does_not_mutate_parent_env(monorepo: Path) -> None:
              ("PATH", "PYTHONPATH", "VIRTUAL_ENV")}
     assert before == after
     # the service env itself carries the modifications
-    assert env.env_vars["VIRTUAL_ENV"].endswith("service_a/.venv")
+    assert os.path.normpath(env.env_vars["VIRTUAL_ENV"]).endswith(
+        os.path.join("service_a", ".venv"))
     assert "PYTHONPATH" in env.env_vars
 
 

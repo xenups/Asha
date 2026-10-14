@@ -113,7 +113,9 @@ class TestNativeExecution:
                           "print('Found 3 errors')\nsys.exit(1)\n",
                           encoding="utf-8")
         script.chmod(0o755)
-        cmd = [str(script)]
+        # run through sys.executable: portable across POSIX and Windows
+        # (the shebang is a comment to Python, a direct exec is not)
+        cmd = [PY, str(script)]
         facts = NativeAdapter().execute(_manifest(tmp_path, [cmd]))
         assert facts.lint_result == "VIOLATIONS"
         assert facts.lint_violations_count == 3
