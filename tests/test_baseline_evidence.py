@@ -382,7 +382,8 @@ def test_baseline_exception_skips_strip_exactly_as_before(tmp_path: Path,
 #    worker verification keeps CHECK_TIMEOUT_S (rehearsal-v4 root cause)
 # ---------------------------------------------------------------------------
 
-def test_baseline_checks_request_the_longer_timeout(monkeypatch):
+def test_baseline_checks_request_the_longer_timeout(
+        monkeypatch: pytest.MonkeyPatch) -> None:
     assert check_runner.BASELINE_TIMEOUT_S > check_runner.CHECK_TIMEOUT_S
 
     calls: list[int] = []

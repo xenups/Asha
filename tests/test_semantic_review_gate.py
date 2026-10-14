@@ -28,6 +28,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -107,7 +108,7 @@ def _finding(severity: str = "MEDIUM", **overrides: str) -> dict:
 def _artifact(snapshot_id: str, findings: tuple[dict, ...] = (),
               **overrides: object) -> dict:
     """A valid semantic-review/v1 artifact bound to snapshot_id."""
-    artifact = {
+    artifact: dict[str, Any] = {
         "schema": semantic_review.REVIEW_SCHEMA,
         "snapshot_id": snapshot_id,
         "policy_version": ship_gate.POLICY_VERSION,
@@ -142,7 +143,7 @@ def _evidence_payload(findings: tuple[dict, ...] = (), *,
     return payload
 
 
-def _evaluate(findings: tuple[dict, ...] = (), **kwargs: object
+def _evaluate(findings: tuple[dict, ...] = (), **kwargs: Any
               ) -> gate_states.GateDecision:
     """Validate + evaluate in one step (contract-level cases)."""
     return gate_states.evaluate(
@@ -182,7 +183,7 @@ def test_finding_rejects_invalid_severities() -> None:
     fail closed."""
     for bad in ("CRITICAL", "blocker", "", "Medium", 7, None, True):
         with pytest.raises(gate_states.GateContractError):
-            semantic_review.Finding(**_finding(severity=bad))
+            semantic_review.Finding(**_finding(severity=bad))  # type: ignore[arg-type]
 
 
 def test_finding_rejects_non_string_field_types() -> None:

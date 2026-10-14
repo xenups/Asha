@@ -20,6 +20,7 @@ same seam ship_gate's injected reviewer uses); no sockets are opened.
 
 from __future__ import annotations
 
+import email.message
 import json
 import sys
 import urllib.error
@@ -109,11 +110,11 @@ def _llm_reply(findings: list[dict], snapshot_id: str = SNAPSHOT,
     }
 
 
-def _capturing_transport(reply):
+def _capturing_transport(reply: object):
     """Fake _http_post that records (url, payload, config) and replies."""
-    captured: dict = {}
+    captured: dict[str, object] = {}
 
-    def _fake(url, payload, config):
+    def _fake(url: str, payload: dict, config: object) -> object:
         captured["url"] = url
         captured["payload"] = payload
         captured["config"] = config
@@ -122,7 +123,7 @@ def _capturing_transport(reply):
             raise result
         return result
 
-    _fake.captured = captured
+    _fake.captured = captured  # type: ignore[attr-defined]
     return _fake
 
 
@@ -308,7 +309,8 @@ def test_transport_errors_raise_reviewer_error(
         live_env: None, stub_context: None,
         monkeypatch: pytest.MonkeyPatch) -> None:
     rate_limited = urllib.error.HTTPError(
-        "https://llm.test", 429, "Too Many Requests", None, None)
+        "https://llm.test", 429, "Too Many Requests",
+        email.message.Message(), None)
     for failure in (rate_limited, TimeoutError("timed out"),
                     urllib.error.URLError("dns down")):
         monkeypatch.setattr(
@@ -370,7 +372,8 @@ def test_live_gate_rate_limit_denies_execution_failed(
     monkeypatch.setattr(
         live_reviewer, "_http_post",
         _capturing_transport(urllib.error.HTTPError(
-            "https://llm.test", 429, "Too Many", None, None)))
+            "https://llm.test", 429, "Too Many",
+            email.message.Message(), None)))
     with pytest.raises(evidence.EvidenceError) as exc:
         ship_gate.gate_ship(repo)
     assert "EXECUTION_FAILED" in str(exc.value)
