@@ -134,13 +134,18 @@ class TestNoChanges:
         resolved = scope_resolver.resolve(repo.root)
         repo.ensure_clean()
 
-        assert resolved["scope"] == "S0"
+        # D.1 guardrail (d7b04ba, tests/test_d1_guardrail.py): an
+        # unresolved base + empty diff elevates to the FULL S2 matrix --
+        # an empty diff must never seal a vacuous S0/pytest-only PASS.
+        # The change-state below is still "nothing changed".
+        assert resolved["scope"] == "S2"
         assert resolved["status"] == "certain"
         assert resolved["affected_files"] == []
         # single-commit fixture: no origin/main, no HEAD~1 → base is None
         assert resolved["base"] is None
         # change-state: no changes detected
         assert resolved["affected_files"] == []
+        assert any("D.1" in reason for reason in resolved["reasons"])
 
     def test_assess_no_changed_files(self, tmp_path: Path) -> None:
         repo = _GitRepo(tmp_path / "nc2").base_commit()
@@ -165,7 +170,9 @@ class TestNoChanges:
             scope_status="certain",
         )
         # Neither the change-state nor the governance decision is PASS.
-        assert resolved["scope"] == "S0"
+        # Governance verdict: D.1 elevates empty diff + unresolved base
+        # to S2 (full matrix), independent of the empty change-state.
+        assert resolved["scope"] == "S2"
         assert decision.fallback_reason != "PASS"
         assert decision.mode != "PASS"
 

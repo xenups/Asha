@@ -1,0 +1,105 @@
+name: Asha Governance
+
+# Fail-closed governance gate (Phase 4): static analysis, snapshot
+# integrity / deterministic gate tests, and the MOCKED semantic-review
+# gate. No step may mask a nonzero exit (no `|| true`, no
+# continue-on-error): snapshot drift, a frozen-trio change outside the
+# approved anchor, or a blocking-severity review finding turns the
+# pipeline red. No secrets are provided to this workflow, so live LLM
+# resolution (ASHA_SEMANTIC_REVIEW) stays off and every review test
+# runs against injected transports.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: asha-governance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  governance:
+    name: fail-closed governance gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Asha branches worktrees from history: full clone is mandatory
+      # (same requirement as ci.yml).
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Worktree creation and evidence commits fail without an identity.
+      - name: Configure git identity
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Install toolchain
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest ruff mypy==2.3.1 mypy-baseline==0.7.4
+          pip install -e '.[code-search]'
+          pip install -e '.[memory]'
+          pip install -e .
+
+      # 1) Static analysis. Propagates nonzero exits verbatim; pytest's
+      #    exit 5 (no tests collected) would also fail any later step
+      #    that uses it.
+      - name: Static analysis (ruff)
+        run: ruff check asha/ tests/ benchmarks/run_*.py
+
+      # Baseline-gated: identity of diagnostics, not count (see
+      # mypy-baseline.txt; regenerate with `mypy ... | mypy-baseline
+      # sync` when a baseline entry is intentionally fixed).
+      - name: Static analysis (mypy, baseline-gated)
+        run: mypy asha/ tests/ | mypy-baseline filter
+
+      # 2) Snapshot integrity + deterministic gates: snapshot drift or
+      #    forged/missing evidence fails test_audit_snapshot;
+      #    delta/baseline evidence violations fail their suites; an
+      #    empty-diff+unresolved-base regression fails the D.1
+      #    guardrail; a change to the frozen governance trio outside
+      #    the approved anchor fails test_watcher_stepper.
+      - name: Snapshot integrity and deterministic gates
+        run: |
+          pytest -q \
+            tests/test_audit_snapshot.py \
+            tests/test_delta_check.py \
+            tests/test_baseline_evidence.py \
+            tests/test_d1_guardrail.py \
+            tests/test_watcher_stepper.py
+
+      # 3) Semantic review gate, MOCKED only (no ASHA_LLM_API_KEY /
+      #    ASHA_SEMANTIC_REVIEW secrets exist in this workflow, so
+      #    resolve_live_reviewer() returns None and tests inject their
+      #    own transports). Includes test_13b's AST guard (zero literal
+      #    `True` authorization path across asha/**) and the severity
+      #    partition deny paths -- a BLOCKER/HIGH bypass cannot pass.
+      - name: Semantic review gate (mocked, fail-closed)
+        run: |
+          pytest -q \
+            tests/test_semantic_review_gate.py \
+            tests/test_live_reviewer_adapter.py \
+            tests/governance/test_semantic_baseline.py
+
+      # 4) The suites must not mutate the checked-out tree: a leaking
+      #    test or an evidence file written outside tmp_path fails the
+      #    job instead of polluting the runner state.
+      - name: Working tree must stay clean
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::test run modified the working tree"
+            git status --porcelain
+            exit 1
+          fi
