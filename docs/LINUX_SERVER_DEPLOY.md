@@ -51,7 +51,9 @@ implicitly.
 python scripts/verify_linux_node.py
 ```
 
-Expect `SMOKE: OK` (exit 0). The live line reports `SKIPPED` when the
+Expect `SMOKE: OK` (exit 0). Run it after every clone, venv upgrade, or
+`git pull` to confirm baseline node health (snapshot hashing + gate +
+optional live connectivity). The live line reports `SKIPPED` when the
 live flag/key are absent — that is an explicit skip, **not** a pass; it
 turns into one real bounded request when configured, and a failure there
 exits 1.
@@ -61,6 +63,17 @@ exits 1.
 ```bash
 asha --help                      # CLI (also: python -m asha)
 python -m asha.mcp_server        # MCP server: stdio JSON-RPC on stdin/stdout
+```
+
+One-shot CLI (Phase 9) — the server entry point doubles as a direct
+tool driver; a bare positional path maps to the repository root:
+
+```bash
+asha status /path/to/repo                # deterministic tip one-liner
+asha status --json /path/to/repo         # exactly one JSON document
+asha-mcp asha_status /path/to/repo       # positional PATH == root=PATH
+asha-mcp asha_verify_tip /path/to/repo run_checks=true
+# exit codes: 0 tool ok / 1 tool refused (isError) / 2 usage error
 ```
 
 For MCP wiring point your client at: command `asha-mcp` (or
@@ -82,3 +95,28 @@ Notes for Linux servers:
   (`.env` is git-ignored; `.env.example` holds placeholders only);
 * systemd unit sketch: `ExecStart=/opt/Asha/.venv/bin/asha-mcp`
   with `EnvironmentFile=/opt/Asha/.env`, `WorkingDirectory=/opt/Asha`.
+
+## 6. Stacked-PR / multi-branch rebases: verify the tip in place
+
+When the agent owns branch checkouts and `git rebase --onto` directly
+(stacked-PR workflows), verify the CURRENT working tree between the
+rebase and `git push --force-with-lease` — no sub-worktree is spawned,
+so nothing competes with the branch the agent is manipulating:
+
+```bash
+asha-mcp asha_verify_tip /path/to/repo base_ref=origin/main run_checks=true
+# optional: declared_scope=... is a repeated-key style list via MCP args;
+# from JSON-RPC, pass "declared_scope": ["pkg/mod.py"]
+```
+
+* refusal -> exit 1 with a stable code and NO artifact written:
+  `TIP_DIRTY`, `TIP_CONFLICTED`, `TIP_DIFF_UNCLEAN`,
+  `TIP_REBASE_IN_PROGRESS`, `TIP_BASE_UNKNOWN`, `TIP_SCOPE_MISSING`,
+  `TIP_CHECKS_FAILED`;
+* pass -> `ok: true` with `snapshot_id`, `evidence_sha256`, and the
+  sealed artifact at `<state>/verify-tip/<head12>.evidence.json`
+  (digest-bound, tamper-evident; `authorized_to_ship` stays `false` —
+  this is verification evidence, never ship authority).
+
+Rule: push the tip only after `ok: true`; on any refusal, fix the tree
+or finish the git operation first — never force-push over a refusal.

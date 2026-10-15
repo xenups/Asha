@@ -15,7 +15,7 @@ never treated as safe.
 - **cryptographic evidence** — every completed worker seals `HEAD^{tree}`,
   observed file scope, and check results into tamper-evident
   `evidence.json`; integration re-verifies the seal before staging anything
-- **one MCP server, three tools** — usable from any MCP client
+- **one MCP server, six tools** — usable from any MCP client
   (Antigravity, Hermes, Claude Desktop, Cursor, Windsurf)
 
 ## Quickstart
@@ -31,8 +31,13 @@ asha [--root <path>] [--paths <file>...] [--json] [--no-execute]
       [--ui] [--ui-out <path>]
 asha inspect <file> [--ui-out <path>]
                                               # governance CLI (schema v1)
+asha status [PATH] [--root <path>] [--json]
+                                              # read-only tip facts; a bare
+                                              # positional PATH maps to root
 asha --root <path> run --spec <spec.json> [--apply]   # scheduler CLI
 asha-mcp                                              # stdio JSON-RPC MCP server
+asha-mcp TOOL [k=v ...] [PATH]                  # one-shot tool call; bare
+                                                 # PATH maps to root=PATH
 .claude/commands/asha.md   →  /asha                    # thin passthrough
 ```
 
@@ -126,11 +131,12 @@ negotiated verbatim when the client requests it.
 
 | Tool | Behavior |
 | --- | --- |
-| `asha_status(root)` | Git repository cleanliness, current HEAD SHA, active worktree tracking, and lock detection. |
+| `asha_status(root)` | Git repository cleanliness, current HEAD SHA, active worktree tracking, and lock detection — plus a deterministic, always non-empty `response` one-liner derived only from git facts (`tip <sha12>: clean\|dirty (N path(s)); worktrees X active, Y orphaned; control lock held\|free`), stable across every state: clean, dirty, detached HEAD, mid-rebase, orphaned worktrees. The `root` argument also accepts a bare positional path from the CLI (`asha status /path/to/repo`, `asha-mcp asha_status /path/to/repo`). |
 | `asha_plan_dag(root, spec_content)` | Static AST dependency inspection, topological generations, write/read collision analysis, and safety classification (`safe` vs `uncertain`). Never executes anything. |
 | `asha_run_spec(root, spec_content, apply)` | `apply=false`: simulation only — DAG rows as `SIMULATED_DONE`, zero subprocesses, zero side effects. `apply=true`: isolated execution in dedicated Git worktrees, cryptographic evidence collection (`HEAD^{tree}`), per-worker states and evidence paths. Atomic branch integration is a separate governed step (`asha --root … run --apply`) so execution evidence never doubles as ship authorization; failure rolls back with zero residue. |
 | `asha_get_surgical_context(target_file, target_symbol, repo_path)` | Read-only Phase 4.1 pipeline: AST index → code graph → dependency closure → surgical slice for one symbol. Returns `target`, `context`, `dependencies`, `unresolved`, `full_source_bytes`, `context_source_bytes`, `reduction_ratio`. Every closure member is reported — UNRESOLVED boundaries are never silently dropped. `reduction_ratio` is SOURCE BYTES only, never a token claim. |
 | `asha_dispatch_task(id, declared_scope, reads, writes, deps, cmd, prompt, root)` | Dispatches ONE governed worker through the real pipeline: Phase 4.0 `classify_task` → `governance_profile` → Phase 4.2 `route` (fail-closed) → `GovernedScheduler` (worktrees, conflict gating, scope verification, sealed evidence). The classifier's context envelope comes from this repo's own sealed execution records (`.jspace/cache/orchestrator/*.json`) — no records means `UNKNOWN`, never a vacuous disjoint proof. Result carries `classification`, `reason_code`, `runtime_mode`, `routing`, `evidence`, `worktrees`, `timings`; `authorized_to_ship` stays `false`. |
+| `asha_verify_tip(root, base_ref, run_checks, declared_scope)` | Phase 9 in-place, fail-closed verification of the CURRENT working-tree tip, built for stacked-PR / multi-branch rebase workflows: no competing git worktree is ever spawned. A dirty, conflicted, mid-rebase, bad-base or out-of-scope tree is denied with a stable code (`TIP_DIRTY`, `TIP_CONFLICTED`, `TIP_DIFF_UNCLEAN`, `TIP_REBASE_IN_PROGRESS`, `TIP_BASE_UNKNOWN`, `TIP_SCOPE_MISSING`, `TIP_CHECKS_FAILED`) and no artifact is written. A clean tip binds to `snapshot_id_of(root)`, optionally runs the configured deterministic checks in-place, and seals digest-bound evidence (`evidence_sha256`) to `<state>/verify-tip/<head12>.evidence.json`; `authorized_to_ship` stays `false` — auditable pre-push verification evidence for `git push --force-with-lease`, never ship authority. |
 
 Planning never guesses: overlapping writes within one generation, unknown
 read/write sets, or dependencies without import facts downgrade the
@@ -254,6 +260,24 @@ gate.
 - Agent runner: `"agent": "antigravity"` dispatches a headless agent
   (`--workspace <worktree> --non-interactive --task <prompt>`).
 
+## Governance Phases Status (Roadmap)
+
+Phases 1-4 (engine hardening, evidence sealing, and the Phase 4.0-4.3
+classifier / surgical-context / router / fast-path + telemetry
+capabilities) are described inline in the sections above. The roadmap
+through the latest completed phase:
+
+| Phase | Scope | Status |
+| --- | --- | --- |
+| Phase 5 | Cross-platform Windows/Linux test parity — 100% pass on both OS families | Complete |
+| Phase 6 | Linux remote node integration (deployment, parity guide, live semantic reviewer) — see `docs/LINUX_SERVER_DEPLOY.md` | Complete |
+| Phase 7 | Real-world anti-TOCTOU hardening & semantic governance verification | Complete |
+| Phase 8 | Full stdio MCP orchestration (5-tool server surface, JSON-RPC over stdin/stdout) | Complete |
+| Phase 9 | Real-world telemetry hardening: positional CLI paths, deterministic `status` response, and in-place stack tip verification (`asha_verify_tip`) — driven by the Detailist stacked-PR production run (#222-#230) | Complete |
+
+Verified baseline: **900 passed, 0 failed, 2 skipped** across
+Ubuntu/Debian and Windows CI (CPython 3.11+, stdlib only).
+
 ## Core Architecture & Governance Invariants
 
 | Invariant | Guarantee |
@@ -263,7 +287,7 @@ gate.
 | Scope resolution | S0–S4 blast-radius classification of every change set; checks are selected by scope, never skipped. |
 | Evidence sealing | Tamper-resistant `evidence.json`: commit, `HEAD^{tree}`, observed scope, check results; workers always seal `authorized_to_ship: false`. |
 | Merge law | Worker green proves only its own tree; the integration gate re-runs the full matrix against the merged tree. |
-| Verified test baseline | **229 passed, 1 skipped** (CPython 3.11+, stdlib only). |
+| Verified test baseline | **900 passed, 0 failed, 2 skipped** (CPython 3.11+, stdlib only; Ubuntu/Debian + Windows CI). |
 
 Fail-closed everywhere: a missing fact defers or blocks the run; it never
 unlocks one. `push` is not `done`, and a commit is not ship authorization.
