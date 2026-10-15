@@ -1,22 +1,18 @@
 # Asha — Governed Git-Native Multi-Agent Orchestrator & MCP Server
 
-**The Golden Law:** `PASS(A) + PASS(B) != PASS(A ∪ B)`
+> **The Golden Law:** `PASS(A) + PASS(B) != PASS(A ∪ B)`
 
 Asha is a zero-external-dependency, fail-closed system engine that isolates
 AI coding agents into dedicated Git worktrees, checks AST dependency
 conflicts before anything runs, and only merges work back through atomic
 integration verified against a unified gate. Every stage — dispatch,
-execution, evidence, ship — is refused unless provably safe: unknown is
-never treated as safe.
+execution, evidence, ship — is refused unless provably safe: **unknown is
+never treated as safe**.
 
 - **stdlib only** — no LLM SDKs, no orchestration frameworks, no daemons
-- **hermetic workers** — each worker executes in its own detached worktree
-  against an immutable base commit; the main tree is never mutated in place
-- **cryptographic evidence** — every completed worker seals `HEAD^{tree}`,
-  observed file scope, and check results into tamper-evident
-  `evidence.json`; integration re-verifies the seal before staging anything
-- **one MCP server, six tools** — usable from any MCP client
-  (Antigravity, Hermes, Claude Desktop, Cursor, Windsurf)
+- **hermetic workers** — each worker executes in its own detached worktree against an immutable base commit; the main tree is never mutated in place
+- **cryptographic evidence** — every completed worker seals `HEAD^{tree}`, observed file scope, and check results into tamper-evident `evidence.json`; integration re-verifies the seal before staging anything
+- **one MCP server, six tools** — usable from any MCP client (Antigravity, Hermes, Claude Desktop, Cursor, Windsurf)
 
 ## Quickstart
 
@@ -27,8 +23,7 @@ pip install -e .          # editable install; registers the console scripts
 Registered CLI commands:
 
 ```text
-asha [--root <path>] [--paths <file>...] [--json] [--no-execute]
-      [--ui] [--ui-out <path>]
+asha [--root <path>] [--paths <file>...] [--json] [--no-execute] [--ui] [--ui-out <path>]
 asha inspect <file> [--ui-out <path>]
                                               # governance CLI (schema v1)
 asha status [PATH] [--root <path>] [--json]
@@ -36,15 +31,15 @@ asha status [PATH] [--root <path>] [--json]
                                               # positional PATH maps to root
 asha --root <path> run --spec <spec.json> [--apply]   # scheduler CLI
 asha-mcp                                              # stdio JSON-RPC MCP server
-asha-mcp TOOL [k=v ...] [PATH]                  # one-shot tool call; bare
-                                                 # PATH maps to root=PATH
-.claude/commands/asha.md   →  /asha                    # thin passthrough
+asha-mcp TOOL [k=v ...] [PATH]                        # one-shot tool call; bare
+                                                      # PATH maps to root=PATH
+.claude/commands/asha.md   →  /asha                   # thin passthrough
 ```
 
 `asha` (the default command) is a thin adapter over the existing engine:
 git state -> scope resolver -> classifier -> eligibility engine, then the
 existing execution authority: one synthesized validation worker through
-the orchestrator against a committed target (Spec 6.5.5 -- only the
+the orchestrator against a committed target (Spec 6.5.5 — only the
 scheduler may take the SCOPED runtime path, so an uncommitted target is
 evaluated but never executed). It never re-decides anything: every
 semantic field in its output is the engine's own.
@@ -57,7 +52,7 @@ CLI contract (schema_version 1):
   resolver's own `base..worktree` membership source), reporting per-path
   states (`staged`, `unstaged`, `deleted`, `untracked`, `renamed`) inside
   `change_set.states`. Merge-conflict (unmerged) state exits `2` with
-  `error: "REPOSITORY_CONFLICT"` -- an operational condition, never a
+  `error: "REPOSITORY_CONFLICT"` — an operational condition, never a
   synthesized verdict. `--paths` accepts relative or absolute paths under
   the repository and normalizes them to the identical sorted form;
   anything outside the repository exits `2`.
@@ -120,11 +115,11 @@ hermes mcp test asha
 
 Standard stdio connection using either entry point:
 
-```text
+```yaml
 command: asha-mcp            # or: python -m asha.mcp_server
 ```
 
-The server speaks JSON-RPC over stdio on MCP protocol `2025-11-25`,
+The server speaks JSON-RPC over stdio on MCP protocol `2024-11-05`,
 negotiated verbatim when the client requests it.
 
 ## MCP Tools Reference
@@ -141,6 +136,8 @@ negotiated verbatim when the client requests it.
 Planning never guesses: overlapping writes within one generation, unknown
 read/write sets, or dependencies without import facts downgrade the
 conflict matrix to `uncertain` instead of a false `safe`.
+
+## Runtime & Telemetry Protocols
 
 ### Fast Path runtime configuration (Phase 4.3)
 
@@ -272,7 +269,7 @@ through the latest completed phase:
 | Phase 5 | Cross-platform Windows/Linux test parity — 100% pass on both OS families | Complete |
 | Phase 6 | Linux remote node integration (deployment, parity guide, live semantic reviewer) — see `docs/LINUX_SERVER_DEPLOY.md` | Complete |
 | Phase 7 | Real-world anti-TOCTOU hardening & semantic governance verification | Complete |
-| Phase 8 | Full stdio MCP orchestration (5-tool server surface, JSON-RPC over stdin/stdout) | Complete |
+| Phase 8 | Full stdio MCP orchestration (initial 5-tool server surface, JSON-RPC over stdin/stdout) | Complete |
 | Phase 9 | Real-world telemetry hardening: positional CLI paths, deterministic `status` response, and in-place stack tip verification (`asha_verify_tip`) — driven by the Detailist stacked-PR production run (#222-#230) | Complete |
 
 Verified baseline: **900 passed, 0 failed, 2 skipped** across
