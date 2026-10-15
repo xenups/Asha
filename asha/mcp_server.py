@@ -40,6 +40,7 @@ if __package__ in (None, ""):
 
 import json
 import os
+import subprocess
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -48,7 +49,15 @@ from pathlib import Path
 from time import perf_counter_ns
 from typing import Any, TextIO
 
-from . import dep_index, evidence, graph_state, worker_graph
+from . import (
+    audit_snapshot,
+    check_runner,
+    dep_index,
+    evidence,
+    graph_state,
+    scope_resolver,
+    worker_graph,
+)
 from .ast_indexer import ImportFact, ModuleIndex, index_module
 from .classifier import classify_task, governance_profile
 from .codegraph import build_graph, closure, sym_node
@@ -254,6 +263,45 @@ ASHA_RUN_SPEC_SPEC: dict[str, Any] = {
         "additionalProperties": False,
     },
 }
+ASHA_VERIFY_TIP_SPEC: dict[str, Any] = {
+    "name": "asha_verify_tip",
+    "description": ("In-place, fail-closed verification of the CURRENT "
+                    "working-tree tip -- built for stacked-PR / "
+                    "multi-branch rebase workflows where the agent owns "
+                    "branch checkouts and rebases. Refuses dirty, "
+                    "conflicted or mid-rebase trees; binds the tip to a "
+                    "cryptographic snapshot id; optionally runs the "
+                    "configured deterministic checks IN-PLACE (no "
+                    "competing git worktree is ever created); seals a "
+                    "digest-bound evidence artifact per tip. Never "
+                    "grants ship authority."),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "root": {"type": "string", "default": ".",
+                     "description": ROOT_HELP},
+            "base_ref": {"type": "string",
+                         "description": "Optional ref the tip will be "
+                                        "compared/pushed against; must "
+                                        "resolve to a commit "
+                                        "(fail-closed otherwise)"},
+            "run_checks": {"type": "boolean", "default": False,
+                           "description": "Run the configured "
+                                          "deterministic check set "
+                                          "in-place for the resolved "
+                                          "scope (default: false)"},
+            "declared_scope": {"type": "array",
+                               "items": {"type": "string"},
+                               "description": "Repo-relative files this "
+                                              "tip declares as its "
+                                              "scope (default: the "
+                                              "scope resolver's "
+                                              "changed-files set)"},
+        },
+        "required": ["root"],
+        "additionalProperties": False,
+    },
+}
 
 
 def _tool_ok(payload: dict[str, Any]) -> dict[str, Any]:
@@ -283,6 +331,29 @@ def _lock_state(root: Path) -> dict[str, Any]:
         return {"exists": True, "pid": int(raw)}
     except ValueError:
         return {"exists": True, "pid": None}
+
+
+def _status_response(head: str, status_lines: list[str],
+                     active: list[str], orphans: list[str],
+                     lock: dict[str, Any]) -> str:
+    """Deterministic one-line summary alongside the structured payload.
+
+    Derived only from git facts (no clock, no random): identical repo
+    states always render byte-identical text, so CLI and agent callers
+    can rely on a non-empty `response` in every state (clean, dirty,
+    detached HEAD, mid-rebase, orphaned worktrees) -- the empty-response
+    friction recorded in the Detailist stacked-PR run.
+    """
+    tree = ("clean" if not status_lines
+            else f"dirty ({len(status_lines)} path(s))")
+    if lock.get("exists"):
+        lock_state = ("held" if lock.get("pid") is not None
+                      else "held (unreadable pid)")
+    else:
+        lock_state = "free"
+    return (f"tip {head[:12]}: {tree}; "
+            f"worktrees {len(active)} active, {len(orphans)} orphaned; "
+            f"control lock {lock_state}")
 
 
 def asha_status(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -315,12 +386,207 @@ def asha_status(arguments: dict[str, Any]) -> dict[str, Any]:
                        for item in sorted(worktree_root.iterdir())
                        if item.is_dir()
                        and os.path.normcase(str(item)) not in registered]
+        lock = _lock_state(resolved)
         payload = {"root": str(resolved),
                    "head": head,
                    "clean": status == "",
                    "status": status.splitlines(),
                    "worktrees": {"active": active, "orphaned": orphans},
-                   "lock": _lock_state(resolved)}
+                   "lock": lock}
+        payload["response"] = _status_response(
+            head, status.splitlines(), active, orphans, lock)
+        return _tool_ok(payload)
+    except Exception as exc:
+        return _tool_error(f"{type(exc).__name__}: {exc}")
+
+
+# -- Phase 9: asha_verify_tip (in-place stacked-PR tip verification) ------
+# Conflict-state porcelain prefixes (merge/rebase/cherry-pick collisions).
+_CONFLICT_PREFIXES = ("UU", "AA", "DD", "AU", "UA", "DU", "UD")
+# An in-flight git operation that must complete before the tip is
+# verifiable. A MERGE_HEAD with resolved clean files is still refused:
+# the operation has not produced its final tip yet.
+_IN_FLIGHT_MARKERS = ("rebase-merge", "rebase-apply", "MERGE_HEAD",
+                      "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG")
+
+
+def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
+    """asha_verify_tip: in-place, fail-closed verification of the
+    CURRENT working-tree tip for stacked-PR / multi-branch rebase
+    workflows. Never raises -- refusals are `isError: true` content with
+    a stable TIP_* code; never creates a git worktree; never grants
+    ship authority (`authorized_to_ship` is hard-coded false in both
+    payload and sealed artifact).
+
+    Order of refusals (most specific first): unmerged paths ->
+    dirty tree -> `git diff --check` defects -> in-flight git
+    operation -> unknown base_ref -> missing declared_scope path.
+    A clean tip is bound to `snapshot_id_of(root)` and sealed to
+    <state>/verify-tip/<head12>.evidence.json (digest-bound, atomic).
+    """
+    try:
+        root = arguments.get("root", ".")
+        if not isinstance(root, str):
+            return _tool_error("root must be a string")
+        root_path = Path(root).expanduser()
+        if not root_path.is_dir():
+            return _tool_error(
+                f"root does not exist or is not a directory: {root}")
+        resolved_root = root_path.resolve()
+        base_ref = arguments.get("base_ref")
+        if base_ref is not None and not isinstance(base_ref, str):
+            return _tool_error("base_ref must be a string")
+        run_checks = arguments.get("run_checks", False)
+        if not isinstance(run_checks, bool):
+            return _tool_error("run_checks must be a boolean")
+        declared_scope = arguments.get("declared_scope")
+        if declared_scope is not None:
+            if (not isinstance(declared_scope, list)
+                    or not all(isinstance(item, str) and item
+                               for item in declared_scope)):
+                return _tool_error(
+                    "declared_scope must be a list of non-empty strings")
+            declared_scope = list(declared_scope)
+        try:
+            git_dir = Path(_git(resolved_root,
+                                "rev-parse", "--git-dir").strip())
+            if not git_dir.is_absolute():
+                git_dir = resolved_root / git_dir
+            status = _git(resolved_root, "status", "--porcelain")
+            # `git diff --check` exits NON-ZERO when it reports defects
+            # (1 or 2 depending on git version), so it must not go
+            # through the raising _git helper: 0 = clean, 1/2 = defect
+            # lines on stdout; anything else (128/129 fatal/usage)
+            # fails closed as an inspection error.
+            diff_check_proc = subprocess.run(
+                ["git", "diff", "--check"], cwd=resolved_root,
+                capture_output=True, text=True, timeout=60)
+            if diff_check_proc.returncode not in (0, 1, 2):
+                return _tool_error(
+                    "git inspection failed: git diff --check exited "
+                    f"{diff_check_proc.returncode}: "
+                    f"{diff_check_proc.stderr.strip()[:200]}")
+            diff_check = diff_check_proc.stdout
+            head = _git(resolved_root, "rev-parse", "HEAD").strip()
+            tree = _git(resolved_root,
+                        "rev-parse", "HEAD^{tree}").strip()
+        except OrchestratorError as exc:
+            return _tool_error(f"git inspection failed: {exc}")
+        dirty = [line for line in status.splitlines() if line.strip()]
+        if dirty:
+            conflicted = [line for line in dirty
+                          if line[:2] in _CONFLICT_PREFIXES]
+            if conflicted:
+                return _tool_error(
+                    "TIP_CONFLICTED: "
+                    f"{len(conflicted)} unmerged path(s): "
+                    + ", ".join(line[3:] for line in conflicted[:10]))
+            return _tool_error(
+                "TIP_DIRTY: "
+                f"{len(dirty)} uncommitted path(s): "
+                + ", ".join(line[3:] for line in dirty[:10]))
+        if diff_check.strip():
+            return _tool_error(
+                "TIP_DIFF_UNCLEAN: git diff --check reported "
+                "whitespace/conflict-marker defects: "
+                + "; ".join(diff_check.splitlines()[:10]))
+        for marker in _IN_FLIGHT_MARKERS:
+            if (git_dir / marker).exists():
+                return _tool_error(
+                    "TIP_REBASE_IN_PROGRESS: "
+                    f"{marker} present; verify the tip after the git "
+                    "operation completes")
+        base_sha = None
+        if base_ref:
+            try:
+                base_sha = _git(resolved_root, "rev-parse", "--verify",
+                                base_ref + "^{commit}").strip()
+            except OrchestratorError:
+                return _tool_error(
+                    "TIP_BASE_UNKNOWN: "
+                    f"base_ref {base_ref!r} does not resolve to a commit")
+        if declared_scope is not None:
+            missing = [rel for rel in declared_scope
+                       if not (resolved_root / rel).exists()]
+            if missing:
+                return _tool_error(
+                    "TIP_SCOPE_MISSING: declared_scope path(s) not in "
+                    "the tip tree: " + ", ".join(missing))
+        try:
+            snapshot_id = audit_snapshot.snapshot_id_of(resolved_root)
+        except Exception as exc:
+            return _tool_error(
+                f"snapshot failed: {type(exc).__name__}: {exc}")
+        checks: list[dict[str, Any]] | None = None
+        scope_level = "unresolved"
+        if run_checks:
+            try:
+                scope = scope_resolver.resolve(resolved_root, base_ref,
+                                               paths=declared_scope)
+            except Exception as exc:
+                return _tool_error(
+                    f"scope resolution failed: "
+                    f"{type(exc).__name__}: {exc}")
+            scope_level = str(scope.get("scope"))
+            checks = check_runner.run(resolved_root, scope)
+        checks_ok = (checks is None
+                     or all(entry.get("status") in ("passed", "skipped")
+                            for entry in checks))
+        sealed = evidence.seal({
+            "schema": evidence.SCHEMA,
+            "stage": "verify_tip",
+            "scope": scope_level,
+            "commit": head,
+            "tree_hash": tree,
+            "observed_at": evidence.now_iso(),
+            "checks": checks if checks is not None else [],
+            # a tip verification never grants ship authority; the ship
+            # gate re-derives authorization from its own evidence chain.
+            "authorized_to_ship": False,
+            "snapshot_id": snapshot_id,
+            "base_ref": base_ref,
+            "base_sha": base_sha,
+            "declared_scope": declared_scope,
+            "run_checks": run_checks,
+            "ok": checks_ok,
+        })
+        artifact = (common_paths.get_state_dir(resolved_root)
+                    / "verify-tip" / f"{head[:12]}.evidence.json")
+        try:
+            evidence.write_to(artifact, sealed)
+        except OSError as exc:
+            return _tool_error(f"EVIDENCE_WRITE_FAILED: {exc}")
+        if not checks_ok:
+            failed = sum(1 for entry in checks or []
+                         if entry.get("status") == "failed")
+            return _tool_error(
+                "TIP_CHECKS_FAILED: "
+                f"{failed} check(s) failed; failure evidence sealed at "
+                f"{artifact}")
+        if checks is None:
+            check_summary = "checks not run"
+        else:
+            passed = sum(1 for entry in checks
+                         if entry.get("status") == "passed")
+            check_summary = f"checks {passed}/{len(checks)} passed"
+        payload = {"root": str(resolved_root),
+                   "head": head,
+                   "tree_hash": tree,
+                   "snapshot_id": snapshot_id,
+                   "base_ref": base_ref,
+                   "base_sha": base_sha,
+                   "declared_scope": declared_scope,
+                   "run_checks": run_checks,
+                   "checks": checks,
+                   "ok": True,
+                   "authorized_to_ship": False,
+                   "evidence_sha256": sealed["evidence_sha256"],
+                   "evidence_path": str(artifact),
+                   "response": (
+                       f"tip {head[:12]} verified in place: clean tree; "
+                       f"snapshot {snapshot_id[:12]}; {check_summary}; "
+                       f"evidence {sealed['evidence_sha256'][:12]} "
+                       "sealed")}
         return _tool_ok(payload)
     except Exception as exc:
         return _tool_error(f"{type(exc).__name__}: {exc}")
@@ -1129,7 +1395,8 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
 
 TOOL_SPECS: list[dict[str, Any]] = [
     ASHA_PLAN_DAG_SPEC, ASHA_RUN_SPEC_SPEC, ASHA_STATUS_SPEC,
-    ASHA_GET_SURGICAL_CONTEXT_SPEC, ASHA_DISPATCH_TASK_SPEC]
+    ASHA_GET_SURGICAL_CONTEXT_SPEC, ASHA_DISPATCH_TASK_SPEC,
+    ASHA_VERIFY_TIP_SPEC]
 
 
 TOOL_HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
@@ -1138,6 +1405,7 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "asha_status": asha_status,
     "asha_get_surgical_context": asha_get_surgical_context,
     "asha_dispatch_task": asha_dispatch_task,
+    "asha_verify_tip": asha_verify_tip,
 }
 
 
@@ -1268,9 +1536,84 @@ def serve(stdin: TextIO | None = None, stdout: TextIO | None = None,
     return 0
 
 
-def main() -> int:
-    """Entry point (script or `python -m asha.mcp_server`)."""
-    return serve()
+_CLI_USAGE = (
+    "usage: asha-mcp                 serve stdio JSON-RPC (default)\n"
+    "       asha-mcp TOOL [k=v ...] [PATH]\n"
+    "                               one-shot tool call; a bare PATH maps\n"
+    "                               to root=PATH when root is not given\n"
+    "exit:  0 tool ok / 1 tool refused (isError) / 2 usage error")
+
+
+def _coerce_scalar(value: str) -> Any:
+    """One-shot CLI value coercion: only unambiguous booleans convert;
+    everything else stays a string (schemas carry no numeric args)."""
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    return value
+
+
+def _parse_tool_argv(tokens: list[str]) -> dict[str, Any]:
+    """One-shot argument grammar: `key=value` pairs plus ONE optional
+    bare positional path mapped to `root` (the exact friction point
+    logged in the Detailist run: a bare positional raised ValueError in
+    every ad-hoc driver). Ambiguity fails closed with a usage error
+    instead of guessing."""
+    arguments: dict[str, Any] = {}
+    positionals: list[str] = []
+    for token in tokens:
+        if "=" in token:
+            key, _, value = token.partition("=")
+            if not key:
+                raise ValueError(f"invalid argument {token!r}: empty key")
+            if key in arguments:
+                raise ValueError(f"duplicate argument: {key}")
+            arguments[key] = _coerce_scalar(value)
+        else:
+            positionals.append(token)
+    if positionals:
+        if "root" in arguments:
+            raise ValueError(
+                "ambiguous repository: bare positional path combined "
+                "with root=...; give exactly one")
+        if len(positionals) > 1:
+            raise ValueError("unexpected extra positional token(s): "
+                             + " ".join(positionals[1:]))
+        arguments["root"] = positionals[0]
+    return arguments
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Entry point (script or `python -m asha.mcp_server`).
+
+    No arguments: stdio JSON-RPC server (unchanged transport contract).
+    `TOOL [k=v ...] [PATH]`: one-shot tool call -- the tool's text
+    content prints on stdout as ONE line; exit 0 (ok), 1 (tool refused,
+    isError), 2 (usage error: unknown tool, malformed/ambiguous
+    arguments)."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv:
+        return serve()
+    if argv[0] in ("-h", "--help"):
+        print(_CLI_USAGE)
+        return 0
+    name = argv[0]
+    if name not in TOOL_HANDLERS:
+        print(f"mcp: unknown tool: {name}", file=sys.stderr)
+        print(_CLI_USAGE, file=sys.stderr)
+        return 2
+    try:
+        arguments = _parse_tool_argv(argv[1:])
+    except ValueError as exc:
+        print(f"mcp: {exc}", file=sys.stderr)
+        print(_CLI_USAGE, file=sys.stderr)
+        return 2
+    result = TOOL_HANDLERS[name](arguments)
+    content = result.get("content") or []
+    text = content[0].get("text", "") if content else ""
+    print(text)
+    return 1 if result.get("isError") else 0
 
 
 if __name__ == "__main__":

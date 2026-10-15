@@ -96,8 +96,11 @@ def evidence_path(root: Path) -> Path:
     return common_paths.get_evidence_dir(Path(root)) / EVIDENCE_NAME
 
 
-def write(root: Path, sealed: dict) -> Path:
-    path = evidence_path(root)
+def write_to(path: Path, sealed: dict) -> Path:
+    """Atomic sealed-artifact write to an explicit path (same fsync +
+    os.replace contract as write(); used by callers that seal per-tip
+    artifacts outside the single ship-evidence slot, e.g.
+    asha_verify_tip)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     data = (json.dumps(sealed, indent=2, sort_keys=True,
                        ensure_ascii=False) + '\n').encode('utf-8')
@@ -112,6 +115,10 @@ def write(root: Path, sealed: dict) -> Path:
         if os.path.exists(tmp):
             os.unlink(tmp)
     return path
+
+
+def write(root: Path, sealed: dict) -> Path:
+    return write_to(evidence_path(root), sealed)
 
 
 def read(root: Path) -> dict | None:

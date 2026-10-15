@@ -6,6 +6,9 @@ NO policy: every semantic field below is copied verbatim from
 Commands and flags
 ------------------
     asha [--root PATH] [--paths PATH ...] [--json] [--no-execute]
+    asha status [PATH] [--root PATH] [--json]
+        read-only tip facts (MCP ``asha_status`` delegate); a bare
+        positional PATH maps to the repository root
     asha run --spec FILE [--apply] [--keep-worktrees]
         legacy scheduler CLI -- passes through to ``asha.scheduler.main``
         unchanged (first positional token ``run`` selects it).
@@ -47,7 +50,7 @@ from .classifier import classify_task, governance_profile
 from .governance.dag import run_workers_dag
 from .governance.worker_execution import run_worker_in_worktree, verify_worker_evidence
 from .integrator import IntegrationResult, TreeIntegrator
-from .mcp_server import _dispatch_context, _fast_path_enabled
+from .mcp_server import _dispatch_context, _fast_path_enabled, asha_status
 from .replay import parse_evidence, verify_bytes, verify_record
 from .router import RuntimeMode, route
 from .types import OrchestratorError
@@ -373,6 +376,42 @@ def _maybe_write_ui(args: Any, payload: dict[str, Any]) -> None:
         print(f'Asha: report write failed: {exc}', file=sys.stderr)
 
 
+def _status(argv: list[str]) -> int:
+    """`asha status [PATH]` -- read-only tip facts (delegate of the MCP
+    `asha_status` tool). A bare positional path maps to the repository
+    root; `--root` stays for explicit callers; giving both is a usage
+    error (never a guess). The stdout contract: the deterministic
+    `response` one-liner, or exactly one JSON document with --json."""
+    parser = argparse.ArgumentParser(
+        prog='asha status',
+        description='Read-only repository tip facts (HEAD, porcelain '
+                    'status, worktrees, control lock) delegated to the '
+                    'MCP asha_status tool.')
+    parser.add_argument('path', nargs='?', default=None,
+                        help='repository root (positional; same as '
+                             '--root)')
+    parser.add_argument('--root', default=None,
+                        help='repository root (default: cwd)')
+    parser.add_argument('--json', action='store_true', dest='as_json',
+                        help='emit exactly one JSON document on stdout')
+    args = parser.parse_args(argv)
+    if args.path and args.root:
+        parser.error('give the repository either as the positional '
+                     'path or via --root, not both')
+    result = asha_status({'root': args.root or args.path or '.'})
+    text = result['content'][0]['text']
+    if result['isError']:
+        print('Asha: status failed: ' + text, file=sys.stderr)
+        return EXIT_ERROR
+    payload = json.loads(text)
+    if args.as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True,
+                         ensure_ascii=False))
+    else:
+        print(payload['response'])
+    return EXIT_OK
+
+
 def _inspect(argv: list[str]) -> int:
     """`asha inspect FILE` -- read an existing artifact and render the
     HTML report. Strictly passive: no git, no AST, no governance calls;
@@ -493,6 +532,8 @@ def main(argv: list[str] | None = None) -> int:
     command = _first_positional(argv)
     if command == 'run':
         return run_spec_cmd(argv)
+    if command == 'status':
+        return _status(argv[1:])
     if command == 'inspect':
         return _inspect(argv[1:])
 
