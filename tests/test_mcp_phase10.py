@@ -205,7 +205,10 @@ def test_verify_stack_refusals(tmp_path: Path) -> None:
 def test_verify_stack_registered_as_seventh_tool(tmp_path: Path) -> None:
     assert "asha_verify_stack" in server.TOOL_HANDLERS
     names = [tool["name"] for tool in server.TOOL_SPECS]
-    assert len(names) == 7
+    # Phase 11 added the unified `asha` facade as the #1 entrypoint;
+    # the seven specialized tools (incl. verify_stack) stay intact.
+    assert len(names) == 8
+    assert names[0] == "asha"
     assert "asha_verify_stack" in names
     one_shot = subprocess.run(
         [PY, "-m", "asha.mcp_server", "asha_verify_stack",

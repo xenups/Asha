@@ -157,3 +157,20 @@ or conflicted tree is refused immediately (`TIP_DIRTY`,
 violation) triggers `git reset --hard <pre_head>` + `git clean -fd`
 back to the exact pre-execution state — zero unsealed residue. Success
 seals digest-bound evidence with `authorized_to_ship: false`.
+
+## 8. Phase 11: unified `asha` entrypoint (one command, one tool)
+
+The unified `asha` MCP tool (registered first, #1 entrypoint) auto-routes
+with strict precedence `cmd` > `branches` > `target` > zero-config —
+same handlers, same fail-closed contracts. The CLI mirrors each flow:
+
+```bash
+asha /path/to/repo          # zero-config: status + sealed tip evidence when
+                            # clean; dirty -> ready_to_push: false (TIP_DIRTY)
+asha --verify               # in-place tip verification, run_checks=True
+asha --stack b1 b2 b3 --base origin/dev
+asha --context app.py:foo app2.py:bar
+asha --exec "pytest -q"     # in_place_atomic + auto "@diff" scope + rollback
+asha-mcp /path/to/repo      # bare path routes to the unified tool
+# exit codes: 0 ok / 1 refused-or-failed / 2 usage error
+```

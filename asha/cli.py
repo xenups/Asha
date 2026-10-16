@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -50,7 +51,14 @@ from .classifier import classify_task, governance_profile
 from .governance.dag import run_workers_dag
 from .governance.worker_execution import run_worker_in_worktree, verify_worker_evidence
 from .integrator import IntegrationResult, TreeIntegrator
-from .mcp_server import _dispatch_context, _fast_path_enabled, asha_status
+from .mcp_server import (
+    _dispatch_context,
+    _fast_path_enabled,
+    asha_asha,
+    asha_status,
+    asha_verify_stack,
+    asha_verify_tip,
+)
 from .replay import parse_evidence, verify_bytes, verify_record
 from .router import RuntimeMode, route
 from .types import OrchestratorError
@@ -376,6 +384,115 @@ def _maybe_write_ui(args: Any, payload: dict[str, Any]) -> None:
         print(f'Asha: report write failed: {exc}', file=sys.stderr)
 
 
+_UNIFIED_FLAGS = ('--verify', '--stack', '--context', '--exec')
+
+
+def _emit_unified(result: dict[str, Any], as_json: bool) -> int:
+    """Phase 11 stdout contract for the one-command forms: exactly one
+    JSON document with --json, otherwise the payload `response` line.
+    Exit: 0 tool ok / 1 tool refused / 2 usage error."""
+    content = result.get('content') or []
+    text = content[0].get('text', '') if content else ''
+    payload: Any = None
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        pass
+    if as_json:
+        print(text)
+    elif isinstance(payload, dict):
+        print(payload.get('response') or text)
+    else:
+        print(text)
+    # 0 = tool ok / 1 = tool refused or routed run failed / 2 = usage
+    # error (the usage errors above return EXIT_ERROR before this).
+    exit_code = EXIT_VALIDATION_FAILED if result.get('isError') else EXIT_OK
+    # A routed operation that ran but FAILED/unhealthy is a failed run
+    # for scripts (exit 1); the refusal path above already exits 1.
+    if (exit_code == EXIT_OK and isinstance(payload, dict)
+            and (payload.get('state') == 'FAILED'
+                 or payload.get('ok') is False
+                 or payload.get('stack_healthy') is False)):
+        exit_code = EXIT_VALIDATION_FAILED
+    return exit_code
+
+
+def _unified_cli(argv: list[str]) -> int:
+    """Phase 11 one-command forms, all delegating to the SAME MCP
+    handlers as the unified `asha` tool (one facade, no second logic):
+
+        asha PATH                       zero-config status + tip seal
+        asha --verify [PATH] [--base R] in-place tip verification (checks)
+        asha --stack B1 [B2 ...] [--base R]
+        asha --context FILE:SYMBOL [FILE:SYMBOL ...]
+        asha --exec CMD... [--base R]   atomic in-place governed command
+
+    Multiple `--exec` tokens are taken verbatim as the argv list; a
+    single token is split with shlex (quoted `--exec "pytest -q"`)."""
+    as_json = '--json' in argv
+    tokens = [token for token in argv if token != '--json']
+    base_ref: str | None = None
+    rest: list[str] = []
+    index = 0
+    while index < len(tokens):
+        if tokens[index] == '--base':
+            if index + 1 >= len(tokens):
+                print('Asha: --base requires a ref', file=sys.stderr)
+                return EXIT_ERROR
+            base_ref = tokens[index + 1]
+            index += 2
+            continue
+        rest.append(tokens[index])
+        index += 1
+    if not rest:
+        print('Asha: unified invocation requires a flag or path',
+              file=sys.stderr)
+        return EXIT_ERROR
+    flag, args = rest[0], rest[1:]
+    scope_token = '@diff' if not base_ref else f'@diff:{base_ref}'
+    if flag in _UNIFIED_FLAGS:
+        if flag == '--verify':
+            if len(args) > 1:
+                print('Asha: --verify takes at most one PATH',
+                      file=sys.stderr)
+                return EXIT_ERROR
+            result = asha_verify_tip({
+                'root': args[0] if args else '.', 'base_ref': base_ref,
+                'run_checks': True, 'declared_scope': [scope_token]})
+        elif flag == '--stack':
+            if not args or not all(args):
+                print('Asha: --stack requires branch names',
+                      file=sys.stderr)
+                return EXIT_ERROR
+            result = asha_verify_stack(
+                {'root': '.', 'branches': args, 'base_ref': base_ref})
+        elif flag == '--context':
+            if not args:
+                print('Asha: --context requires FILE:SYMBOL '
+                      'selector(s)', file=sys.stderr)
+                return EXIT_ERROR
+            result = asha_asha({'root': '.', 'target': args})
+        else:   # --exec
+            if not args:
+                print('Asha: --exec requires a command', file=sys.stderr)
+                return EXIT_ERROR
+            cmd_argv = (shlex.split(args[0]) if len(args) == 1
+                        else list(args))
+            result = asha_asha({'root': '.', 'base_ref': base_ref,
+                                'cmd': cmd_argv})
+    elif os.path.isdir(os.path.expanduser(flag)):
+        if args:
+            print('Asha: unexpected extra token(s): ' + ' '.join(args),
+                  file=sys.stderr)
+            return EXIT_ERROR
+        result = asha_asha({'root': flag, 'base_ref': base_ref})
+    else:
+        print(f'Asha: unknown unified flag or path: {flag}',
+              file=sys.stderr)
+        return EXIT_ERROR
+    return _emit_unified(result, as_json)
+
+
 def _status(argv: list[str]) -> int:
     """`asha status [PATH]` -- read-only tip facts (delegate of the MCP
     `asha_status` tool). A bare positional path maps to the repository
@@ -536,6 +653,16 @@ def main(argv: list[str] | None = None) -> int:
         return _status(argv[1:])
     if command == 'inspect':
         return _inspect(argv[1:])
+    # Phase 11 one-command forms: only the four new flags and a bare
+    # existing-directory path route to the unified facade; every other
+    # token keeps the exact schema-v1 contract below (unknown flags
+    # still exit 2 through argparse).
+    if argv and argv[0] in _UNIFIED_FLAGS:
+        return _unified_cli(argv)
+    if (command is not None and command not in ('run', 'status',
+                                                'inspect')
+            and os.path.isdir(os.path.expanduser(command))):
+        return _unified_cli(argv)
 
     parser = argparse.ArgumentParser(
             prog='asha',

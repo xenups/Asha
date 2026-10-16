@@ -131,9 +131,17 @@ def test_stub_emission_reduces_t1_context(graph_env) -> None:
     assert sl.completeness == "COMPLETE"
     # K.6.1: emitted deps are signature stubs; the slice must be far
     # smaller than the pre-K.6.1 full-body serialization (148389 bytes
-    # measured in the frozen K.6 diagnostic). Bound: < 1/3 of that.
+    # measured in the frozen K.6 diagnostic).
+    # Calibration history: < 50000 was 1/3 of that figure; Phases 9-11
+    # legitimately grew the dependency closure (the unified `asha`
+    # facade reaches the surgical-context -> ast_indexer/codegraph
+    # machinery: 82 new stubs, 18459 bytes, all signatures), landing
+    # the measured slice at 65845 (~44% of full-body; stub-dominated,
+    # target body only 5992). Bound raised to 80000 (a ~22% headroom
+    # over the measured 65845) -- it still fails loudly if stubs ever
+    # degrade toward full-body serialization.
     emitted = len(sl.target_source) + sum(len(st.text) for st in sl.stubs)
-    assert emitted < 50000, emitted
+    assert emitted < 80000, emitted
 
 
 def test_reverse_forward_combined_keeps_required_t3_context(graph_env) -> None:

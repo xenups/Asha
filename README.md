@@ -12,9 +12,35 @@ never treated as safe**.
 - **stdlib only** — no LLM SDKs, no orchestration frameworks, no daemons
 - **hermetic workers** — each worker executes in its own detached worktree against an immutable base commit; the main tree is never mutated in place
 - **cryptographic evidence** — every completed worker seals `HEAD^{tree}`, observed file scope, and check results into tamper-evident `evidence.json`; integration re-verifies the seal before staging anything
-- **one MCP server, seven tools** — usable from any MCP client (Antigravity, Hermes, Claude Desktop, Cursor, Windsurf)
+- **one MCP server, eight tools** — start with the unified `asha` tool; the seven specialized tools stay fully available. Usable from any MCP client (Antigravity, Hermes, Claude Desktop, Cursor, Windsurf)
 
 ## Quickstart
+
+### One command, one tool (recommended)
+
+You do not need to know the tool boundaries. Invoke **`asha`** (MCP tool)
+or the same-named CLI forms and Asha routes deterministically from your
+inputs and the repository state — strict precedence
+`cmd` > `branches` > `target` > zero-config, never guessing:
+
+```bash
+# MCP: one tool, auto-routed
+asha(root=".")                                  # clean tree -> status + sealed pre-push tip evidence
+asha(cmd="pytest -q")                          # atomic in-place run, auto "@diff" scope, rollback on failure
+asha(branches=["feat1","feat2"], base_ref="origin/dev")   # ordered stack lineage verification
+asha(target=["app.py:foo", "app.py:bar"])      # batch surgical AST context
+
+# CLI: the same flows, one command each
+asha /path/to/repo          # zero-config: status + tip evidence when clean
+asha --verify               # in-place tip verification with checks, seals evidence
+asha --stack b1 b2 b3 --base origin/dev
+asha --context app.py:foo app2.py:bar
+asha --exec "pytest -q"     # governed atomic in-place command
+asha-mcp /path/to/repo      # bare path routes to the unified tool (exit 0 ok / 1 refused / 2 usage)
+```
+
+A dirty tree is never a failure of status reading: you get the exact
+changed scope and `ready_to_push: false (TIP_DIRTY)`.
 
 ```bash
 pip install -e .          # editable install; registers the console scripts
@@ -33,6 +59,13 @@ asha --root <path> run --spec <spec.json> [--apply]   # scheduler CLI
 asha-mcp                                              # stdio JSON-RPC MCP server
 asha-mcp TOOL [k=v ...] [PATH]                        # one-shot tool call; bare
                                                       # PATH maps to root=PATH
+asha-mcp PATH                                         # bare directory routes to the
+                                                      # unified 'asha' zero-config tool
+asha PATH                                             # unified zero-config check
+asha --verify [PATH] [--base REF]                     # tip verification (checks on)
+asha --stack B1 [B2 ...] [--base REF]                 # ordered stack verification
+asha --context FILE:SYMBOL [FILE:SYMBOL ...]         # batch surgical context
+asha --exec CMD... [--base REF]                       # atomic in-place governed run
 .claude/commands/asha.md   →  /asha                   # thin passthrough
 ```
 
@@ -126,6 +159,7 @@ negotiated verbatim when the client requests it.
 
 | Tool | Behavior |
 | --- | --- |
+| `asha(root, cmd?, target?, branches?, base_ref?, run_checks?)` | **#1 recommended entrypoint** (Phase 11): deterministic intent auto-routing with strict precedence `cmd` > `branches` > `target` > zero-config, delegating to the same specialized handlers below — `cmd` runs `in_place_atomic` with auto `"@diff"` scope and rollback; `branches` verifies the ordered stack; `target` (`"file.py:Symbol"`, single/list/comma-separated, `TARGET_FORMAT_INVALID` fail-closed) extracts surgical context; zero-config returns the status summary and seals pre-push tip evidence when the tree is clean (dirty → `ready_to_push: false (TIP_DIRTY)`, never a status failure). |
 | `asha_status(root)` | Git repository cleanliness, current HEAD SHA, active worktree tracking, and lock detection — plus a deterministic, always non-empty `response` one-liner derived only from git facts (`tip <sha12>: clean\|dirty (N path(s)); worktrees X active, Y orphaned; control lock held\|free`), stable across every state: clean, dirty, detached HEAD, mid-rebase, orphaned worktrees. The `root` argument also accepts a bare positional path from the CLI (`asha status /path/to/repo`, `asha-mcp asha_status /path/to/repo`). |
 | `asha_plan_dag(root, spec_content)` | Static AST dependency inspection, topological generations, write/read collision analysis, and safety classification (`safe` vs `uncertain`). Never executes anything. |
 | `asha_run_spec(root, spec_content, apply)` | `apply=false`: simulation only — DAG rows as `SIMULATED_DONE`, zero subprocesses, zero side effects. `apply=true`: isolated execution in dedicated Git worktrees, cryptographic evidence collection (`HEAD^{tree}`), per-worker states and evidence paths. Atomic branch integration is a separate governed step (`asha --root … run --apply`) so execution evidence never doubles as ship authorization; failure rolls back with zero residue. |
@@ -273,8 +307,9 @@ through the latest completed phase:
 | Phase 8 | Full stdio MCP orchestration (initial 5-tool server surface, JSON-RPC over stdin/stdout) | Complete |
 | Phase 9 | Real-world telemetry hardening: positional CLI paths, deterministic `status` response, and in-place stack tip verification (`asha_verify_tip`) — driven by the Detailist stacked-PR production run (#222-#230) | Complete |
 | Phase 10 | Stack-native execution: `asha_verify_stack` multi-branch lineage, `"@diff"` auto-derived scope, batch surgical context, and atomic `in_place_atomic` dispatch — 7-tool server surface, v0.3.0 | Complete |
+| Phase 11 | Unified zero-friction entrypoint: `asha` auto-routing MCP tool (#1) plus one-command CLI (`PATH`, `--verify`, `--stack`, `--context`, `--exec`) — 8-tool surface, v0.4.0 | Complete |
 
-Verified baseline: **919 passed, 0 failed** (CPython 3.11+, stdlib
+Verified baseline: **944 passed, 0 failed** (CPython 3.11+, stdlib
 only; green on both Ubuntu/Debian and Windows — skip counts are
 platform-dependent and never mask a failure).
 
@@ -287,7 +322,7 @@ platform-dependent and never mask a failure).
 | Scope resolution | S0–S4 blast-radius classification of every change set; checks are selected by scope, never skipped. |
 | Evidence sealing | Tamper-resistant `evidence.json`: commit, `HEAD^{tree}`, observed scope, check results; workers always seal `authorized_to_ship: false`. |
 | Merge law | Worker green proves only its own tree; the integration gate re-runs the full matrix against the merged tree. |
-| Verified test baseline | **919 passed, 0 failed** (CPython 3.11+, stdlib only; Ubuntu/Debian + Windows CI). |
+| Verified test baseline | **944 passed, 0 failed** (CPython 3.11+, stdlib only; Ubuntu/Debian + Windows CI). |
 
 Fail-closed everywhere: a missing fact defers or blocks the run; it never
 unlocks one. `push` is not `done`, and a commit is not ship authorization.

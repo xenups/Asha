@@ -74,7 +74,7 @@ from .worktree import _git
 SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18",
                                "2025-03-26", "2024-11-05"]
 DEFAULT_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]
-SERVER_INFO = {"name": "asha-orchestrator", "version": "0.3.0"}
+SERVER_INFO = {"name": "asha-orchestrator", "version": "0.4.0"}
 CAPABILITIES: dict[str, Any] = {"tools": {}}
 
 PARSE_ERROR = -32700
@@ -2031,13 +2031,202 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
         return _tool_error(f"{type(exc).__name__}: {exc}")
 
 
+# -- Phase 11: unified `asha` auto-routing facade -------------------------
+ASHA_SPEC: dict[str, Any] = {
+    "name": "asha",
+    "description": (
+        "#1 recommended entrypoint: one tool, deterministic auto-routing "
+        "over your inputs (strict precedence cmd > branches > target > "
+        "zero-config, never guessing). `cmd` executes atomically in "
+        "place with automatic \"@diff\" scope and clean rollback on "
+        "failure; `branches` verifies an ordered branch stack; `target` "
+        "(\"file.py:Symbol\" selectors, single/list/comma-separated) "
+        "extracts surgical AST context; with only `root` it returns the "
+        "deterministic status summary and -- when the tree is clean -- "
+        "seals pre-push tip evidence automatically (a dirty tree "
+        "reports ready_to_push: false (TIP_DIRTY) without failing). "
+        "All seven specialized tools (asha_status, asha_verify_tip, "
+        "asha_verify_stack, asha_dispatch_task, "
+        "asha_get_surgical_context, asha_plan_dag, asha_run_spec) stay "
+        "fully available for direct use."),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "root": {"type": "string", "default": ".",
+                     "description": "repository path ('.' = cwd)"},
+            "cmd": {"anyOf": [{"type": "string"},
+                              {"type": "array",
+                               "items": {"type": "string"}}],
+                    "description": "command to execute atomically in "
+                                   "place (string or argv list) with "
+                                   "automatic \"@diff\" scope"},
+            "target": {"anyOf": [{"type": "string"},
+                                 {"type": "array",
+                                  "items": {"type": "string"}}],
+                       "description": "'file.py:Symbol' selector(s): "
+                                      "single string, list, or "
+                                      "comma-separated"},
+            "branches": {"type": "array", "items": {"type": "string"},
+                         "description": "ordered (bottom-to-top) branch "
+                                        "stack to verify"},
+            "base_ref": {"type": "string",
+                         "description": "optional base ref (e.g. "
+                                        "origin/dev or origin/main)"},
+            "run_checks": {"type": "boolean", "default": False,
+                           "description": "run configured checks during "
+                                          "zero-config tip verification"},
+        },
+        "additionalProperties": False,
+    },
+}
+
+
+def _payload_text(result: dict[str, Any]) -> dict[str, Any]:
+    """Parse a tool result's JSON text content (fail-closed: a
+    non-JSON body becomes an explicit raw marker, never an exception)."""
+    content = result.get("content") or []
+    text = content[0].get("text", "") if content else ""
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        return {"raw": text}
+    return payload if isinstance(payload, dict) else {"raw": text}
+
+
+def _unified_diff_token(base_ref: str | None) -> str:
+    """Auto-scope token for the unified facade: \"@diff\" anchored on
+    the tracked base, or \"@diff:<base_ref>\" when one is given."""
+    return "@diff" if not base_ref else f"@diff:{base_ref}"
+
+
+def _parse_unified_target(raw: Any) -> list[dict[str, str]] | str:
+    """'file.py:Symbol' selector grammar: single string, list of
+    strings, or comma-separated string -> batch {target_file,
+    target_symbol} objects. Anything not in `file:symbol` form fails
+    closed as TARGET_FORMAT_INVALID (never a guess)."""
+    if isinstance(raw, str):
+        items = [piece for piece in raw.split(",")]
+    elif isinstance(raw, list) and all(isinstance(item, str) and item
+                                       for item in raw):
+        items = [piece for item in raw for piece in item.split(",")]
+    else:
+        return ("TARGET_FORMAT_INVALID: target must be a string or a "
+                "list of 'file.py:Symbol' strings")
+    pairs: list[dict[str, str]] = []
+    for item in items:
+        piece = item.strip()
+        if not piece:
+            continue
+        file_part, sep, symbol = piece.partition(":")
+        if not sep or not file_part.strip() or not symbol.strip():
+            return (f"TARGET_FORMAT_INVALID: {item!r} is not in "
+                    "'file.py:Symbol' form")
+        pairs.append({"target_file": file_part.strip(),
+                      "target_symbol": symbol.strip()})
+    if not pairs:
+        return ("TARGET_FORMAT_INVALID: no target selectors after "
+                "parsing")
+    return pairs
+
+
+def asha_asha(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Phase 11 unified facade: deterministic intent auto-routing
+    (strict order cmd -> branches -> target -> zero-config) that
+    delegates to the SAME specialized handlers -- one code path, no
+    duplicated logic. Never raises; never guesses; `authorized_to_ship`
+    stays false everywhere (delegation contract preserved)."""
+    try:
+        unknown = sorted(set(arguments) - {
+            "root", "cmd", "target", "branches", "base_ref",
+            "run_checks"})
+        if unknown:
+            return _tool_error("unknown field(s): " + ", ".join(unknown))
+        root = arguments.get("root", ".")
+        if not isinstance(root, str):
+            return _tool_error("root must be a string")
+        base_ref = arguments.get("base_ref")
+        if base_ref is not None and not isinstance(base_ref, str):
+            return _tool_error("base_ref must be a string")
+        run_checks = arguments.get("run_checks", False)
+        if not isinstance(run_checks, bool):
+            return _tool_error("run_checks must be a boolean")
+        cmd = arguments.get("cmd")
+        if cmd is not None:
+            if isinstance(cmd, str):
+                argv_list = [cmd] if cmd.strip() else []
+            elif isinstance(cmd, list) and all(
+                    isinstance(item, str) for item in cmd):
+                argv_list = [item for item in cmd if item]
+            else:
+                return _tool_error(
+                    "cmd must be a string or a list of strings")
+            if not argv_list:
+                return _tool_error(
+                    "cmd must be a non-empty string or list of strings")
+            return asha_dispatch_task({
+                "root": root, "id": "asha-unified", "cmd": argv_list,
+                "declared_scope": [_unified_diff_token(base_ref)],
+                "execution_mode": "in_place_atomic"})
+        branches = arguments.get("branches")
+        if branches is not None:
+            if (not isinstance(branches, list) or not branches
+                    or not all(isinstance(item, str) and item
+                               for item in branches)):
+                return _tool_error(
+                    "branches must be a non-empty list of strings")
+            return asha_verify_stack({
+                "root": root, "branches": list(branches),
+                "base_ref": base_ref})
+        target = arguments.get("target")
+        if target is not None:
+            pairs = _parse_unified_target(target)
+            if isinstance(pairs, str):
+                return _tool_error(pairs)
+            return asha_get_surgical_context({"repo_path": root,
+                                              "targets": pairs})
+        # Zero-config default: ALWAYS the deterministic status summary;
+        # a clean tree additionally seals pre-push tip evidence, a
+        # dirty tree reports readiness without failing status reads.
+        status_result = asha_status({"root": root})
+        if status_result.get("isError"):
+            return status_result
+        status = _payload_text(status_result)
+        if not status.get("clean"):
+            changed = list(status.get("status") or [])
+            status["ready_to_push"] = False
+            status["refusal"] = "TIP_DIRTY"
+            status["response"] = (
+                status.get("response", "")
+                + f"; ready_to_push=false (TIP_DIRTY): {len(changed)} "
+                "changed path(s); commit or stash before tip sealing")
+            return _tool_ok(status)
+        tip = asha_verify_tip({
+            "root": root, "base_ref": base_ref,
+            "run_checks": run_checks,
+            "declared_scope": [_unified_diff_token(base_ref)]})
+        payload = _payload_text(tip)
+        payload["status"] = {key: status.get(key)
+                             for key in ("root", "head", "clean",
+                                         "worktrees", "lock")}
+        if tip.get("isError"):
+            payload["ready_to_push"] = False
+            return _tool_error(json.dumps(payload, sort_keys=True))
+        payload["ready_to_push"] = True
+        payload["response"] = (
+            f"ready to push: {payload.get('response', '')}")
+        return _tool_ok(payload)
+    except Exception as exc:
+        return _tool_error(f"{type(exc).__name__}: {exc}")
+
+
 TOOL_SPECS: list[dict[str, Any]] = [
-    ASHA_PLAN_DAG_SPEC, ASHA_RUN_SPEC_SPEC, ASHA_STATUS_SPEC,
+    ASHA_SPEC, ASHA_PLAN_DAG_SPEC, ASHA_RUN_SPEC_SPEC, ASHA_STATUS_SPEC,
     ASHA_GET_SURGICAL_CONTEXT_SPEC, ASHA_DISPATCH_TASK_SPEC,
     ASHA_VERIFY_TIP_SPEC, ASHA_VERIFY_STACK_SPEC]
 
 
 TOOL_HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
+    "asha": asha_asha,
     "asha_plan_dag": asha_plan_dag,
     "asha_run_spec": asha_run_spec,
     "asha_status": asha_status,
@@ -2180,6 +2369,8 @@ _CLI_USAGE = (
     "       asha-mcp TOOL [k=v ...] [PATH]\n"
     "                               one-shot tool call; a bare PATH maps\n"
     "                               to root=PATH when root is not given\n"
+    "       asha-mcp PATH           bare existing directory routes to the\n"
+    "                               unified 'asha' zero-config tool\n"
     "exit:  0 tool ok / 1 tool refused (isError) / 2 usage error")
 
 
@@ -2259,12 +2450,27 @@ def main(argv: list[str] | None = None) -> int:
         print(_CLI_USAGE)
         return 0
     name = argv[0]
+    bare_path_root: str | None = None
     if name not in TOOL_HANDLERS:
-        print(f"mcp: unknown tool: {name}", file=sys.stderr)
-        print(_CLI_USAGE, file=sys.stderr)
-        return 2
+        # Phase 11: a bare existing directory routes to the unified
+        # `asha` tool (zero-config status + tip sealing). A directory
+        # is a deterministic filesystem fact, never a guess; any other
+        # unknown token keeps the exact usage-error contract.
+        if os.path.isdir(os.path.expanduser(name)):
+            name = "asha"
+            bare_path_root = argv[0]
+        else:
+            print(f"mcp: unknown tool: {name}", file=sys.stderr)
+            print(_CLI_USAGE, file=sys.stderr)
+            return 2
     try:
         arguments = _parse_tool_argv(argv[1:], name)
+        if bare_path_root is not None:
+            if "root" in arguments:
+                raise ValueError(
+                    "ambiguous repository: bare positional path "
+                    "combined with root=...; give exactly one")
+            arguments["root"] = bare_path_root
     except ValueError as exc:
         print(f"mcp: {exc}", file=sys.stderr)
         print(_CLI_USAGE, file=sys.stderr)
