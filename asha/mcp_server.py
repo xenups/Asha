@@ -62,7 +62,7 @@ from .ast_indexer import ImportFact, ModuleIndex, index_module
 from .classifier import classify_task, governance_profile
 from .codegraph import build_graph, closure, sym_node
 from .common import paths as common_paths
-from .conflict import ConflictManager, scope_status
+from .conflict import ConflictManager, covered, scope_status
 from .context_slicer import slice_context
 from .contracts.validation import validate_workers
 from .governance.dag import run_workers_dag
@@ -74,7 +74,7 @@ from .worktree import _git
 SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18",
                                "2025-03-26", "2024-11-05"]
 DEFAULT_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]
-SERVER_INFO = {"name": "asha-orchestrator", "version": "0.2.0"}
+SERVER_INFO = {"name": "asha-orchestrator", "version": "0.3.0"}
 CAPABILITIES: dict[str, Any] = {"tools": {}}
 
 PARSE_ERROR = -32700
@@ -410,6 +410,61 @@ _IN_FLIGHT_MARKERS = ("rebase-merge", "rebase-apply", "MERGE_HEAD",
                       "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG")
 
 
+def _inspect_tip(root: Path) -> tuple[str | None, Path | None, str, str]:
+    """Shared in-place tip inspection (Phase 10 reuse): clean-tree facts
+    for asha_verify_tip AND in-place atomic dispatch. Returns
+    (refusal, git_dir, head, tree); refusal is None on a clean tip, and
+    (refusal, None, "", "") whenever git inspection itself failed.
+    Order: unmerged paths -> dirty tree -> `git diff --check` defects ->
+    in-flight git operation. Pure read-only inspection: never mutates."""
+    try:
+        git_dir = Path(_git(root, "rev-parse", "--git-dir").strip())
+        if not git_dir.is_absolute():
+            git_dir = root / git_dir
+        status = _git(root, "status", "--porcelain")
+        # `git diff --check` exits NON-ZERO when it reports defects
+        # (1 or 2 depending on git version), so it must not go
+        # through the raising _git helper: 0 = clean, 1/2 = defect
+        # lines on stdout; anything else (128/129 fatal/usage)
+        # fails closed as an inspection error.
+        diff_check_proc = subprocess.run(
+            ["git", "diff", "--check"], cwd=root,
+            capture_output=True, text=True, timeout=60)
+        if diff_check_proc.returncode not in (0, 1, 2):
+            message = ("git inspection failed: git diff --check exited "
+                       f"{diff_check_proc.returncode}: "
+                       f"{diff_check_proc.stderr.strip()[:200]}")
+            return message, None, "", ""
+        diff_check = diff_check_proc.stdout
+        head = _git(root, "rev-parse", "HEAD").strip()
+        tree = _git(root, "rev-parse", "HEAD^{tree}").strip()
+    except OrchestratorError as exc:
+        return (f"git inspection failed: {exc}", None, "", "")
+    dirty = [line for line in status.splitlines() if line.strip()]
+    if dirty:
+        conflicted = [line for line in dirty
+                      if line[:2] in _CONFLICT_PREFIXES]
+        if conflicted:
+            return ("TIP_CONFLICTED: "
+                    f"{len(conflicted)} unmerged path(s): "
+                    + ", ".join(line[3:] for line in conflicted[:10]),
+                    None, "", "")
+        return ("TIP_DIRTY: "
+                f"{len(dirty)} uncommitted path(s): "
+                + ", ".join(line[3:] for line in dirty[:10]), None, "", "")
+    if diff_check.strip():
+        return ("TIP_DIFF_UNCLEAN: git diff --check reported "
+                "whitespace/conflict-marker defects: "
+                + "; ".join(diff_check.splitlines()[:10]), None, "", "")
+    for marker in _IN_FLIGHT_MARKERS:
+        if (git_dir / marker).exists():
+            message = ("TIP_REBASE_IN_PROGRESS: "
+                       f"{marker} present; verify the tip after the git "
+                       "operation completes")
+            return message, None, "", ""
+    return None, git_dir, head, tree
+
+
 def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
     """asha_verify_tip: in-place, fail-closed verification of the
     CURRENT working-tree tip for stacked-PR / multi-branch rebase
@@ -447,55 +502,19 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
                 return _tool_error(
                     "declared_scope must be a list of non-empty strings")
             declared_scope = list(declared_scope)
-        try:
-            git_dir = Path(_git(resolved_root,
-                                "rev-parse", "--git-dir").strip())
-            if not git_dir.is_absolute():
-                git_dir = resolved_root / git_dir
-            status = _git(resolved_root, "status", "--porcelain")
-            # `git diff --check` exits NON-ZERO when it reports defects
-            # (1 or 2 depending on git version), so it must not go
-            # through the raising _git helper: 0 = clean, 1/2 = defect
-            # lines on stdout; anything else (128/129 fatal/usage)
-            # fails closed as an inspection error.
-            diff_check_proc = subprocess.run(
-                ["git", "diff", "--check"], cwd=resolved_root,
-                capture_output=True, text=True, timeout=60)
-            if diff_check_proc.returncode not in (0, 1, 2):
-                return _tool_error(
-                    "git inspection failed: git diff --check exited "
-                    f"{diff_check_proc.returncode}: "
-                    f"{diff_check_proc.stderr.strip()[:200]}")
-            diff_check = diff_check_proc.stdout
-            head = _git(resolved_root, "rev-parse", "HEAD").strip()
-            tree = _git(resolved_root,
-                        "rev-parse", "HEAD^{tree}").strip()
-        except OrchestratorError as exc:
-            return _tool_error(f"git inspection failed: {exc}")
-        dirty = [line for line in status.splitlines() if line.strip()]
-        if dirty:
-            conflicted = [line for line in dirty
-                          if line[:2] in _CONFLICT_PREFIXES]
-            if conflicted:
-                return _tool_error(
-                    "TIP_CONFLICTED: "
-                    f"{len(conflicted)} unmerged path(s): "
-                    + ", ".join(line[3:] for line in conflicted[:10]))
-            return _tool_error(
-                "TIP_DIRTY: "
-                f"{len(dirty)} uncommitted path(s): "
-                + ", ".join(line[3:] for line in dirty[:10]))
-        if diff_check.strip():
-            return _tool_error(
-                "TIP_DIFF_UNCLEAN: git diff --check reported "
-                "whitespace/conflict-marker defects: "
-                + "; ".join(diff_check.splitlines()[:10]))
-        for marker in _IN_FLIGHT_MARKERS:
-            if (git_dir / marker).exists():
-                return _tool_error(
-                    "TIP_REBASE_IN_PROGRESS: "
-                    f"{marker} present; verify the tip after the git "
-                    "operation completes")
+        if declared_scope is not None:
+            # Phase 10 auto-scope: "@diff" / "@diff:<base_ref>" expand
+            # deterministically from git facts; protected governance
+            # paths (.github/, .jspace/) never enter implicitly, and an
+            # empty/unresolvable diff fails closed as SCOPE_AUTO_EMPTY.
+            resolved_scope, _auto_changed, auto_error = _resolve_auto(
+                resolved_root, declared_scope)
+            if auto_error is not None:
+                return _tool_error(auto_error)
+            declared_scope = resolved_scope
+        refusal, _git_dir, head, tree = _inspect_tip(resolved_root)
+        if refusal is not None:
+            return _tool_error(refusal)
         base_sha = None
         if base_ref:
             try:
@@ -588,6 +607,185 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
                        f"evidence {sealed['evidence_sha256'][:12]} "
                        "sealed")}
         return _tool_ok(payload)
+    except Exception as exc:
+        return _tool_error(f"{type(exc).__name__}: {exc}")
+
+
+# -- Phase 10: asha_verify_stack (ordered multi-branch lineage check) ------
+
+ASHA_VERIFY_STACK_SPEC: dict[str, Any] = {
+    "name": "asha_verify_stack",
+    "description": ("Verify an ordered stack of branches (bottom-to-top) "
+                    "against a base ref, in place, with zero worktrees: "
+                    "per-branch linear ancestry (merge-base == parent) "
+                    "plus re-verification of the sealed verify-tip "
+                    "evidence for every branch head. A non-linear link "
+                    "returns the exact deterministic recovery recipe "
+                    "`git rebase --onto <parent_sha> <merge_base> <B>`; "
+                    "missing/tampered evidence is reported per branch, "
+                    "never ignored. `stack_healthy` is true only when "
+                    "EVERY branch is linear AND sealed. Validation "
+                    "refusals: STACK_EMPTY, BRANCH_NOT_FOUND, "
+                    "BASE_REF_NOT_FOUND. Report codes: "
+                    "STACK_ANCESTRY_DRIFT, STACK_EVIDENCE_MISSING, "
+                    "STACK_EVIDENCE_TAMPERED. Never grants ship "
+                    "authority."),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "branches": {"type": "array",
+                         "items": {"type": "string"},
+                         "minItems": 1,
+                         "description": "Branch names ordered "
+                                        "bottom-to-top (stack[0] sits "
+                                        "on base_ref)."},
+            "base_ref": {"type": ["string", "null"],
+                         "description": "Anchor for the bottom branch "
+                                        "(e.g. origin/dev, origin/main). "
+                                        "Required: an unanchored bottom "
+                                        "is never assumed healthy."},
+            "root": {"type": "string", "default": ".",
+                     "description": ROOT_HELP},
+        },
+        "required": ["branches"],
+        "additionalProperties": False,
+    },
+}
+
+
+def asha_verify_stack(arguments: dict[str, Any]) -> dict[str, Any]:
+    """asha_verify_stack: read-only, deterministic stack lineage report.
+    Never raises; never mutates the repo; never spawns a worktree.
+    Validation refusals (STACK_EMPTY / BRANCH_NOT_FOUND /
+    BASE_REF_NOT_FOUND) are isError content; ancestry-drift and
+    evidence findings live INSIDE the ok-report as per-branch status
+    codes with stack_healthy=false."""
+    try:
+        unknown = sorted(set(arguments) - {"branches", "base_ref", "root"})
+        if unknown:
+            return _tool_error("unknown field(s): " + ", ".join(unknown))
+        root = arguments.get("root", ".")
+        if not isinstance(root, str):
+            return _tool_error("root must be a string")
+        root_path = Path(root).expanduser()
+        if not root_path.is_dir():
+            return _tool_error(
+                f"root does not exist or is not a directory: {root}")
+        resolved_root = root_path.resolve()
+        branches = arguments.get("branches")
+        if (not isinstance(branches, list) or not branches
+                or not all(isinstance(item, str) and item
+                           for item in branches)):
+            return _tool_error(
+                "STACK_EMPTY: branches must be a non-empty ordered list "
+                "of branch names (bottom-to-top)")
+        branches = list(branches)
+        base_ref = arguments.get("base_ref")
+        if base_ref is None:
+            return _tool_error(
+                "BASE_REF_NOT_FOUND: base_ref is required to anchor the "
+                "stack bottom (e.g. origin/dev, origin/main); an "
+                "unanchored stack is never assumed healthy")
+        if not isinstance(base_ref, str) or not base_ref:
+            return _tool_error(
+                "base_ref must be a non-empty string (or omitted/null "
+                "only to trigger the BASE_REF_NOT_FOUND refusal)")
+
+        def _resolve(ref: str) -> str | None:
+            try:
+                return _git(resolved_root, "rev-parse", "--verify",
+                            ref + "^{commit}").strip()
+            except OrchestratorError:
+                return None
+
+        base_sha = _resolve(base_ref)
+        if base_sha is None:
+            return _tool_error(
+                f"BASE_REF_NOT_FOUND: {base_ref!r} does not resolve to "
+                "a commit")
+        missing = [ref for ref in branches if _resolve(ref) is None]
+        if missing:
+            return _tool_error(
+                "BRANCH_NOT_FOUND: ref(s) do not resolve to a commit: "
+                + ", ".join(missing))
+
+        state_dir = common_paths.get_state_dir(resolved_root)
+        rows: list[dict[str, Any]] = []
+        for index, branch in enumerate(branches):
+            parent_ref = base_ref if index == 0 else branches[index - 1]
+            head_sha = _resolve(branch)
+            parent_sha = _resolve(parent_ref)
+            assert head_sha is not None and parent_sha is not None
+            try:
+                merge_base = _git(resolved_root, "merge-base", branch,
+                                  parent_ref).strip()
+            except OrchestratorError:
+                merge_base = None
+            is_linear = merge_base == parent_sha
+            recipe = None
+            if not is_linear and merge_base is not None:
+                recipe = (f"git rebase --onto {parent_sha} "
+                          f"{merge_base} {branch}")
+            artifact = (state_dir / "verify-tip"
+                        / f"{head_sha[:12]}.evidence.json")
+            evidence_state = "missing"
+            if artifact.is_file():
+                try:
+                    sealed = json.loads(
+                        artifact.read_text(encoding="utf-8"))
+                    digest_ok = (
+                        isinstance(sealed, dict)
+                        and evidence.compute_digest(sealed)
+                        == sealed.get("evidence_sha256"))
+                except (OSError, ValueError):
+                    digest_ok = False
+                evidence_state = "verified" if digest_ok else "tampered"
+            if not is_linear:
+                status = "STACK_ANCESTRY_DRIFT"
+            elif evidence_state == "missing":
+                status = "STACK_EVIDENCE_MISSING"
+            elif evidence_state == "tampered":
+                status = "STACK_EVIDENCE_TAMPERED"
+            else:
+                status = None
+            rows.append({
+                "branch": branch,
+                "parent_ref": parent_ref,
+                "head_sha": head_sha,
+                "parent_sha": parent_sha,
+                "merge_base": merge_base,
+                "is_linear": is_linear,
+                "rebase_recipe": recipe,
+                "evidence": evidence_state,
+                "status": status,
+            })
+        linear_count = sum(1 for row in rows if row["is_linear"])
+        sealed_count = sum(1 for row in rows
+                           if row["evidence"] == "verified")
+        stack_healthy = all(row["is_linear"]
+                            and row["evidence"] == "verified"
+                            for row in rows)
+        total = len(rows)
+        if stack_healthy:
+            response = (f"stack {total} branch(es): {total}/{total} "
+                        f"linear with sealed evidence -- healthy")
+        else:
+            codes = sorted({row["status"] for row in rows
+                            if row["status"]})
+            response = (f"stack {total} branch(es): {linear_count}/"
+                        f"{total} linear, {sealed_count}/{total} sealed "
+                        f"-- UNHEALTHY: {', '.join(codes)}")
+        payload = {
+            "root": str(resolved_root),
+            "base_ref": base_ref,
+            "base_sha": base_sha,
+            "stack_healthy": stack_healthy,
+            "branches": rows,
+            "response": response,
+        }
+        return _tool_ok(payload)
+    except ValueError as exc:
+        return _tool_error(str(exc))
     except Exception as exc:
         return _tool_error(f"{type(exc).__name__}: {exc}")
 
@@ -1013,8 +1211,25 @@ ASHA_GET_SURGICAL_CONTEXT_SPEC: dict[str, Any] = {
                                              "'Class.method' for methods)."},
             "repo_path": {"type": "string", "default": ".",
                           "description": ROOT_HELP},
+            "targets": {"type": "array",
+                        "items": {"type": "object",
+                                  "properties": {
+                                      "target_file": {"type": "string"},
+                                      "target_symbol": {"type": "string"},
+                                  },
+                                  "required": ["target_file",
+                                               "target_symbol"],
+                                  "additionalProperties": False},
+                        "description": "Phase 10 batch mode: slice many "
+                                       "symbols with ONE AST index "
+                                       "build. Either give these OR the "
+                                       "single target_file/target_symbol "
+                                       "(never both); single mode is "
+                                       "byte-identical to before."},
         },
-        "required": ["target_file", "target_symbol"],
+        # Either (target_file + target_symbol) or `targets`; the handler
+        # enforces exactly one of the two forms (fail-closed on mixing).
+        "required": [],
         "additionalProperties": False,
     },
 }
@@ -1048,6 +1263,23 @@ ASHA_DISPATCH_TASK_SPEC: dict[str, Any] = {
                        "description": "Task metadata only: never "
                                       "executed, never logged to "
                                       "telemetry."},
+            "execution_mode": {"type": "string",
+                               "enum": ["worktree", "in_place_atomic"],
+                               "default": "worktree",
+                               "description": "Phase 10: 'worktree' "
+                                              "(default, existing "
+                                              "behavior) isolates the "
+                                              "worker in a detached "
+                                              "git worktree; "
+                                              "'in_place_atomic' runs "
+                                              "cmd on the CURRENT branch "
+                                              "tip inside the caller's "
+                                              "tree, refusing a dirty "
+                                              "tree and rolling back "
+                                              "with git reset --hard + "
+                                              "git clean -fd on ANY "
+                                              "failure (scope violation, "
+                                              "cmd failure, timeout)."},
             "root": {"type": "string", "default": ".",
                      "description": ROOT_HELP},
         },
@@ -1112,12 +1344,20 @@ def _import_candidates(root: Path, consumer: str,
 
 def _index_reachable(root: Path, start_rel: str
                      ) -> tuple[ModuleIndex, ...]:
-    """Index the start file plus every repo module reachable through
-    its import facts (lexically, BFS, visited-set, excluded dirs
-    skipped). Bounded by the repo's own import graph."""
+    """Single-start convenience wrapper over _index_from."""
+    return _index_from(root, (start_rel,))
+
+
+def _index_from(root: Path, starts: tuple[str, ...]
+                ) -> tuple[ModuleIndex, ...]:
+    """Index every start file plus every repo module reachable through
+    their import facts (lexically, ONE shared BFS visited-set, excluded
+    dirs skipped) -- the AST index is built exactly once per call even
+    for batch surgical-context targets. Bounded by the repo's own
+    import graph."""
     visited: set[str] = set()
     ordered: list[ModuleIndex] = []
-    queue: list[str] = [start_rel]
+    queue: list[str] = list(starts)
     while queue:
         rel = queue.pop(0)
         if rel in visited:
@@ -1139,21 +1379,167 @@ def _index_reachable(root: Path, start_rel: str
     return tuple(ordered)
 
 
+# Phase 10 -- git-diff auto-scope. Protected governance paths are never
+# UNLOCKED implicitly by a "@diff" expansion: they enter scope only via
+# an explicit declaration (which scope rules still evaluate).
+_AUTO_PROTECTED = (".github/", ".jspace/")
+
+
+def _is_auto(entry: str) -> bool:
+    """True for the auto-scope sentinels "@diff" and "@diff:<base_ref>"."""
+    return entry == "@diff" or entry.startswith("@diff:")
+
+
+def _auto_diff_files(root: Path, token: str) -> tuple[list[str], str | None]:
+    """Deterministic expansion of one auto-scope token to repo-relative
+    files: `git diff --name-only <base>...HEAD`. Bare "@diff" anchors on
+    the first tracked main/dev ref (origin/dev, origin/main, dev, main)
+    via merge-base semantics, falling back to HEAD~1; "@diff:<ref>"
+    requires that ref to resolve. Anything unresolvable or empty fails
+    closed as SCOPE_AUTO_EMPTY -- never an empty scope that silently
+    authorizes nothing-or-everything."""
+    if token == "@diff":
+        base = None
+        for candidate in ("origin/dev", "origin/main", "dev", "main"):
+            try:
+                _git(root, "rev-parse", "--verify", candidate + "^{commit}")
+                base = candidate
+                break
+            except OrchestratorError:
+                continue
+        if base is None:
+            try:
+                _git(root, "rev-parse", "--verify", "HEAD~1^{commit}")
+                base = "HEAD~1"
+            except OrchestratorError:
+                return [], ("SCOPE_AUTO_EMPTY: no base ref resolves "
+                            "(no tracked main/dev ref and HEAD has no "
+                            "parent commit)")
+    else:
+        base = token.partition(":")[2].strip()
+        if not base:
+            return [], ("SCOPE_AUTO_EMPTY: empty base_ref in "
+                        "@diff:<base_ref>")
+        try:
+            _git(root, "rev-parse", "--verify", base + "^{commit}")
+        except OrchestratorError:
+            return [], (f"SCOPE_AUTO_EMPTY: base_ref {base!r} does not "
+                        "resolve to a commit")
+    try:
+        output = _git(root, "diff", "--name-only", f"{base}...HEAD")
+    except OrchestratorError as exc:
+        return [], f"SCOPE_AUTO_EMPTY: git diff failed: {exc}"
+    files = sorted({line.strip().removeprefix("./")
+                    for line in output.splitlines() if line.strip()})
+    if not files:
+        return [], (f"SCOPE_AUTO_EMPTY: diff {base}...HEAD contains "
+                    "zero files")
+    return files, None
+
+
+def _resolve_auto(root: Path, entries: list[str] | None
+                  ) -> tuple[list[str] | None, list[str], str | None]:
+    """(resolved_entries, all_changed_files, error).
+
+    Every "@diff" / "@diff:<base_ref>" entry expands to the changed
+    files; explicitly listed entries pass through unchanged (only
+    auto-expanded protected paths are filtered out). Zero or unresolvable
+    expansion -> (None, [], SCOPE_AUTO_EMPTY...). Non-auto input lists
+    return verbatim with no git call."""
+    if entries is None:
+        return None, [], None
+    if not any(_is_auto(entry) for entry in entries):
+        return list(entries), [], None
+    changed: list[str] = []
+    for token in (entry for entry in entries if _is_auto(entry)):
+        files, error = _auto_diff_files(root, token)
+        if error is not None:
+            return None, [], error
+        changed.extend(files)
+    others = [entry for entry in entries if not _is_auto(entry)]
+    auto_kept = [rel for rel in sorted(set(changed))
+                 if not rel.startswith(_AUTO_PROTECTED)]
+    resolved = sorted(set(auto_kept) | set(others))
+    if not resolved:
+        return None, sorted(set(changed)), (
+            "SCOPE_AUTO_EMPTY: diff resolves to zero in-scope files "
+            "(all changed paths are protected governance paths under "
+            ".github/ or .jspace/)")
+    return resolved, sorted(set(changed)), None
+
+
+def _module_rel(root: Path, module: str) -> str | None:
+    """'pkg.base' -> repo-relative file ('pkg/base.py' or
+    'pkg/base/__init__.py'); None when the module has no file in root."""
+    parts = module.split(".")  # dotted module name: pkg.base -> pkg/base
+    if not parts or any(not part for part in parts):
+        return None
+    for candidate in ("/".join(parts) + ".py",
+                      "/".join(parts) + "/__init__.py"):
+        if (root / candidate).is_file():
+            return candidate
+    return None
+
+
+def _expand_reads(root: Path, changed: list[str],
+                  base_reads: list[str] | None) -> list[str]:
+    """Read-set expansion for auto-scope: every changed file plus its
+    AST dependency closure (the SAME _index_from BFS as the surgical
+    pipeline) -- deterministic, no guessing, existing reads unioned in."""
+    closure: set[str] = set(changed)
+    for rel in changed:
+        if not rel.endswith(".py") or not (root / rel).is_file():
+            continue
+        for index in _index_from(root, (rel,)):
+            found = _module_rel(root, index.module)
+            if found is not None:
+                closure.add(found)
+    return sorted(closure | set(base_reads or ()))
+
+
 def asha_get_surgical_context(arguments: dict[str, Any]
                               ) -> dict[str, Any]:
     """Read-only Phase 4.1 pipeline. Never raises: every failure
     becomes structured error content (tool-level fail-closed)."""
     try:
         unknown = sorted(set(arguments) - {"target_file", "target_symbol",
-                                           "repo_path"})
+                                           "repo_path", "targets"})
         if unknown:
             return _tool_error("unknown field(s): " + ", ".join(unknown))
         target_file = arguments.get("target_file")
-        if not isinstance(target_file, str) or not target_file:
-            return _tool_error("target_file must be a non-empty string")
         target_symbol = arguments.get("target_symbol")
-        if not isinstance(target_symbol, str) or not target_symbol:
-            return _tool_error("target_symbol must be a non-empty string")
+        targets = arguments.get("targets")
+        batch = targets is not None
+        pairs: list[tuple[str, str]] = []
+        if batch:
+            # Phase 10 batch mode: mixing single + batch fails closed as
+            # ambiguous; one call slices MANY symbols with ONE index.
+            if target_file is not None or target_symbol is not None:
+                return _tool_error(
+                    "give either single target_file/target_symbol or "
+                    "batch targets, not both")
+            if not isinstance(targets, list) or not targets:
+                return _tool_error(
+                    "targets must be a non-empty list of "
+                    "{target_file, target_symbol} objects")
+            for position, item in enumerate(targets):
+                if (not isinstance(item, dict)
+                        or set(item) != {"target_file", "target_symbol"}
+                        or not isinstance(item.get("target_file"), str)
+                        or not item.get("target_file")
+                        or not isinstance(item.get("target_symbol"), str)
+                        or not item.get("target_symbol")):
+                    return _tool_error(
+                        f"targets[{position}] must be exactly "
+                        "{target_file: str, target_symbol: str}")
+                pairs.append((item["target_file"], item["target_symbol"]))
+        else:
+            if not isinstance(target_file, str) or not target_file:
+                return _tool_error("target_file must be a non-empty string")
+            if not isinstance(target_symbol, str) or not target_symbol:
+                return _tool_error(
+                    "target_symbol must be a non-empty string")
+            pairs.append((target_file, target_symbol))
         repo_arg = arguments.get("repo_path", ".")
         if not isinstance(repo_arg, str):
             return _tool_error("repo_path must be a string")
@@ -1162,51 +1548,65 @@ def asha_get_surgical_context(arguments: dict[str, Any]
             return _tool_error(
                 f"repo_path does not exist or is not a directory: {repo_arg}")
         root = repo.resolve()
-        rel = target_file.replace(chr(92), "/")
-        if rel.startswith("/") or ".." in rel.split("/"):
-            return _tool_error(
-                f"target_file must stay inside the repository: {target_file}")
-        if not rel.endswith(".py"):
-            return _tool_error("target_file must be a .py file")
-        source_file = root / rel
-        if not source_file.is_file():
-            return _tool_error(f"target_file not found: {target_file}")
-        source = source_file.read_text(encoding="utf-8", errors="replace")
-        module = _module_name(rel)
-        if module is None:
-            return _tool_error(f"cannot derive module name: {target_file}")
+        rels: list[str] = []
+        for item_file, _item_symbol in pairs:
+            rel = item_file.replace(chr(92), "/")
+            if rel.startswith("/") or ".." in rel.split("/"):
+                return _tool_error(
+                    f"target_file must stay inside the repository: "
+                    f"{item_file}")
+            if not rel.endswith(".py"):
+                return _tool_error("target_file must be a .py file")
+            if not (root / rel).is_file():
+                return _tool_error(f"target_file not found: {item_file}")
+            rels.append(rel)
 
-        # Phase 4.1 pipeline, in order: index -> graph -> closure -> slice
-        indices = _index_reachable(root, rel)
-        target_index = next((entry for entry in indices
-                             if entry.module == module), None)
-        if target_index is None or target_index.symbol(target_symbol) is None:
-            return _tool_error(
-                f"symbol not found in target file: {target_symbol}")
+        # Phase 4.1 pipeline: ONE index build + ONE graph for every
+        # target (shared BFS visited-set), then closure -> slice per
+        # target. Single mode is the batch-of-one path, so the payload
+        # shape stays byte-identical to the Phase 4.3 contract.
+        indices = _index_from(root, tuple(dict.fromkeys(rels)))
         graph = build_graph(indices)
-        root_node = sym_node(module, target_symbol)
-        reach = closure(graph, (root_node,), module)
-        sliced = slice_context(source, target_name=target_symbol,
-                               target_module=module, graph=graph,
-                               indices=indices)
-        context_text = (sliced.target_source
-                        + "".join(stub.text for stub in sliced.stubs))
-        full_bytes = sliced.full_bytes
-        context_bytes = sliced.surgical_bytes
-        ratio = (1.0 - context_bytes / full_bytes) if full_bytes else 0.0
-        payload = {
-            "target": f"{rel}:{target_symbol}",
-            "context": context_text,
-            # every closure member except the root, sorted; UNRESOLVED
-            # boundaries stay in `unresolved` (reported, never dropped)
-            "dependencies": [node for node in reach.reachable
-                             if node != root_node],
-            "unresolved": list(reach.unresolved),
-            "full_source_bytes": full_bytes,
-            "context_source_bytes": context_bytes,
-            "reduction_ratio": ratio,
-        }
-        return _tool_ok(payload)
+        results: list[dict[str, Any]] = []
+        for (item_file, item_symbol), rel in zip(pairs, rels):
+            module = _module_name(rel)
+            if module is None:
+                return _tool_error(
+                    f"cannot derive module name: {item_file}")
+            target_index = next((entry for entry in indices
+                                 if entry.module == module), None)
+            if (target_index is None
+                    or target_index.symbol(item_symbol) is None):
+                return _tool_error(
+                    f"symbol not found in target file: {item_symbol}")
+            source = (root / rel).read_text(encoding="utf-8",
+                                            errors="replace")
+            root_node = sym_node(module, item_symbol)
+            reach = closure(graph, (root_node,), module)
+            sliced = slice_context(source, target_name=item_symbol,
+                                   target_module=module, graph=graph,
+                                   indices=indices)
+            context_text = (sliced.target_source
+                            + "".join(stub.text for stub in sliced.stubs))
+            full_bytes = sliced.full_bytes
+            context_bytes = sliced.surgical_bytes
+            ratio = (1.0 - context_bytes / full_bytes) if full_bytes else 0.0
+            results.append({
+                "target": f"{rel}:{item_symbol}",
+                "context": context_text,
+                # every closure member except the root, sorted;
+                # UNRESOLVED boundaries stay in `unresolved`
+                # (reported, never dropped)
+                "dependencies": [node for node in reach.reachable
+                                 if node != root_node],
+                "unresolved": list(reach.unresolved),
+                "full_source_bytes": full_bytes,
+                "context_source_bytes": context_bytes,
+                "reduction_ratio": ratio,
+            })
+        if batch:
+            return _tool_ok({"count": len(results), "results": results})
+        return _tool_ok(results[0])
     except ValueError as exc:
         return _tool_error(str(exc))
     except Exception as exc:
@@ -1271,6 +1671,184 @@ def _str_list(arguments: dict[str, Any], key: str, *,
     return list(value), None
 
 
+# Phase 10 -- atomic in-place execution ------------------------------------
+# ponytail: dispatch schema carries no per-task timeout input, so in-place
+# cmd runs are bounded by this fixed ceiling; add a `timeout` schema field
+# when callers genuinely need per-task limits.
+_IN_PLACE_TIMEOUT_S = 600
+
+
+def _observed_paths(root: Path) -> list[str]:
+    """Working-tree paths modified/created/deleted since the last commit
+    (porcelain v1 -z: byte-exact, no quoting). Untracked directories are
+    expanded to their files; renames report BOTH endpoints."""
+    proc = subprocess.run(["git", "status", "--porcelain=v1", "-z"],
+                          cwd=root, capture_output=True, text=True,
+                          timeout=60)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"git status failed: {proc.stderr.strip()[:200]}")
+    tokens = [token for token in proc.stdout.split(chr(0)) if token]
+    paths: list[str] = []
+    index = 0
+    while index < len(tokens):
+        entry = tokens[index]
+        rel = entry[3:]  # "XY path": two status chars, one space, path
+        paths.append(rel)
+        if "R" in entry[:2] or "C" in entry[:2]:
+            if index + 1 < len(tokens):
+                paths.append(tokens[index + 1])  # rename/copy counterpart
+            index += 2
+            continue
+        index += 1
+    expanded: list[str] = []
+    for rel in paths:
+        target = root / rel
+        if rel.endswith("/") or (target.is_dir() and target.exists()):
+            for child in sorted(target.rglob("*")):
+                if child.is_file():
+                    expanded.append(child.relative_to(root).as_posix())
+        else:
+            expanded.append(rel)
+    return sorted(dict.fromkeys(expanded))
+
+
+def _rollback(root: Path, pre_head: str) -> dict[str, Any]:
+    """Fail-closed atomic rollback: restore the exact pre-execution state
+    (the clean-tree precondition guarantees no pre-existing untracked
+    files, so `git clean -fd` can only remove files the run created)."""
+    reset = subprocess.run(["git", "reset", "--hard", pre_head],
+                           cwd=root, capture_output=True, text=True,
+                           timeout=120)
+    clean = subprocess.run(["git", "clean", "-fd"], cwd=root,
+                           capture_output=True, text=True, timeout=120)
+    status = subprocess.run(["git", "status", "--porcelain"], cwd=root,
+                            capture_output=True, text=True, timeout=60)
+    restored = (reset.returncode == 0 and clean.returncode == 0
+                and not status.stdout.strip())
+    return {"reset": reset.returncode == 0,
+            "clean": clean.returncode == 0,
+            "restored": restored}
+
+
+def _run_in_place(root: Path, worker: dict[str, Any],
+                  task_id: str) -> dict[str, Any]:
+    """Phase 10 `in_place_atomic` execution: run cmd on the CURRENT
+    branch tip, verify every observed change stays strictly inside
+    declared_scope, and roll back to `pre_head` on ANY failure (cmd
+    non-zero, timeout, scope violation) with zero unsealed residue.
+    Success seals digest-bound evidence with authorized_to_ship false --
+    execution evidence is never ship authority."""
+    declared = [entry for entry in (worker.get("declared_scope") or [])
+                if isinstance(entry, str)]
+    if not declared:
+        return {"refusal": "SCOPE_VIOLATION: in_place_atomic requires a "
+                           "non-empty declared_scope"}
+    refusal, _git_dir, pre_head, _pre_tree = _inspect_tip(root)
+    if refusal is not None:
+        # clean-tree precondition, re-checked right before execution
+        # (closes the TOCTOU window between dispatch validation and run)
+        return {"refusal": refusal}
+    cmd = [str(entry) for entry in worker["cmd"]]
+    proc: subprocess.CompletedProcess[str] | None = None
+    cmd_failure: str | None = None
+    exit_code: int | None = None
+    try:
+        proc = subprocess.run(cmd, cwd=root, capture_output=True,
+                              text=True, timeout=_IN_PLACE_TIMEOUT_S)
+        exit_code = proc.returncode
+    except subprocess.TimeoutExpired:
+        cmd_failure = (f"CMD_TIMEOUT: exceeded "
+                       f"{_IN_PLACE_TIMEOUT_S}s")
+    except OSError as exc:
+        cmd_failure = f"CMD_FAILED: {type(exc).__name__}: {exc}"
+    try:
+        observed = _observed_paths(root)
+    except Exception as exc:
+        observed = []
+        if cmd_failure is None:
+            cmd_failure = (f"INSPECTION_FAILED: "
+                           f"{type(exc).__name__}: {exc}")
+    reason: str | None = None
+    detail = ""
+    if cmd_failure is not None:
+        reason = ("CMD_TIMEOUT" if "CMD_TIMEOUT" in cmd_failure
+                  else "CMD_FAILED")
+        detail = cmd_failure
+    elif exit_code != 0:
+        reason = "CMD_FAILED"
+        stderr_tail = (proc.stderr.strip()[-300:]
+                       if proc is not None and proc.stderr else "")
+        detail = (f"cmd exited {exit_code}"
+                  + (f": {stderr_tail}" if stderr_tail else ""))
+    else:
+        uncovered = [rel for rel in observed
+                     if not any(covered(rel, entry)
+                                for entry in declared)]
+        if uncovered:
+            reason = "SCOPE_VIOLATION"
+            detail = ("observed path(s) outside declared_scope: "
+                      + ", ".join(uncovered[:10]))
+    if reason is not None:
+        rollback = _rollback(root, pre_head)
+        return {"state": "FAILED", "reason": reason, "detail": detail,
+                "exit_code": exit_code, "observed": observed,
+                "rollback": rollback, "authorized_to_ship": False,
+                "evidence": {}}
+    head_after = _git(root, "rev-parse", "HEAD").strip()
+    tree_after = _git(root, "rev-parse", "HEAD^{tree}").strip()
+    try:
+        snapshot_id = audit_snapshot.snapshot_id_of(root)
+    except Exception as exc:
+        rollback = _rollback(root, pre_head)
+        return {"state": "FAILED",
+                "reason": "SNAPSHOT_FAILED",
+                "detail": f"{type(exc).__name__}: {exc}",
+                "exit_code": exit_code, "observed": observed,
+                "rollback": rollback, "authorized_to_ship": False,
+                "evidence": {}}
+    try:
+        in_place_scope = str(scope_resolver.resolve(
+            root, None, paths=declared).get("scope"))
+    except Exception:
+        in_place_scope = "unresolved"  # fail-closed: never assume S0
+    sealed = evidence.seal({
+        "schema": evidence.SCHEMA,
+        "stage": "dispatch_in_place_atomic",
+        "scope": in_place_scope,
+        "commit": head_after,
+        "tree_hash": tree_after,
+        "observed_at": evidence.now_iso(),
+        "checks": [],
+        "ok": True,
+        "task_id": task_id,
+        "worker_id": worker.get("id"),
+        "declared_scope": declared,
+        "observed": observed,
+        "snapshot_id": snapshot_id,
+        "execution_mode": "in_place_atomic",
+        # Phase 10 invariant: in-place dispatch never grants ship
+        # authority; the ship gate re-derives it from its own chain.
+        "authorized_to_ship": False,
+    })
+    artifact = (common_paths.get_state_dir(root)
+                / "dispatch-in-place" / f"{task_id}.evidence.json")
+    try:
+        evidence.write_to(artifact, sealed)
+    except OSError as exc:
+        rollback = _rollback(root, pre_head)
+        return {"state": "FAILED", "reason": "EVIDENCE_WRITE_FAILED",
+                "detail": str(exc), "exit_code": exit_code,
+                "observed": observed, "rollback": rollback,
+                "authorized_to_ship": False, "evidence": {}}
+    return {"state": "DONE", "exit_code": 0, "observed": observed,
+            "head": head_after, "tree_hash": tree_after,
+            "snapshot_id": snapshot_id,
+            "evidence": {"path": str(artifact),
+                         "evidence_sha256": sealed["evidence_sha256"]},
+            "authorized_to_ship": False}
+
+
 def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
     """Validation -> classify -> route -> GovernedScheduler -> result.
 
@@ -1284,7 +1862,7 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
     try:
         unknown = sorted(set(arguments) - {
             "id", "declared_scope", "reads", "writes", "deps", "cmd",
-            "prompt", "root"})
+            "prompt", "execution_mode", "root"})
         if unknown:
             return _tool_error("unknown field(s): " + ", ".join(unknown)
                                + " (runtime configuration is env-only "
@@ -1315,6 +1893,11 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
             return _tool_error("prompt must be a string")
         # prompt is metadata only: never read again, never executed,
         # never telemetry'd.
+        execution_mode = arguments.get("execution_mode", "worktree")
+        if execution_mode not in ("worktree", "in_place_atomic"):
+            return _tool_error(
+                "execution_mode must be 'worktree' (default) or "
+                "'in_place_atomic'")
         root_arg = arguments.get("root", ".")
         if not isinstance(root_arg, str):
             return _tool_error("root must be a string")
@@ -1323,6 +1906,46 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
             return _tool_error(
                 f"root does not exist or is not a directory: {root_arg}")
         root = root_path.resolve()
+
+        # Phase 10 auto-scope: "@diff" / "@diff:<base_ref>" entries in
+        # declared_scope/reads/writes expand deterministically before
+        # classification, reads grow by the AST dependency closure of
+        # the changed files, and an empty/unresolvable diff fails closed
+        # as SCOPE_AUTO_EMPTY with NOTHING executed.
+        auto_engaged = (any(_is_auto(entry) for entry in declared)
+                        or any(_is_auto(entry) for entry in (reads or ()))
+                        or any(_is_auto(entry)
+                               for entry in (writes or ())))
+        all_changed: list[str] = []
+        for key, value in (("declared_scope", declared),
+                           ("reads", reads), ("writes", writes)):
+            if value is None:
+                continue
+            resolved_entries, changed, auto_error = _resolve_auto(
+                root, value)
+            if auto_error is not None:
+                return _tool_error(auto_error)
+            all_changed.extend(changed)
+            if resolved_entries is not None:
+                if key == "declared_scope":
+                    declared = resolved_entries
+                elif key == "reads":
+                    reads = resolved_entries
+                else:
+                    writes = resolved_entries
+        if auto_engaged:
+            reads = _expand_reads(root, sorted(set(all_changed)), reads)
+            if not declared:
+                return _tool_error(
+                    "SCOPE_AUTO_EMPTY: auto-scope resolved to an empty "
+                    "declared_scope")
+
+        # In-place atomic refuses a dirty/conflicted/in-flight tree
+        # IMMEDIATELY -- before classification, before anything runs.
+        if execution_mode == "in_place_atomic":
+            tip_refusal, _git_dir, _head, _tree = _inspect_tip(root)
+            if tip_refusal is not None:
+                return _tool_error(tip_refusal)
 
         envelope = _dispatch_context(root)
         task_payload = {"id": wid, "reads": reads, "writes": writes,
@@ -1351,20 +1974,29 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
         task_id = "mcp-" + os.urandom(6).hex()
         run_started = perf_counter_ns()
         try:
-            report = run_worker_in_worktree(
-                    root, worker, task_id=task_id, fast_path=sched_fast,
-                    fast_path_classification=decision.classification
-                    or "UNKNOWN")
+            if execution_mode == "in_place_atomic":
+                report = _run_in_place(root, worker, task_id)
+            else:
+                report = run_worker_in_worktree(
+                        root, worker, task_id=task_id, fast_path=sched_fast,
+                        fast_path_classification=decision.classification
+                        or "UNKNOWN")
         except Exception as exc:
             return _tool_error(
                 f"orchestration aborted: {type(exc).__name__}: {exc}")
+        if report.get("refusal"):
+            # clean-tree precondition re-failed at execution time:
+            # immediate refusal, nothing executed, nothing written
+            return _tool_error(str(report["refusal"]))
         scheduler_ms = (perf_counter_ns() - run_started) / 1e6
         states: dict[str, Any] = report.get("states") or {}
-        worker_state = (states.get(wid) or {}).get("state")
+        worker_state = ((states.get(wid) or {}).get("state")
+                        or report.get("state"))
         total_ms = (perf_counter_ns() - run_started) / 1e6
         payload = {
             "task_id": task_id,
             "state": worker_state,
+            "execution_mode": execution_mode,
             "classification": decision.classification,
             "reason_code": classification.reason_code,
             "runtime_mode": decision.mode.value,
@@ -1386,6 +2018,12 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
             # authority of its own.
             "authorized_to_ship": False,
         }
+        if report.get("state") == "FAILED":
+            payload["reason"] = report.get("reason")
+            payload["detail"] = report.get("detail")
+            payload["exit_code"] = report.get("exit_code")
+            payload["observed"] = report.get("observed") or []
+            payload["rollback"] = report.get("rollback")
         return _tool_ok(payload)
     except ValueError as exc:
         return _tool_error(str(exc))
@@ -1396,7 +2034,7 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
 TOOL_SPECS: list[dict[str, Any]] = [
     ASHA_PLAN_DAG_SPEC, ASHA_RUN_SPEC_SPEC, ASHA_STATUS_SPEC,
     ASHA_GET_SURGICAL_CONTEXT_SPEC, ASHA_DISPATCH_TASK_SPEC,
-    ASHA_VERIFY_TIP_SPEC]
+    ASHA_VERIFY_TIP_SPEC, ASHA_VERIFY_STACK_SPEC]
 
 
 TOOL_HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
@@ -1406,6 +2044,7 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "asha_get_surgical_context": asha_get_surgical_context,
     "asha_dispatch_task": asha_dispatch_task,
     "asha_verify_tip": asha_verify_tip,
+    "asha_verify_stack": asha_verify_stack,
 }
 
 
@@ -1554,12 +2193,29 @@ def _coerce_scalar(value: str) -> Any:
     return value
 
 
-def _parse_tool_argv(tokens: list[str]) -> dict[str, Any]:
+def _array_keys(tool_name: str | None) -> set[str]:
+    """Schema array-typed fields for a tool: in one-shot CLI form those
+    arrive comma-separated (`branches=s1,s2,s3` -> ["s1","s2","s3"]),
+    since `key=value` strings are the only value grammar."""
+    if not tool_name:
+        return set()
+    for spec in TOOL_SPECS:
+        if spec.get("name") == tool_name:
+            properties = spec.get("inputSchema", {}).get("properties", {})
+            return {key for key, value in properties.items()
+                    if isinstance(value, dict)
+                    and value.get("type") == "array"}
+    return set()
+
+
+def _parse_tool_argv(tokens: list[str],
+                     tool_name: str | None = None) -> dict[str, Any]:
     """One-shot argument grammar: `key=value` pairs plus ONE optional
     bare positional path mapped to `root` (the exact friction point
     logged in the Detailist run: a bare positional raised ValueError in
     every ad-hoc driver). Ambiguity fails closed with a usage error
-    instead of guessing."""
+    instead of guessing. Array-typed fields split on commas."""
+    arrays = _array_keys(tool_name)
     arguments: dict[str, Any] = {}
     positionals: list[str] = []
     for token in tokens:
@@ -1569,7 +2225,11 @@ def _parse_tool_argv(tokens: list[str]) -> dict[str, Any]:
                 raise ValueError(f"invalid argument {token!r}: empty key")
             if key in arguments:
                 raise ValueError(f"duplicate argument: {key}")
-            arguments[key] = _coerce_scalar(value)
+            if key in arrays:
+                arguments[key] = ([] if not value
+                                  else value.split(","))
+            else:
+                arguments[key] = _coerce_scalar(value)
         else:
             positionals.append(token)
     if positionals:
@@ -1604,7 +2264,7 @@ def main(argv: list[str] | None = None) -> int:
         print(_CLI_USAGE, file=sys.stderr)
         return 2
     try:
-        arguments = _parse_tool_argv(argv[1:])
+        arguments = _parse_tool_argv(argv[1:], name)
     except ValueError as exc:
         print(f"mcp: {exc}", file=sys.stderr)
         print(_CLI_USAGE, file=sys.stderr)

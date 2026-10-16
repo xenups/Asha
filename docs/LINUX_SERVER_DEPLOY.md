@@ -73,6 +73,10 @@ asha status /path/to/repo                # deterministic tip one-liner
 asha status --json /path/to/repo         # exactly one JSON document
 asha-mcp asha_status /path/to/repo       # positional PATH == root=PATH
 asha-mcp asha_verify_tip /path/to/repo run_checks=true
+asha-mcp asha_verify_tip /path/to/repo declared_scope=@diff base_ref=origin/main
+asha-mcp asha_verify_stack feat1,feat2,feat3 base_ref=origin/dev /path/to/repo
+# array fields are comma-separated in one-shot form; lists arrive as
+# JSON arrays over MCP: {"branches": ["feat1", "feat2"], "base_ref": ...}
 # exit codes: 0 tool ok / 1 tool refused (isError) / 2 usage error
 ```
 
@@ -120,3 +124,36 @@ asha-mcp asha_verify_tip /path/to/repo base_ref=origin/main run_checks=true
 
 Rule: push the tip only after `ok: true`; on any refusal, fix the tree
 or finish the git operation first — never force-push over a refusal.
+
+## 7. Phase 10: stack lineage, auto-diff scope, in-place dispatch
+
+`asha_verify_stack` checks an ordered branch stack (bottom-to-top)
+against a base ref without spawning worktrees: linear ancestry per
+link plus re-verification of each head's sealed verify-tip evidence.
+A drifted link returns the exact recovery recipe
+`git rebase --onto <parent_sha> <merge_base> <branch>`; `stack_healthy`
+is true only when every branch is linear AND sealed.
+
+```bash
+asha-mcp asha_verify_stack feat1,feat2,feat3 base_ref=origin/dev /path/to/repo
+# report codes: STACK_ANCESTRY_DRIFT, STACK_EVIDENCE_MISSING,
+#               STACK_EVIDENCE_TAMPERED
+# refusals (exit 1): STACK_EMPTY, BRANCH_NOT_FOUND, BASE_REF_NOT_FOUND
+```
+
+`"@diff"` / `"@diff:<base_ref>"` auto-scope (any of `declared_scope`,
+`reads`, `writes` in `asha_dispatch_task`, or `declared_scope` in
+`asha_verify_tip`) expands to `git diff --name-only <base>...HEAD`;
+`reads` grow by the AST dependency closure of those files; protected
+governance paths (`.github/`, `.jspace/`) never enter implicitly; an
+empty or unresolvable diff is refused as `SCOPE_AUTO_EMPTY` with
+nothing executed.
+
+`execution_mode="in_place_atomic"` in `asha_dispatch_task` runs `cmd`
+on the CURRENT branch tip (default `"worktree"` is untouched): a dirty
+or conflicted tree is refused immediately (`TIP_DIRTY`,
+`TIP_CONFLICTED`), observed changes must stay strictly inside
+`declared_scope`, and ANY failure (non-zero exit, timeout, scope
+violation) triggers `git reset --hard <pre_head>` + `git clean -fd`
+back to the exact pre-execution state — zero unsealed residue. Success
+seals digest-bound evidence with `authorized_to_ship: false`.
