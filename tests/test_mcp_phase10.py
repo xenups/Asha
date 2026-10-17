@@ -401,13 +401,41 @@ def test_in_place_atomic_cmd_failure_rollback(tmp_path: Path) -> None:
     assert _git(repo, "status", "--porcelain").strip() == ""
 
 
-def test_in_place_atomic_dirty_refused(tmp_path: Path) -> None:
+def test_in_place_atomic_dirty_wip_is_snapshotted(tmp_path: Path) -> None:
+    """Phase 11.1 replaces the old TIP_DIRTY refusal: an uncommitted WIP
+    tree is allowed, the run is bound to a pre-state snapshot, and the
+    caller's WIP survives a failing command byte-for-byte."""
     repo = _repo(tmp_path)
     _write(repo / "pkg/dirty.py", "DIRTY = 1\n")  # untracked, no commit
+    _write(repo / "pkg/base.py", "DIRTY_EDIT = 2\n")
+    before = _git(repo, "status", "--porcelain")
     result = _dispatch_in_place(
-        repo, "w4", [PY, "-c", "print('never')"], ["pkg/base.py"])
+        repo, "w4", [PY, "-c", "raise SystemExit(1)"], ["pkg/base.py"])
+    assert not result.get("isError"), result
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["state"] == "FAILED", payload
+    assert payload["rollback"]["mode"] == "snapshot", payload
+    assert payload["rollback"]["restored"] is True, payload
+    assert _git(repo, "status", "--porcelain") == before
+    assert (repo / "pkg/base.py").read_text(encoding="utf-8") == \
+        "DIRTY_EDIT = 2\n"
+
+
+def test_in_place_atomic_conflict_still_refused(tmp_path: Path) -> None:
+    """The dirty-tree relaxation never relaxes the conflict guard."""
+    repo = _repo(tmp_path)
+    _git(repo, "checkout", "-q", "-b", "side")
+    _write(repo / "pkg/base.py", "SIDE = 1\n")
+    _git(repo, "commit", "-q", "-am", "side")
+    _git(repo, "checkout", "-q", "main")
+    _write(repo / "pkg/base.py", "MAIN = 1\n")
+    _git(repo, "commit", "-q", "-am", "main")
+    subprocess.run(["git", "merge", "side"], cwd=repo, capture_output=True,
+                   text=True, timeout=60)
+    result = _dispatch_in_place(
+        repo, "w5", [PY, "-c", "print('never')"], ["pkg/base.py"])
     assert result.get("isError") is True
-    assert "TIP_DIRTY" in result["content"][0]["text"]
+    assert "TIP_CONFLICTED" in result["content"][0]["text"]
 
 
 def test_in_place_atomic_default_untouched(tmp_path: Path) -> None:

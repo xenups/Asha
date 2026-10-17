@@ -37,10 +37,28 @@ asha --stack b1 b2 b3 --base origin/dev
 asha --context app.py:foo app2.py:bar
 asha --exec "pytest -q"     # governed atomic in-place command
 asha-mcp /path/to/repo      # bare path routes to the unified tool (exit 0 ok / 1 refused / 2 usage)
+
+# flags and the positional PATH may appear in ANY order (Phase 11.1)
+asha /path/to/repo --exec "pytest -q" --base origin/dev
+asha --base origin/dev /path/to/repo --exec pytest -q --json
+asha --json /path/to/repo --stack b1 b2 b3 --base origin/dev
+asha /path/to/repo --verify --base origin/dev
 ```
 
 A dirty tree is never a failure of status reading: you get the exact
 changed scope and `ready_to_push: false (TIP_DIRTY)`.
+
+Phase 11.1 -- `--exec`/`cmd` is safe INSIDE an iterative TDD loop: an
+uncommitted WIP tree is accepted, its exact state (tracked edits, index,
+untracked files) is snapshotted before the command runs, and a failing or
+out-of-scope command rolls the tree back to that snapshot -- never to
+`HEAD`, so uncommitted work survives. A command that passes on a dirty
+tree returns `state: "DONE"`, `validation_result: "PASS"` and
+`ready_to_push: false` with `reason: "WIP_UNCOMMITTED_PASS"`: the tests
+passed, the commit is still missing. `--` hands everything after it to
+`--exec` verbatim (`asha PATH --exec -- pytest -q`). Merge-conflict
+(unmerged) or in-flight git operations still fail closed before anything
+runs.
 
 ```bash
 pip install -e .          # editable install; registers the console scripts
@@ -61,11 +79,16 @@ asha-mcp TOOL [k=v ...] [PATH]                        # one-shot tool call; bare
                                                       # PATH maps to root=PATH
 asha-mcp PATH                                         # bare directory routes to the
                                                       # unified 'asha' zero-config tool
+asha [PATH] [--root <path>] [--base REF] [--json] [--no-color] [--ui] [--ui-out <path>] ...
+                                              # unified one-command forms; flags and
+                                              # PATH may appear in ANY order (Phase 11.1)
 asha PATH                                             # unified zero-config check
 asha --verify [PATH] [--base REF]                     # tip verification (checks on)
 asha --stack B1 [B2 ...] [--base REF]                 # ordered stack verification
 asha --context FILE:SYMBOL [FILE:SYMBOL ...]         # batch surgical context
-asha --exec CMD... [--base REF]                       # atomic in-place governed run
+asha --exec CMD... [--base REF]                       # atomic in-place governed run;
+                                                      # WIP-safe (snapshot rollback)
+asha PATH --exec -- CMD [ARG ...]                     # `--` = verbatim argv, no shlex
 .claude/commands/asha.md   →  /asha                   # thin passthrough
 ```
 
@@ -308,6 +331,7 @@ through the latest completed phase:
 | Phase 9 | Real-world telemetry hardening: positional CLI paths, deterministic `status` response, and in-place stack tip verification (`asha_verify_tip`) — driven by the Detailist stacked-PR production run (#222-#230) | Complete |
 | Phase 10 | Stack-native execution: `asha_verify_stack` multi-branch lineage, `"@diff"` auto-derived scope, batch surgical context, and atomic `in_place_atomic` dispatch — 7-tool server surface, v0.3.0 | Complete |
 | Phase 11 | Unified zero-friction entrypoint: `asha` auto-routing MCP tool (#1) plus one-command CLI (`PATH`, `--verify`, `--stack`, `--context`, `--exec`) — 8-tool surface, v0.4.0 | Complete |
+| Phase 11.1 | Order-free unified CLI (flags and PATH in any order, `--` verbatim) + snapshot-safe `in_place_atomic`: dirty-WIP trees accepted, snapshot rollback instead of `git reset --hard`, `WIP_UNCOMMITTED_PASS` evidence — v0.4.1 | Complete |
 
 Verified baseline: **944 passed, 0 failed** (CPython 3.11+, stdlib
 only; green on both Ubuntu/Debian and Windows — skip counts are

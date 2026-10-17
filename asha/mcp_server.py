@@ -38,8 +38,10 @@ if __package__ in (None, ""):
     _script_sys.path.insert(0, _pkg_dir.rsplit("/", 1)[0])
     __package__ = "orchestrator"
 
+import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable
@@ -74,7 +76,7 @@ from .worktree import _git
 SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18",
                                "2025-03-26", "2024-11-05"]
 DEFAULT_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]
-SERVER_INFO = {"name": "asha-orchestrator", "version": "0.4.0"}
+SERVER_INFO = {"name": "asha-orchestrator", "version": "0.4.1"}
 CAPABILITIES: dict[str, Any] = {"tools": {}}
 
 PARSE_ERROR = -32700
@@ -410,13 +412,22 @@ _IN_FLIGHT_MARKERS = ("rebase-merge", "rebase-apply", "MERGE_HEAD",
                       "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG")
 
 
-def _inspect_tip(root: Path) -> tuple[str | None, Path | None, str, str]:
+def _inspect_tip(root: Path, allow_dirty: bool = False
+                 ) -> tuple[str | None, Path | None, str, str]:
     """Shared in-place tip inspection (Phase 10 reuse): clean-tree facts
     for asha_verify_tip AND in-place atomic dispatch. Returns
     (refusal, git_dir, head, tree); refusal is None on a clean tip, and
     (refusal, None, "", "") whenever git inspection itself failed.
     Order: unmerged paths -> dirty tree -> `git diff --check` defects ->
-    in-flight git operation. Pure read-only inspection: never mutates."""
+    in-flight git operation. Pure read-only inspection: never mutates.
+
+    Phase 11.1 `allow_dirty=True` (in_place_atomic only): an uncommitted
+    WIP tree is NOT a refusal -- the caller snapshots it first and rolls
+    back to that snapshot instead of HEAD. Unmerged index entries and
+    in-flight git operations still fail closed, and `git diff --check`
+    defects are only tolerated while the tree is dirty (they belong to
+    the caller's WIP, and the run seals WIP-bound evidence that grants
+    no push authority)."""
     try:
         git_dir = Path(_git(root, "rev-parse", "--git-dir").strip())
         if not git_dir.is_absolute():
@@ -449,10 +460,12 @@ def _inspect_tip(root: Path) -> tuple[str | None, Path | None, str, str]:
                     f"{len(conflicted)} unmerged path(s): "
                     + ", ".join(line[3:] for line in conflicted[:10]),
                     None, "", "")
-        return ("TIP_DIRTY: "
-                f"{len(dirty)} uncommitted path(s): "
-                + ", ".join(line[3:] for line in dirty[:10]), None, "", "")
-    if diff_check.strip():
+        if not allow_dirty:
+            return ("TIP_DIRTY: "
+                    f"{len(dirty)} uncommitted path(s): "
+                    + ", ".join(line[3:] for line in dirty[:10]), None, "",
+                    "")
+    if diff_check.strip() and not (allow_dirty and dirty):
         return ("TIP_DIFF_UNCLEAN: git diff --check reported "
                 "whitespace/conflict-marker defects: "
                 + "; ".join(diff_check.splitlines()[:10]), None, "", "")
@@ -1274,12 +1287,20 @@ ASHA_DISPATCH_TASK_SPEC: dict[str, Any] = {
                                               "'in_place_atomic' runs "
                                               "cmd on the CURRENT branch "
                                               "tip inside the caller's "
-                                              "tree, refusing a dirty "
-                                              "tree and rolling back "
-                                              "with git reset --hard + "
-                                              "git clean -fd on ANY "
-                                              "failure (scope violation, "
-                                              "cmd failure, timeout)."},
+                                              "tree. Phase 11.1: an "
+                                              "uncommitted WIP tree is "
+                                              "allowed -- its exact "
+                                              "state is snapshotted and "
+                                              "ANY failure (scope "
+                                              "violation, cmd failure, "
+                                              "timeout) restores that "
+                                              "snapshot, never HEAD; a "
+                                              "pass on a dirty tree "
+                                              "returns ready_to_push: "
+                                              "false + reason "
+                                              "WIP_UNCOMMITTED_PASS. "
+                                              "Unmerged/in-flight git "
+                                              "states still refuse."},
             "root": {"type": "string", "default": ".",
                      "description": ROOT_HELP},
         },
@@ -1431,9 +1452,19 @@ def _auto_diff_files(root: Path, token: str) -> tuple[list[str], str | None]:
         return [], f"SCOPE_AUTO_EMPTY: git diff failed: {exc}"
     files = sorted({line.strip().removeprefix("./")
                     for line in output.splitlines() if line.strip()})
+    # Phase 11.1: the auto-scope must describe the working TREE, not just
+    # the committed branch diff -- an in-place run on a dirty tip (the
+    # inner TDD loop) would otherwise report every WIP file as a scope
+    # violation. Uncommitted/untracked paths join the expansion; protected
+    # governance paths are still filtered out by _resolve_auto.
+    try:
+        dirty = _observed_paths(root)
+    except Exception:
+        dirty = []
+    files = sorted(set(files) | set(dirty))
     if not files:
-        return [], (f"SCOPE_AUTO_EMPTY: diff {base}...HEAD contains "
-                    "zero files")
+        return [], (f"SCOPE_AUTO_EMPTY: diff {base}...HEAD and the working "
+                    "tree contain zero files")
     return files, None
 
 
@@ -1714,9 +1745,10 @@ def _observed_paths(root: Path) -> list[str]:
 
 
 def _rollback(root: Path, pre_head: str) -> dict[str, Any]:
-    """Fail-closed atomic rollback: restore the exact pre-execution state
-    (the clean-tree precondition guarantees no pre-existing untracked
-    files, so `git clean -fd` can only remove files the run created)."""
+    """Fail-closed atomic rollback for a run that STARTED from a clean
+    tree: restore the exact pre-execution state (the clean-tree
+    precondition guarantees no pre-existing untracked files, so `git
+    clean -fd` can only remove files the run created)."""
     reset = subprocess.run(["git", "reset", "--hard", pre_head],
                            cwd=root, capture_output=True, text=True,
                            timeout=120)
@@ -1726,9 +1758,151 @@ def _rollback(root: Path, pre_head: str) -> dict[str, Any]:
                             capture_output=True, text=True, timeout=60)
     restored = (reset.returncode == 0 and clean.returncode == 0
                 and not status.stdout.strip())
-    return {"reset": reset.returncode == 0,
+    return {"mode": "head_reset", "reset": reset.returncode == 0,
             "clean": clean.returncode == 0,
             "restored": restored}
+
+
+# Phase 11.1 -- snapshot-safe inner loop. Sentinel for a path that was
+# ABSENT in the pre-execution snapshot (a `cmd` that created it must be
+# rolled back by deleting it again).
+_WIP_ABSENT = "-"
+
+
+def _porcelain_lines(root: Path) -> list[str]:
+    """Sorted non-empty `git status --porcelain` lines (the byte-level
+    identity of a working-tree state)."""
+    return sorted(line for line in _git(root, "status", "--porcelain")
+                  .splitlines() if line.strip())
+
+
+def _blob_of(root: Path, rel: str) -> str:
+    """Write `rel`'s exact bytes into the object store and return the
+    blob sha (no EOL translation, no index involvement)."""
+    proc = subprocess.run(["git", "hash-object", "-w", "--", rel],
+                          cwd=root, capture_output=True, text=True,
+                          timeout=120)
+    if proc.returncode != 0:
+        raise RuntimeError(f"git hash-object failed for {rel}: "
+                           f"{proc.stderr.strip()[:200]}")
+    return proc.stdout.strip()
+
+
+def _snapshot_pre_state(root: Path) -> dict[str, Any]:
+    """Exact pre-execution working-tree snapshot: HEAD, the index tree,
+    every tracked path that differs from HEAD (its blob, or the ABSENT
+    sentinel for a WIP deletion), every untracked non-ignored file, and
+    the porcelain status set. Deterministic and read-only worktree-wise
+    -- `git hash-object -w` only appends objects, so a rollback can put
+    the caller's WIP back byte-for-byte instead of resetting to HEAD."""
+    head = _git(root, "rev-parse", "HEAD").strip()
+    index_tree = _git(root, "write-tree").strip()
+    status = _porcelain_lines(root)
+    tracked: dict[str, str] = {}
+    changed = _git(root, "diff", "--name-only", "--no-renames", "HEAD")
+    for rel in sorted({line.strip() for line in changed.splitlines()
+                       if line.strip()}):
+        tracked[rel] = (_blob_of(root, rel) if (root / rel).is_file()
+                        else _WIP_ABSENT)
+    others = _git(root, "ls-files", "--others", "--exclude-standard")
+    untracked = {rel: _blob_of(root, rel)
+                 for rel in sorted({line.strip() for line in
+                                    others.splitlines() if line.strip()})}
+    digest = hashlib.sha256("\n".join(
+        [f"head {head}", f"index {index_tree}"]
+        + [f"tracked {rel} {blob}" for rel, blob in tracked.items()]
+        + [f"untracked {rel} {blob}" for rel, blob in untracked.items()]
+        + status).encode("utf-8")).hexdigest()
+    return {"clean": not status, "head": head, "index_tree": index_tree,
+            "tracked": tracked, "untracked": untracked, "status": status,
+            "sha256": digest,
+            "tree_sha": _worktree_tree_sha(root, index_tree)}
+
+
+def _worktree_tree_sha(root: Path, index_tree: str) -> str:
+    """Tree sha of the working tree's tracked content: `git stash create`
+    builds the commit object without touching the worktree or the index.
+    An untracked-only change yields no tracked delta, so the index tree
+    is the honest fallback (the snapshot digest still covers it)."""
+    proc = subprocess.run(["git", "stash", "create"], cwd=root,
+                          capture_output=True, text=True, timeout=120)
+    commit = proc.stdout.strip() if proc.returncode == 0 else ""
+    if not commit:
+        return index_tree
+    tree = subprocess.run(["git", "rev-parse", f"{commit}^{{tree}}"],
+                          cwd=root, capture_output=True, text=True,
+                          timeout=60)
+    return (tree.stdout.strip() if tree.returncode == 0
+            and tree.stdout.strip() else index_tree)
+
+
+def _prune_empty_parents(root: Path, rel: str) -> None:
+    """Remove directories left empty by a rollback (never the root)."""
+    parent = (root / rel).parent
+    while parent != root and root in parent.parents:
+        try:
+            parent.rmdir()
+        except OSError:
+            return
+        parent = parent.parent
+
+
+def _restore_snapshot(root: Path, snap: dict[str, Any]) -> dict[str, Any]:
+    """Roll a dirty-tree run back to the caller's WIP snapshot: delete
+    only the paths `cmd` created, write the recorded blobs back (tracked
+    edits -- including WIP deletions -- and untracked files), restore the
+    index tree, then verify the porcelain status set matches the snapshot
+    exactly. A mismatch is REPORTED (fail-closed), never assumed away."""
+    failures: list[str] = []
+    restore = {**snap["tracked"], **snap["untracked"]}
+    try:
+        observed = _observed_paths(root)
+    except Exception as exc:            # inspection failure stays visible
+        return {"mode": "snapshot", "restored": False,
+                "detail": f"{type(exc).__name__}: {exc}", "failures": []}
+    for rel in observed:
+        if rel in restore:
+            continue
+        target = root / rel
+        try:
+            if target.is_dir():
+                shutil.rmtree(target)
+            elif target.exists():
+                target.unlink()
+        except OSError as exc:
+            failures.append(f"remove {rel}: {exc}")
+        else:
+            _prune_empty_parents(root, rel)
+    for rel, blob in restore.items():
+        target = root / rel
+        try:
+            if blob == _WIP_ABSENT:
+                if target.exists():
+                    target.unlink()
+                continue
+            content = subprocess.run(["git", "cat-file", "blob", blob],
+                                     cwd=root, capture_output=True,
+                                     timeout=120)
+            if content.returncode != 0:
+                failures.append(f"restore {rel}: blob unreadable")
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(target, "wb") as handle:
+                handle.write(content.stdout)
+        except OSError as exc:
+            failures.append(f"restore {rel}: {exc}")
+    read_tree = subprocess.run(["git", "read-tree", snap["index_tree"]],
+                               cwd=root, capture_output=True, text=True,
+                               timeout=120)
+    if read_tree.returncode != 0:
+        failures.append(f"index restore: {read_tree.stderr.strip()[:150]}")
+    try:
+        status_match = _porcelain_lines(root) == snap["status"]
+    except Exception:
+        status_match = False
+    return {"mode": "snapshot", "restored": not failures and status_match,
+            "status_match": status_match, "failures": failures[:5],
+            "snapshot_sha256": snap["sha256"]}
 
 
 def _run_in_place(root: Path, worker: dict[str, Any],
@@ -1738,17 +1912,29 @@ def _run_in_place(root: Path, worker: dict[str, Any],
     declared_scope, and roll back to `pre_head` on ANY failure (cmd
     non-zero, timeout, scope violation) with zero unsealed residue.
     Success seals digest-bound evidence with authorized_to_ship false --
-    execution evidence is never ship authority."""
+    execution evidence is never ship authority.
+
+    Phase 11.1: a dirty WIP tree is allowed (the inner TDD loop must be
+    able to call Asha without committing first). The exact pre-run
+    working-tree state is snapshotted first -- tracked edits, the index
+    tree and untracked files -- and a failing/out-of-scope run restores
+    THAT snapshot instead of `git reset --hard HEAD`, so the caller's
+    uncommitted work survives. A passing run on a dirty tree seals a
+    WIP-bound snapshot record with ready_to_push false and reason
+    WIP_UNCOMMITTED_PASS: tests passed, the tip is still uncommitted."""
     declared = [entry for entry in (worker.get("declared_scope") or [])
                 if isinstance(entry, str)]
     if not declared:
         return {"refusal": "SCOPE_VIOLATION: in_place_atomic requires a "
                            "non-empty declared_scope"}
-    refusal, _git_dir, pre_head, _pre_tree = _inspect_tip(root)
+    refusal, _git_dir, pre_head, _pre_tree = _inspect_tip(root,
+                                                          allow_dirty=True)
     if refusal is not None:
-        # clean-tree precondition, re-checked right before execution
+        # fail-closed preconditions (conflicts, in-flight git ops, an
+        # unclean-but-clean-tree tip), re-checked right before execution
         # (closes the TOCTOU window between dispatch validation and run)
         return {"refusal": refusal}
+    snapshot = _snapshot_pre_state(root)
     cmd = [str(entry) for entry in worker["cmd"]]
     proc: subprocess.CompletedProcess[str] | None = None
     cmd_failure: str | None = None
@@ -1790,23 +1976,29 @@ def _run_in_place(root: Path, worker: dict[str, Any],
             detail = ("observed path(s) outside declared_scope: "
                       + ", ".join(uncovered[:10]))
     if reason is not None:
-        rollback = _rollback(root, pre_head)
+        rollback = (_rollback(root, pre_head) if snapshot["clean"]
+                    else _restore_snapshot(root, snapshot))
         return {"state": "FAILED", "reason": reason, "detail": detail,
                 "exit_code": exit_code, "observed": observed,
                 "rollback": rollback, "authorized_to_ship": False,
-                "evidence": {}}
+                "validation_result": "FAIL", "ready_to_push": False,
+                "wip": not snapshot["clean"], "evidence": {}}
+    wip = not snapshot["clean"]
     head_after = _git(root, "rev-parse", "HEAD").strip()
-    tree_after = _git(root, "rev-parse", "HEAD^{tree}").strip()
+    tree_after = (_worktree_tree_sha(root, snapshot["index_tree"]) if wip
+                  else _git(root, "rev-parse", "HEAD^{tree}").strip())
     try:
         snapshot_id = audit_snapshot.snapshot_id_of(root)
     except Exception as exc:
-        rollback = _rollback(root, pre_head)
+        rollback = (_rollback(root, pre_head) if snapshot["clean"]
+                    else _restore_snapshot(root, snapshot))
         return {"state": "FAILED",
                 "reason": "SNAPSHOT_FAILED",
                 "detail": f"{type(exc).__name__}: {exc}",
                 "exit_code": exit_code, "observed": observed,
                 "rollback": rollback, "authorized_to_ship": False,
-                "evidence": {}}
+                "validation_result": "FAIL", "ready_to_push": False,
+                "wip": wip, "evidence": {}}
     try:
         in_place_scope = str(scope_resolver.resolve(
             root, None, paths=declared).get("scope"))
@@ -1826,6 +2018,12 @@ def _run_in_place(root: Path, worker: dict[str, Any],
         "declared_scope": declared,
         "observed": observed,
         "snapshot_id": snapshot_id,
+        # Phase 11.1: the exact pre-run working-tree identity (HEAD,
+        # index tree, WIP blobs, porcelain status) -- a WIP-pass seal is
+        # bound to it and never grants push authority.
+        "pre_state_sha256": snapshot["sha256"],
+        "wip_uncommitted": wip,
+        "ready_to_push": not wip,
         "execution_mode": "in_place_atomic",
         # Phase 10 invariant: in-place dispatch never grants ship
         # authority; the ship gate re-derives it from its own chain.
@@ -1836,14 +2034,20 @@ def _run_in_place(root: Path, worker: dict[str, Any],
     try:
         evidence.write_to(artifact, sealed)
     except OSError as exc:
-        rollback = _rollback(root, pre_head)
+        rollback = (_rollback(root, pre_head) if snapshot["clean"]
+                    else _restore_snapshot(root, snapshot))
         return {"state": "FAILED", "reason": "EVIDENCE_WRITE_FAILED",
                 "detail": str(exc), "exit_code": exit_code,
                 "observed": observed, "rollback": rollback,
-                "authorized_to_ship": False, "evidence": {}}
+                "authorized_to_ship": False, "validation_result": "FAIL",
+                "ready_to_push": False, "wip": wip, "evidence": {}}
     return {"state": "DONE", "exit_code": 0, "observed": observed,
             "head": head_after, "tree_hash": tree_after,
             "snapshot_id": snapshot_id,
+            "validation_result": "PASS",
+            "ready_to_push": not wip,
+            "reason": "WIP_UNCOMMITTED_PASS" if wip else None,
+            "wip": wip,
             "evidence": {"path": str(artifact),
                          "evidence_sha256": sealed["evidence_sha256"]},
             "authorized_to_ship": False}
@@ -1912,6 +2116,18 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
         # classification, reads grow by the AST dependency closure of
         # the changed files, and an empty/unresolvable diff fails closed
         # as SCOPE_AUTO_EMPTY with NOTHING executed.
+        # In-place atomic refuses a conflicted/in-flight tree IMMEDIATELY
+        # -- before auto-scope expansion, classification or execution.
+        # Phase 11.1: an uncommitted WIP tree is allowed (snapshot +
+        # snapshot rollback inside _run_in_place); conflicts stay
+        # fail-closed and must never be masked by a downstream parse
+        # error on conflict-marker text.
+        if execution_mode == "in_place_atomic":
+            tip_refusal, _git_dir, _head, _tree = _inspect_tip(
+                root, allow_dirty=True)
+            if tip_refusal is not None:
+                return _tool_error(tip_refusal)
+
         auto_engaged = (any(_is_auto(entry) for entry in declared)
                         or any(_is_auto(entry) for entry in (reads or ()))
                         or any(_is_auto(entry)
@@ -1939,13 +2155,6 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
                 return _tool_error(
                     "SCOPE_AUTO_EMPTY: auto-scope resolved to an empty "
                     "declared_scope")
-
-        # In-place atomic refuses a dirty/conflicted/in-flight tree
-        # IMMEDIATELY -- before classification, before anything runs.
-        if execution_mode == "in_place_atomic":
-            tip_refusal, _git_dir, _head, _tree = _inspect_tip(root)
-            if tip_refusal is not None:
-                return _tool_error(tip_refusal)
 
         envelope = _dispatch_context(root)
         task_payload = {"id": wid, "reads": reads, "writes": writes,
@@ -2018,12 +2227,22 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
             # authority of its own.
             "authorized_to_ship": False,
         }
+        # Phase 11.1 evidence semantics: a passing run on a clean tip is
+        # commit-bound and pushable; a passing run on a dirty (WIP) tip
+        # seals a snapshot record with ready_to_push false +
+        # reason WIP_UNCOMMITTED_PASS -- tests passed, the commit is
+        # still missing.
+        payload["validation_result"] = (report.get("validation_result")
+                                        or ("PASS" if worker_state == "DONE"
+                                            else "FAIL"))
+        payload["ready_to_push"] = bool(report.get("ready_to_push"))
         if report.get("state") == "FAILED":
-            payload["reason"] = report.get("reason")
             payload["detail"] = report.get("detail")
             payload["exit_code"] = report.get("exit_code")
             payload["observed"] = report.get("observed") or []
             payload["rollback"] = report.get("rollback")
+        if report.get("reason"):
+            payload["reason"] = report.get("reason")
         return _tool_ok(payload)
     except ValueError as exc:
         return _tool_error(str(exc))
@@ -2038,8 +2257,10 @@ ASHA_SPEC: dict[str, Any] = {
         "#1 recommended entrypoint: one tool, deterministic auto-routing "
         "over your inputs (strict precedence cmd > branches > target > "
         "zero-config, never guessing). `cmd` executes atomically in "
-        "place with automatic \"@diff\" scope and clean rollback on "
-        "failure; `branches` verifies an ordered branch stack; `target` "
+        "place with automatic \"@diff\" scope (committed diff + "
+        "uncommitted WIP) and snapshot-safe rollback on failure -- the "
+        "inner TDD loop keeps its uncommitted work; `branches` verifies "
+        "an ordered branch stack; `target` "
         "(\"file.py:Symbol\" selectors, single/list/comma-separated) "
         "extracts surgical AST context; with only `root` it returns the "
         "deterministic status summary and -- when the tree is clean -- "
