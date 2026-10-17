@@ -386,6 +386,116 @@ def _maybe_write_ui(args: Any, payload: dict[str, Any]) -> None:
 
 _UNIFIED_FLAGS = ('--verify', '--stack', '--context', '--exec')
 
+# Phase 11.1 -- order-independent one-command grammar. Global modifiers
+# are extracted from ANYWHERE in argv (never after a verbatim `--`), the
+# positional PATH binds `root` when it appears before a mode flag, and a
+# mode flag claims the tokens that follow it up to the next known flag.
+_UNIFIED_VALUED = {'--root': 'root', '--base': 'base_ref',
+                   '--ui-out': 'ui_out'}
+_UNIFIED_SWITCHES = {'--json': 'as_json', '--no-color': 'no_color',
+                     '--ui': 'ui'}
+_UNIFIED_KNOWN = (set(_UNIFIED_FLAGS) | set(_UNIFIED_VALUED)
+                  | set(_UNIFIED_SWITCHES))
+
+
+def _unified_mode_requested(argv: list[str]) -> bool:
+    """True when a mode flag appears before a verbatim `--` separator
+    (after it every token belongs to the command being run)."""
+    for token in argv:
+        if token == '--':
+            return False
+        if token in _UNIFIED_FLAGS:
+            return True
+    return False
+
+
+def _parse_unified_argv(argv: list[str]
+                        ) -> tuple[dict[str, Any], str | None, list[str],
+                                   str | None]:
+    """(options, mode, mode_args, error) for the one-command grammar.
+
+    Order-free by construction: `asha PATH --exec "pytest -q" --base
+    origin/dev --json` and `asha --base origin/dev PATH --exec pytest -q
+    --json` describe the same invocation. `--exec`/`--stack`/`--context`
+    consume the tokens after them up to the next known Asha flag; `--`
+    hands everything after it to the active mode verbatim (argv for
+    `--exec`). Giving both `--root` and a positional PATH, two PATHs, or
+    two different mode flags is a usage error -- never a guess."""
+    options: dict[str, Any] = {'as_json': False, 'no_color': False,
+                               'ui': False, 'ui_out': None, 'root': None,
+                               'base_ref': None}
+    cut = argv.index('--') if '--' in argv else len(argv)
+    head = argv[:cut]
+    tail = argv[cut + 1:]
+    mode: str | None = None
+    mode_args: list[str] = []
+    positional: list[str] = []
+    index = 0
+    while index < len(head):
+        token = head[index]
+        if token in _UNIFIED_FLAGS:
+            if mode is not None and mode != token:
+                return options, None, [], (f'conflicting mode flags: '
+                                           f'{mode} and {token}')
+            mode = token
+            index += 1
+            continue
+        if token in _UNIFIED_VALUED:
+            if index + 1 >= len(head):
+                return options, None, [], f'{token} requires a value'
+            key = _UNIFIED_VALUED[token]
+            if options[key] is not None:
+                return options, None, [], f'duplicate {token}'
+            options[key] = head[index + 1]
+            index += 2
+            continue
+        if token in _UNIFIED_SWITCHES:
+            options[_UNIFIED_SWITCHES[token]] = True
+            index += 1
+            continue
+        if mode is not None:
+            # A mode owns its tokens: `--exec python -c ...`, `--exec
+            # pytest -q` -- only a KNOWN Asha flag ends the run, so a
+            # command's own flags (`-c`, `-q`) are command arguments.
+            mode_args.append(token)
+            index += 1
+            continue
+        if token.startswith('-') and token != '-':
+            return options, None, [], f'unknown flag: {token}'
+        positional.append(token)
+        index += 1
+    if tail:
+        if mode != '--exec':
+            return options, None, [], ('a verbatim `--` separator is only '
+                                       'valid with --exec')
+        mode_args.extend(tail)
+    if len(positional) > 1:
+        return options, None, [], ('unexpected extra positional token(s): '
+                                   + ' '.join(positional[1:]))
+    if positional:
+        if options['root'] is not None:
+            return options, None, [], ('give the repository either as the '
+                                       'positional path or via --root, '
+                                       'not both')
+        options['root'] = positional[0]
+    return options, mode, mode_args, None
+
+
+def _unified_ui_report(result: dict[str, Any],
+                       ui_out: str | None) -> None:
+    """`--ui` in the one-command forms: render the payload the same
+    passive way as the schema-v1 path; the written path goes to stderr
+    so the stdout contract stays byte-identical."""
+    try:
+        payload = json.loads(result.get('content', [{}])[0].get('text', ''))
+    except (ValueError, IndexError):
+        payload = {'raw': result.get('content')}
+    try:
+        out = ui.write_report(payload, ui_out)
+        print(f'Asha: report written to {out}', file=sys.stderr)
+    except OSError as exc:
+        print(f'Asha: report write failed: {exc}', file=sys.stderr)
+
 
 def _emit_unified(result: dict[str, Any], as_json: bool) -> int:
     """Phase 11 stdout contract for the one-command forms: exactly one
@@ -427,70 +537,66 @@ def _unified_cli(argv: list[str]) -> int:
         asha --context FILE:SYMBOL [FILE:SYMBOL ...]
         asha --exec CMD... [--base R]   atomic in-place governed command
 
-    Multiple `--exec` tokens are taken verbatim as the argv list; a
-    single token is split with shlex (quoted `--exec "pytest -q"`)."""
-    as_json = '--json' in argv
-    tokens = [token for token in argv if token != '--json']
-    base_ref: str | None = None
-    rest: list[str] = []
-    index = 0
-    while index < len(tokens):
-        if tokens[index] == '--base':
-            if index + 1 >= len(tokens):
-                print('Asha: --base requires a ref', file=sys.stderr)
-                return EXIT_ERROR
-            base_ref = tokens[index + 1]
-            index += 2
-            continue
-        rest.append(tokens[index])
-        index += 1
-    if not rest:
-        print('Asha: unified invocation requires a flag or path',
-              file=sys.stderr)
+    Phase 11.1: flags and the positional PATH may appear in ANY order
+    (`asha PATH --exec "pytest -q" --base origin/dev` == `asha --base
+    origin/dev PATH --exec pytest -q`); --root/--base/--json/--no-color/
+    --ui/--ui-out are extracted wherever they appear (never after a
+    verbatim `--`). Multiple `--exec` tokens are taken verbatim as the
+    argv list; a single token is split with shlex (quoted `--exec
+    "pytest -q"`); everything after `--` is always verbatim. A conflicting
+    repository binding (positional PATH + --root, or a stray token) exits
+    2 -- never a guess."""
+    options, mode, args, error = _parse_unified_argv(argv)
+    if error is not None:
+        print('Asha: ' + error, file=sys.stderr)
         return EXIT_ERROR
-    flag, args = rest[0], rest[1:]
+    root = options['root'] or '.'
+    base_ref = options['base_ref']
     scope_token = '@diff' if not base_ref else f'@diff:{base_ref}'
-    if flag in _UNIFIED_FLAGS:
-        if flag == '--verify':
-            if len(args) > 1:
-                print('Asha: --verify takes at most one PATH',
-                      file=sys.stderr)
-                return EXIT_ERROR
-            result = asha_verify_tip({
-                'root': args[0] if args else '.', 'base_ref': base_ref,
-                'run_checks': True, 'declared_scope': [scope_token]})
-        elif flag == '--stack':
-            if not args or not all(args):
-                print('Asha: --stack requires branch names',
-                      file=sys.stderr)
-                return EXIT_ERROR
-            result = asha_verify_stack(
-                {'root': '.', 'branches': args, 'base_ref': base_ref})
-        elif flag == '--context':
-            if not args:
-                print('Asha: --context requires FILE:SYMBOL '
-                      'selector(s)', file=sys.stderr)
-                return EXIT_ERROR
-            result = asha_asha({'root': '.', 'target': args})
-        else:   # --exec
-            if not args:
-                print('Asha: --exec requires a command', file=sys.stderr)
-                return EXIT_ERROR
-            cmd_argv = (shlex.split(args[0]) if len(args) == 1
-                        else list(args))
-            result = asha_asha({'root': '.', 'base_ref': base_ref,
-                                'cmd': cmd_argv})
-    elif os.path.isdir(os.path.expanduser(flag)):
-        if args:
-            print('Asha: unexpected extra token(s): ' + ' '.join(args),
+    if mode is None:
+        if options['root'] is None:
+            print('Asha: unified invocation requires a flag or path',
                   file=sys.stderr)
             return EXIT_ERROR
-        result = asha_asha({'root': flag, 'base_ref': base_ref})
-    else:
-        print(f'Asha: unknown unified flag or path: {flag}',
-              file=sys.stderr)
-        return EXIT_ERROR
-    return _emit_unified(result, as_json)
+        result = asha_asha({'root': root, 'base_ref': base_ref})
+    elif mode == '--verify':
+        if len(args) > 1:
+            print('Asha: --verify takes at most one PATH',
+                  file=sys.stderr)
+            return EXIT_ERROR
+        if args:
+            if options['root'] is not None:
+                print('Asha: give the repository either as the positional '
+                      'path or via --root, not both', file=sys.stderr)
+                return EXIT_ERROR
+            root = args[0]
+        result = asha_verify_tip({
+            'root': root, 'base_ref': base_ref,
+            'run_checks': True, 'declared_scope': [scope_token]})
+    elif mode == '--stack':
+        if not args or not all(args):
+            print('Asha: --stack requires branch names',
+                  file=sys.stderr)
+            return EXIT_ERROR
+        result = asha_verify_stack(
+            {'root': root, 'branches': args, 'base_ref': base_ref})
+    elif mode == '--context':
+        if not args:
+            print('Asha: --context requires FILE:SYMBOL '
+                  'selector(s)', file=sys.stderr)
+            return EXIT_ERROR
+        result = asha_asha({'root': root, 'target': args})
+    else:   # --exec
+        if not args:
+            print('Asha: --exec requires a command', file=sys.stderr)
+            return EXIT_ERROR
+        cmd_argv = (shlex.split(args[0]) if len(args) == 1
+                    else list(args))
+        result = asha_asha({'root': root, 'base_ref': base_ref,
+                            'cmd': cmd_argv})
+    if options['ui']:
+        _unified_ui_report(result, options['ui_out'])
+    return _emit_unified(result, options['as_json'])
 
 
 def _status(argv: list[str]) -> int:
@@ -653,11 +759,12 @@ def main(argv: list[str] | None = None) -> int:
         return _status(argv[1:])
     if command == 'inspect':
         return _inspect(argv[1:])
-    # Phase 11 one-command forms: only the four new flags and a bare
-    # existing-directory path route to the unified facade; every other
+    # Phase 11 one-command forms: the four mode flags route to the
+    # unified facade wherever they appear (Phase 11.1 order-free), and a
+    # bare existing-directory path keeps routing to it too; every other
     # token keeps the exact schema-v1 contract below (unknown flags
     # still exit 2 through argparse).
-    if argv and argv[0] in _UNIFIED_FLAGS:
+    if _unified_mode_requested(argv):
         return _unified_cli(argv)
     if (command is not None and command not in ('run', 'status',
                                                 'inspect')
