@@ -332,6 +332,7 @@ through the latest completed phase:
 | Phase 10 | Stack-native execution: `asha_verify_stack` multi-branch lineage, `"@diff"` auto-derived scope, batch surgical context, and atomic `in_place_atomic` dispatch — 7-tool server surface, v0.3.0 | Complete |
 | Phase 11 | Unified zero-friction entrypoint: `asha` auto-routing MCP tool (#1) plus one-command CLI (`PATH`, `--verify`, `--stack`, `--context`, `--exec`) — 8-tool surface, v0.4.0 | Complete |
 | Phase 11.1 | Order-free unified CLI (flags and PATH in any order, `--` verbatim) + snapshot-safe `in_place_atomic`: dirty-WIP trees accepted, snapshot rollback instead of `git reset --hard`, `WIP_UNCOMMITTED_PASS` evidence — v0.4.1 | Complete |
+| Phase 11.2 | Production telemetry hardening: `TIP_SCOPE_MISSING` deletion resilience (`deleted_in_scope`), AST `SyntaxError` diagnostics & fallback, and stack verification recognizing `in_place_atomic` evidence — v0.4.2 | Complete |
 
 Verified baseline: **944 passed, 0 failed** (CPython 3.11+, stdlib
 only; green on both Ubuntu/Debian and Windows — skip counts are

@@ -509,7 +509,17 @@ def _emit_unified(result: dict[str, Any], as_json: bool) -> int:
     except ValueError:
         pass
     if as_json:
-        print(text)
+        if isinstance(payload, dict):
+            print(text)
+        else:
+            err_payload = {
+                "state": "FAILED",
+                "ok": False,
+                "error": text or "Command failed",
+                "refusal_code": text.split(":")[0].strip() if ":" in text else "ERROR",
+                "response": text or "Command failed",
+            }
+            print(json.dumps(err_payload))
     elif isinstance(payload, dict):
         print(payload.get('response') or text)
     else:
@@ -552,44 +562,47 @@ def _unified_cli(argv: list[str]) -> int:
         return EXIT_ERROR
     root = options['root'] or '.'
     base_ref = options['base_ref']
+    def _fail_usage(msg: str) -> int:
+        if options.get('as_json'):
+            print(json.dumps({
+                "state": "FAILED",
+                "ok": False,
+                "error": msg,
+                "refusal_code": "USAGE_ERROR",
+                "response": msg,
+            }))
+        else:
+            print(f'Asha: {msg}', file=sys.stderr)
+        return EXIT_ERROR
+
     scope_token = '@diff' if not base_ref else f'@diff:{base_ref}'
     if mode is None:
         if options['root'] is None:
-            print('Asha: unified invocation requires a flag or path',
-                  file=sys.stderr)
-            return EXIT_ERROR
+            return _fail_usage('unified invocation requires a flag or path')
         result = asha_asha({'root': root, 'base_ref': base_ref})
     elif mode == '--verify':
         if len(args) > 1:
-            print('Asha: --verify takes at most one PATH',
-                  file=sys.stderr)
-            return EXIT_ERROR
+            return _fail_usage('--verify takes at most one PATH')
         if args:
             if options['root'] is not None:
-                print('Asha: give the repository either as the positional '
-                      'path or via --root, not both', file=sys.stderr)
-                return EXIT_ERROR
+                return _fail_usage('give the repository either as the positional '
+                                  'path or via --root, not both')
             root = args[0]
         result = asha_verify_tip({
             'root': root, 'base_ref': base_ref,
             'run_checks': True, 'declared_scope': [scope_token]})
     elif mode == '--stack':
         if not args or not all(args):
-            print('Asha: --stack requires branch names',
-                  file=sys.stderr)
-            return EXIT_ERROR
+            return _fail_usage('--stack requires branch names')
         result = asha_verify_stack(
             {'root': root, 'branches': args, 'base_ref': base_ref})
     elif mode == '--context':
         if not args:
-            print('Asha: --context requires FILE:SYMBOL '
-                  'selector(s)', file=sys.stderr)
-            return EXIT_ERROR
+            return _fail_usage('--context requires FILE:SYMBOL selector(s)')
         result = asha_asha({'root': root, 'target': args})
     else:   # --exec
         if not args:
-            print('Asha: --exec requires a command', file=sys.stderr)
-            return EXIT_ERROR
+            return _fail_usage('--exec requires a command')
         cmd_argv = (shlex.split(args[0]) if len(args) == 1
                     else list(args))
         result = asha_asha({'root': root, 'base_ref': base_ref,

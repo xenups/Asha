@@ -76,7 +76,7 @@ from .worktree import _git
 SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18",
                                "2025-03-26", "2024-11-05"]
 DEFAULT_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]
-SERVER_INFO = {"name": "asha-orchestrator", "version": "0.4.1"}
+SERVER_INFO = {"name": "asha-orchestrator", "version": "0.4.2"}
 CAPABILITIES: dict[str, Any] = {"tools": {}}
 
 PARSE_ERROR = -32700
@@ -432,7 +432,7 @@ def _inspect_tip(root: Path, allow_dirty: bool = False
         git_dir = Path(_git(root, "rev-parse", "--git-dir").strip())
         if not git_dir.is_absolute():
             git_dir = root / git_dir
-        status = _git(root, "status", "--porcelain")
+        status = _git(root, "status", "--porcelain", strip=False)
         # `git diff --check` exits NON-ZERO when it reports defects
         # (1 or 2 depending on git version), so it must not go
         # through the raising _git helper: 0 = clean, 1/2 = defect
@@ -458,12 +458,12 @@ def _inspect_tip(root: Path, allow_dirty: bool = False
         if conflicted:
             return ("TIP_CONFLICTED: "
                     f"{len(conflicted)} unmerged path(s): "
-                    + ", ".join(line[3:] for line in conflicted[:10]),
+                    + ", ".join(line[3:].strip() for line in conflicted[:10]),
                     None, "", "")
         if not allow_dirty:
             return ("TIP_DIRTY: "
                     f"{len(dirty)} uncommitted path(s): "
-                    + ", ".join(line[3:] for line in dirty[:10]), None, "",
+                    + ", ".join(line[3:].strip() for line in dirty[:10]), None, "",
                     "")
     if diff_check.strip() and not (allow_dirty and dirty):
         return ("TIP_DIFF_UNCLEAN: git diff --check reported "
@@ -520,8 +520,9 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
             # deterministically from git facts; protected governance
             # paths (.github/, .jspace/) never enter implicitly, and an
             # empty/unresolvable diff fails closed as SCOPE_AUTO_EMPTY.
-            resolved_scope, _auto_changed, auto_error = _resolve_auto(
-                resolved_root, declared_scope)
+            scope_res = _resolve_auto(resolved_root, declared_scope)
+            resolved_scope, _auto_changed, auto_error = scope_res
+            _auto_deleted = getattr(scope_res, "deleted", [])
             if auto_error is not None:
                 return _tool_error(auto_error)
             declared_scope = resolved_scope
@@ -541,9 +542,15 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
             missing = [rel for rel in declared_scope
                        if not (resolved_root / rel).exists()]
             if missing:
-                return _tool_error(
-                    "TIP_SCOPE_MISSING: declared_scope path(s) not in "
-                    "the tip tree: " + ", ".join(missing))
+                # Check if any missing paths are actually deleted in the diff
+                # (they were tracked deletions, so they're valid in-scope)
+                if '_auto_deleted' in locals() and _auto_deleted:
+                    # Filter out paths that were legitimately deleted in the diff
+                    missing = [rel for rel in missing if rel not in _auto_deleted]
+                if missing:
+                    return _tool_error(
+                        "TIP_SCOPE_MISSING: declared_scope path(s) not in "
+                        "the tip tree: " + ", ".join(missing))
         try:
             snapshot_id = audit_snapshot.snapshot_id_of(resolved_root)
         except Exception as exc:
@@ -581,6 +588,8 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
             "declared_scope": declared_scope,
             "run_checks": run_checks,
             "ok": checks_ok,
+            # Phase 11.2: track deleted files in scope
+            "deleted_in_scope": _auto_deleted if '_auto_deleted' in locals() else [],
         })
         artifact = (common_paths.get_state_dir(resolved_root)
                     / "verify-tip" / f"{head[:12]}.evidence.json")
@@ -611,9 +620,13 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
                    "run_checks": run_checks,
                    "checks": checks,
                    "ok": True,
+                   "state": "DONE",
+                   "ready_to_push": True,
                    "authorized_to_ship": False,
                    "evidence_sha256": sealed["evidence_sha256"],
                    "evidence_path": str(artifact),
+                   # Phase 11.2: include deleted files in scope
+                   "deleted_in_scope": _auto_deleted if '_auto_deleted' in locals() else [],
                    "response": (
                        f"tip {head[:12]} verified in place: clean tree; "
                        f"snapshot {snapshot_id[:12]}; {check_summary}; "
@@ -753,6 +766,25 @@ def asha_verify_stack(arguments: dict[str, Any]) -> dict[str, Any]:
                 except (OSError, ValueError):
                     digest_ok = False
                 evidence_state = "verified" if digest_ok else "tampered"
+            else:
+                # Phase 11.2: Check dispatch-in-place for clean-tree verified run
+                dip_dir = state_dir / "dispatch-in-place"
+                if dip_dir.is_dir():
+                    for f in sorted(dip_dir.glob("*.evidence.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+                        try:
+                            s = json.loads(f.read_text(encoding="utf-8"))
+                            if not isinstance(s, dict):
+                                continue
+                            if evidence.compute_digest(s) != s.get("evidence_sha256"):
+                                evidence_state = "tampered"
+                                break
+                            if (s.get("commit") == head_sha
+                                    and not s.get("wip_uncommitted")
+                                    and s.get("ready_to_push")):
+                                evidence_state = "verified"
+                                break
+                        except (OSError, ValueError):
+                            continue
             if not is_linear:
                 status = "STACK_ANCESTRY_DRIFT"
             elif evidence_state == "missing":
@@ -770,6 +802,7 @@ def asha_verify_stack(arguments: dict[str, Any]) -> dict[str, Any]:
                 "is_linear": is_linear,
                 "rebase_recipe": recipe,
                 "evidence": evidence_state,
+                "evidence_verified": evidence_state == "verified",
                 "status": status,
             })
         linear_count = sum(1 for row in rows if row["is_linear"])
@@ -1369,7 +1402,8 @@ def _index_reachable(root: Path, start_rel: str
     return _index_from(root, (start_rel,))
 
 
-def _index_from(root: Path, starts: tuple[str, ...]
+def _index_from(root: Path, starts: tuple[str, ...],
+                collect_errors: list[dict[str, Any]] | None = None
                 ) -> tuple[ModuleIndex, ...]:
     """Index every start file plus every repo module reachable through
     their import facts (lexically, ONE shared BFS visited-set, excluded
@@ -1392,7 +1426,18 @@ def _index_from(root: Path, starts: tuple[str, ...]
                                              errors="replace")
         except OSError:
             continue  # unreadable target -> boundary, not a crash
-        index = index_module(module, source)
+        try:
+            index = index_module(module, source)
+        except (ValueError, SyntaxError) as exc:
+            line = getattr(exc, 'lineno', 0) or 0
+            msg = getattr(exc, 'msg', str(exc)) or str(exc)
+            if collect_errors is not None:
+                collect_errors.append({
+                    "file": rel,
+                    "msg": msg,
+                    "line": line,
+                })
+            continue
         ordered.append(index)
         for fact in index.imports:
             queue.extend(_import_candidates(root, module, fact))
@@ -1411,14 +1456,17 @@ def _is_auto(entry: str) -> bool:
     return entry == "@diff" or entry.startswith("@diff:")
 
 
-def _auto_diff_files(root: Path, token: str) -> tuple[list[str], str | None]:
+def _auto_diff_files(root: Path, token: str) -> tuple[list[str], list[str], str | None]:
     """Deterministic expansion of one auto-scope token to repo-relative
     files: `git diff --name-only <base>...HEAD`. Bare "@diff" anchors on
     the first tracked main/dev ref (origin/dev, origin/main, dev, main)
     via merge-base semantics, falling back to HEAD~1; "@diff:<ref>"
     requires that ref to resolve. Anything unresolvable or empty fails
     closed as SCOPE_AUTO_EMPTY -- never an empty scope that silently
-    authorizes nothing-or-everything."""
+    authorizes nothing-or-everything.
+
+    Returns (files, deleted_files, error) where deleted_files are paths
+    that were deleted in the diff (git diff --diff-filter=D)."""
     if token == "@diff":
         base = None
         for candidate in ("origin/dev", "origin/main", "dev", "main"):
@@ -1433,25 +1481,46 @@ def _auto_diff_files(root: Path, token: str) -> tuple[list[str], str | None]:
                 _git(root, "rev-parse", "--verify", "HEAD~1^{commit}")
                 base = "HEAD~1"
             except OrchestratorError:
-                return [], ("SCOPE_AUTO_EMPTY: no base ref resolves "
+                return [], [], ("SCOPE_AUTO_EMPTY: no base ref resolves "
                             "(no tracked main/dev ref and HEAD has no "
                             "parent commit)")
     else:
         base = token.partition(":")[2].strip()
         if not base:
-            return [], ("SCOPE_AUTO_EMPTY: empty base_ref in "
+            return [], [], ("SCOPE_AUTO_EMPTY: empty base_ref in "
                         "@diff:<base_ref>")
         try:
             _git(root, "rev-parse", "--verify", base + "^{commit}")
         except OrchestratorError:
-            return [], (f"SCOPE_AUTO_EMPTY: base_ref {base!r} does not "
+            return [], [], (f"SCOPE_AUTO_EMPTY: base_ref {base!r} does not "
                         "resolve to a commit")
     try:
         output = _git(root, "diff", "--name-only", f"{base}...HEAD")
     except OrchestratorError as exc:
-        return [], f"SCOPE_AUTO_EMPTY: git diff failed: {exc}"
+        return [], [], f"SCOPE_AUTO_EMPTY: git diff failed: {exc}"
     files = sorted({line.strip().removeprefix("./")
                     for line in output.splitlines() if line.strip()})
+    # Get deleted files from the diff (--diff-filter=D) and working tree
+    deleted_list: list[str] = []
+    try:
+        deleted_output = _git(root, "diff", "--name-only", "--diff-filter=D", f"{base}...HEAD")
+        deleted_list.extend(line.strip().removeprefix("./")
+                            for line in deleted_output.splitlines() if line.strip())
+    except OrchestratorError:
+        pass
+    try:
+        st_out = _git(root, "status", "--porcelain", strip=False)
+        for line in st_out.splitlines():
+            if not line.strip():
+                continue
+            if "D" in line[:2]:
+                p = line[3:].strip().removeprefix("./")
+                if " -> " in p:
+                    p = p.split(" -> ")[0]
+                deleted_list.append(p)
+    except OrchestratorError:
+        pass
+    deleted = sorted(set(deleted_list))
     # Phase 11.1: the auto-scope must describe the working TREE, not just
     # the committed branch diff -- an in-place run on a dirty tip (the
     # inner TDD loop) would otherwise report every WIP file as a scope
@@ -1463,14 +1532,27 @@ def _auto_diff_files(root: Path, token: str) -> tuple[list[str], str | None]:
         dirty = []
     files = sorted(set(files) | set(dirty))
     if not files:
-        return [], (f"SCOPE_AUTO_EMPTY: diff {base}...HEAD and the working "
+        return [], [], (f"SCOPE_AUTO_EMPTY: diff {base}...HEAD and the working "
                     "tree contain zero files")
-    return files, None
+    return files, deleted, None
+
+
+class AutoScopeResult(tuple):
+    """3-tuple (resolved, changed, error) with a .deleted attribute.
+    Preserves backwards compatibility for Phase 10/11 callers unpacking 3 values
+    while providing Phase 11.2 deleted file tracking."""
+    deleted: list[str]
+
+    def __new__(cls, resolved: list[str] | None, changed: list[str],
+                error: str | None, deleted: list[str] | None = None):
+        instance = super().__new__(cls, (resolved, changed, error))
+        instance.deleted = list(deleted or ())
+        return instance
 
 
 def _resolve_auto(root: Path, entries: list[str] | None
-                  ) -> tuple[list[str] | None, list[str], str | None]:
-    """(resolved_entries, all_changed_files, error).
+                  ) -> AutoScopeResult:
+    """(resolved_entries, all_changed_files, error) with .deleted attribute.
 
     Every "@diff" / "@diff:<base_ref>" entry expands to the changed
     files; explicitly listed entries pass through unchanged (only
@@ -1478,25 +1560,29 @@ def _resolve_auto(root: Path, entries: list[str] | None
     expansion -> (None, [], SCOPE_AUTO_EMPTY...). Non-auto input lists
     return verbatim with no git call."""
     if entries is None:
-        return None, [], None
+        return AutoScopeResult(None, [], None, [])
     if not any(_is_auto(entry) for entry in entries):
-        return list(entries), [], None
+        return AutoScopeResult(list(entries), [], None, [])
     changed: list[str] = []
+    deleted: list[str] = []
     for token in (entry for entry in entries if _is_auto(entry)):
-        files, error = _auto_diff_files(root, token)
+        files, deleted_files, error = _auto_diff_files(root, token)
         if error is not None:
-            return None, [], error
+            return AutoScopeResult(None, [], error, [])
         changed.extend(files)
+        deleted.extend(deleted_files)
     others = [entry for entry in entries if not _is_auto(entry)]
     auto_kept = [rel for rel in sorted(set(changed))
                  if not rel.startswith(_AUTO_PROTECTED)]
     resolved = sorted(set(auto_kept) | set(others))
     if not resolved:
-        return None, sorted(set(changed)), (
-            "SCOPE_AUTO_EMPTY: diff resolves to zero in-scope files "
-            "(all changed paths are protected governance paths under "
-            ".github/ or .jspace/)")
-    return resolved, sorted(set(changed)), None
+        return AutoScopeResult(
+            None, sorted(set(changed)),
+            ("SCOPE_AUTO_EMPTY: diff resolves to zero in-scope files "
+             "(all changed paths are protected governance paths under "
+             ".github/ or .jspace/)"),
+            sorted(set(deleted)))
+    return AutoScopeResult(resolved, sorted(set(changed)), None, sorted(set(deleted)))
 
 
 def _module_rel(root: Path, module: str) -> str | None:
@@ -1513,15 +1599,21 @@ def _module_rel(root: Path, module: str) -> str | None:
 
 
 def _expand_reads(root: Path, changed: list[str],
-                  base_reads: list[str] | None) -> list[str]:
+                  base_reads: list[str] | None,
+                  collect_errors: list[dict[str, Any]] | None = None) -> list[str]:
     """Read-set expansion for auto-scope: every changed file plus its
     AST dependency closure (the SAME _index_from BFS as the surgical
-    pipeline) -- deterministic, no guessing, existing reads unioned in."""
+    pipeline) -- deterministic, no guessing, existing reads unioned in.
+
+    Returns expanded_reads list. If collect_errors is provided, AST syntax
+    errors are recorded into it."""
     closure: set[str] = set(changed)
+    errs: list[dict[str, Any]] = collect_errors if collect_errors is not None else []
     for rel in changed:
         if not rel.endswith(".py") or not (root / rel).is_file():
             continue
-        for index in _index_from(root, (rel,)):
+        indices = _index_from(root, (rel,), collect_errors=errs)
+        for index in indices:
             found = _module_rel(root, index.module)
             if found is not None:
                 closure.add(found)
@@ -1596,7 +1688,26 @@ def asha_get_surgical_context(arguments: dict[str, Any]
         # target (shared BFS visited-set), then closure -> slice per
         # target. Single mode is the batch-of-one path, so the payload
         # shape stays byte-identical to the Phase 4.3 contract.
-        indices = _index_from(root, tuple(dict.fromkeys(rels)))
+        syntax_errors: list[dict[str, Any]] = []
+        indices = _index_from(root, tuple(dict.fromkeys(rels)),
+                              collect_errors=syntax_errors)
+        if syntax_errors:
+            first_err = syntax_errors[0]
+            err_msg = f"AST_SYNTAX_ERROR: {first_err['file']}: {first_err['msg']}"
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": json.dumps({
+                        "state": "FAILED",
+                        "ok": False,
+                        "error": err_msg,
+                        "refusal_code": "AST_SYNTAX_ERROR",
+                        "response": err_msg,
+                        "ast_syntax_errors": syntax_errors,
+                    })
+                }],
+                "isError": True,
+            }
         graph = build_graph(indices)
         results: list[dict[str, Any]] = []
         for (item_file, item_symbol), rel in zip(pairs, rels):
@@ -2033,6 +2144,29 @@ def _run_in_place(root: Path, worker: dict[str, Any],
                 / "dispatch-in-place" / f"{task_id}.evidence.json")
     try:
         evidence.write_to(artifact, sealed)
+        # Phase 11.2: canonical commit-bound tip evidence
+        if not wip and head_after:
+            tip_artifact = (common_paths.get_state_dir(root)
+                            / "verify-tip" / f"{head_after[:12]}.evidence.json")
+            try:
+                tip_sealed = evidence.seal({
+                    "schema": evidence.SCHEMA,
+                    "stage": "verify_tip",
+                    "scope": in_place_scope,
+                    "commit": head_after,
+                    "tree_hash": tree_after,
+                    "observed_at": evidence.now_iso(),
+                    "checks": [{"name": "in_place_atomic", "status": "passed"}],
+                    "authorized_to_ship": False,
+                    "snapshot_id": snapshot_id,
+                    "declared_scope": declared,
+                    "run_checks": True,
+                    "ok": True,
+                    "ready_to_push": True,
+                })
+                evidence.write_to(tip_artifact, tip_sealed)
+            except OSError:
+                pass
     except OSError as exc:
         rollback = (_rollback(root, pre_head) if snapshot["clean"]
                     else _restore_snapshot(root, snapshot))
@@ -2133,15 +2267,18 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
                         or any(_is_auto(entry)
                                for entry in (writes or ())))
         all_changed: list[str] = []
+        all_deleted: list[str] = []
         for key, value in (("declared_scope", declared),
                            ("reads", reads), ("writes", writes)):
             if value is None:
                 continue
-            resolved_entries, changed, auto_error = _resolve_auto(
-                root, value)
+            scope_res = _resolve_auto(root, value)
+            resolved_entries, changed, auto_error = scope_res
+            deleted = getattr(scope_res, "deleted", [])
             if auto_error is not None:
                 return _tool_error(auto_error)
             all_changed.extend(changed)
+            all_deleted.extend(deleted)
             if resolved_entries is not None:
                 if key == "declared_scope":
                     declared = resolved_entries
@@ -2150,7 +2287,11 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
                 else:
                     writes = resolved_entries
         if auto_engaged:
-            reads = _expand_reads(root, sorted(set(all_changed)), reads)
+            _ast_syntax_errors: list[dict[str, Any]] = []
+            reads = _expand_reads(root, sorted(set(all_changed)), reads,
+                                  collect_errors=_ast_syntax_errors)
+            # Phase 11.2: syntax errors from AST indexing are recorded but
+            # do not fail the dispatch (allow in_place_atomic to proceed)
             if not declared:
                 return _tool_error(
                     "SCOPE_AUTO_EMPTY: auto-scope resolved to an empty "
