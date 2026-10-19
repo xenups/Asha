@@ -47,6 +47,26 @@ CHECK_SCOPE = {
     'mypy': 'dependency_graph',
 }
 
+# pytest's documented exit codes. Only 1 means the SUITE judged the change:
+# 2/3/4 mean the RUNNER never produced a verdict (interrupted, internal
+# error, usage/config error -- e.g. an unresolvable test path), 5 means
+# nothing was collected. Every nonzero code stays `failed` (fail-closed; the
+# exit code itself is the authority, see gate_states.check_runner contract) --
+# the note only keeps "the tests failed" and "the runner never ran them"
+# distinguishable in evidence.json.
+_PYTEST_EXIT_NOTES = {
+    1: 'test_failures',
+    2: 'pytest_interrupted',
+    3: 'pytest_internal_error',
+    4: 'pytest_usage_or_config_error',
+    5: 'no_tests_collected',
+}
+
+
+def _pytest_exit_note(exit_code: int) -> str:
+    """Informational label for a nonzero pytest exit code."""
+    return _PYTEST_EXIT_NOTES.get(exit_code, 'pytest_failed')
+
 
 class CheckRunnerError(Exception):
     """A check could not be executed at all (fail-closed)."""
@@ -65,7 +85,16 @@ def _commands(root: Path, names: list[str], changed_py: list[str]) -> list[tuple
             commands.append((name, [py, '-m', 'ruff', 'check',
                                     '--output-format=concise', *target]))
         elif name == 'pytest':
-            commands.append((name, [py, '-m', 'pytest', 'tests/', '-q']))
+            # Test discovery: a `tests/` directory stays the configured
+            # contract when present (unchanged behavior). Without it, pass
+            # NO path so pytest resolves collection from the invocation
+            # root (cwd = repository root) through the project's own
+            # configuration (rootdir/testpaths/configfile). The previous
+            # hardcoded 'tests/' made every root-level suite exit 4
+            # (usage error: "file or directory not found") and surface as
+            # EXECUTION_FAILED on code whose tests passed.
+            target = ['tests/'] if (root / 'tests').is_dir() else []
+            commands.append((name, [py, '-m', 'pytest', *target, '-q']))
         elif name == 'mypy':
             # A .py launcher shadowed by a same-named package cannot
             # be typed as itself (mypy: 'Duplicate module named ...';
@@ -241,6 +270,11 @@ def run(root: Path | str, resolved: dict,
             continue
         entry['exit_code'] = proc.returncode
         entry['status'] = 'passed' if proc.returncode == 0 else 'failed'
+        if name == 'pytest' and proc.returncode != 0:
+            # Informational only (gate_states derives authority from
+            # status+exit_code): keeps a red suite distinguishable from a
+            # runner that never produced a verdict.
+            entry['note'] = _pytest_exit_note(proc.returncode)
         combined = (proc.stdout or '') + (proc.stderr or '')
         # same secret redaction as the scoped path (tail is retained in
         # evidence and, on failure, in the FAILED outcome's details)
