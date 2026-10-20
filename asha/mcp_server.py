@@ -48,6 +48,7 @@ import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
 from graphlib import CycleError, TopologicalSorter
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from time import monotonic, perf_counter_ns
 from typing import Any, TextIO
@@ -78,7 +79,11 @@ from .worktree import _git
 SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18",
                                "2025-03-26", "2024-11-05"]
 DEFAULT_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]
-SERVER_INFO = {"name": "asha-orchestrator", "version": "0.5.0"}
+try:
+    _VERSION = version("asha")
+except PackageNotFoundError:  # running from a source tree with no install
+    _VERSION = "0.0.0+unknown"
+SERVER_INFO = {"name": "asha-orchestrator", "version": _VERSION}
 CAPABILITIES: dict[str, Any] = {"tools": {}}
 
 PARSE_ERROR = -32700

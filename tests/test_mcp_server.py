@@ -19,6 +19,7 @@ import json
 import re
 import subprocess
 import sys
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +39,7 @@ def test_initialize_echoes_supported_version() -> None:
     result: dict[str, Any] = response["result"]
     assert result["protocolVersion"] == "2025-06-18"
     assert result["serverInfo"] == {"name": "asha-orchestrator",
-                                    "version": "0.5.0"}
+                                    "version": version("asha")}
     assert result["capabilities"] == {"tools": {}}
     assert response["id"] == 1
     assert stderr.getvalue() == ""  # supported -> silent, no warning
