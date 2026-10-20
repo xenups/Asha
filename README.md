@@ -1,417 +1,288 @@
-# Asha — Governed Git-Native Multi-Agent Orchestrator & MCP Server
+# Asha
 
-> **The Golden Law:** `PASS(A) + PASS(B) != PASS(A ∪ B)`
+**Asha helps you verify AI-generated code changes before you accept them.**
 
-Asha is a zero-external-dependency, fail-closed system engine that isolates
-AI coding agents into dedicated Git worktrees, checks AST dependency
-conflicts before anything runs, and only merges work back through atomic
-integration verified against a unified gate. Every stage — dispatch,
-execution, evidence, ship — is refused unless provably safe: **unknown is
-never treated as safe**.
+[![release](https://img.shields.io/badge/release-v0.5.0-blue)](https://github.com/xenups/Asha/releases/tag/v0.5.0)
+[![CI](https://github.com/xenups/Asha/actions/workflows/ci.yml/badge.svg)](https://github.com/xenups/Asha/actions/workflows/ci.yml)
+![python](https://img.shields.io/badge/python-3.11%2B-3776AB)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-- **stdlib only** — no LLM SDKs, no orchestration frameworks, no daemons
-- **hermetic workers** — each worker executes in its own detached worktree against an immutable base commit; the main tree is never mutated in place
-- **cryptographic evidence** — every completed worker seals `HEAD^{tree}`, observed file scope, and check results into tamper-evident `evidence.json`; integration re-verifies the seal before staging anything
-- **one MCP server, eight tools** — start with the unified `asha` tool; the seven specialized tools stay fully available. Usable from any MCP client (Antigravity, Hermes, Claude Desktop, Cursor, Windsurf)
+AI coding agents can change files you did not authorize, break things that used
+to work, or report success without enough evidence to back it up. Asha adds a
+checkpoint between the agent and your branch: it freezes the set of files the
+task may touch, runs the change in its own Git worktree, runs your checks on both
+the untouched baseline and the result, and then records whether the evidence
+supports accepting the change.
+
+Asha does not guarantee bug-free code, and it does not replace human review. What
+it does is make the boundary, the checks and the reason for accepting or
+rejecting a change explicit and auditable — and it refuses to call a run
+successful when the evidence is missing or inconclusive.
+
+[![Asha workflow: freeze scope, isolate worktree, run checks, compare baseline, and report the decision](docs/assets/asha-demo.gif)](docs/demo.html)
+
+*Animated overview of the five stages. [Open the interactive demo](docs/demo.html)
+for chapter controls, play/pause and a light/dark theme toggle — standalone HTML,
+no build step: `open docs/demo.html` (macOS), `xdg-open docs/demo.html` (Linux),
+`start docs\demo.html` (Windows).*
+
+GitHub Pages is not enabled for this repository, so there is no live demo URL.
+
+---
+
+## The problem it solves
+
+Agent-driven changes fail in three ways that a green test suite does not catch.
+
+**1. Scope creep.** The agent fixes `parse_date()` and also "tidies" two files
+nobody mentioned. Asha records the observed diff and rejects any path outside
+`declared_scope`:
+
+```
+INVALID_EVIDENCE / scope_violation:src/forbidden.py
+```
+
+**2. Silent regressions.** The candidate's test run fails — but some of those
+tests already failed before the change. A bare exit code cannot tell the two
+apart. Asha runs the same check matrix on a clean baseline worktree at the base
+commit and reports the *delta*, so a passing candidate is never blamed for, or
+excused by, failures it did not create:
+
+```
+DONE    / COMPARED / NO_FAILURES
+FAILED  / COMPARED / NEW_FAILURES      (failure identities recorded)
+```
+
+**3. The empty-baseline fallacy.** A baseline that *ran and failed* without a
+parseable failure identity (collection error, crash, timeout) is not a known
+empty failure set. Asha keeps that distinct from "compared, nothing failed":
+
+```
+baseline_failures: null          # unknown — not []
+FAILED / NOT_COMPARED / UNKNOWN
+reason: comparison_inconclusive:baseline_failures_unparsed   (no seal)
+```
+
+A baseline that never produced checks at all is `NOT_COMPARED` and keeps the
+historical `DONE` contract: there is nothing to attribute.
+
+## The five-stage workflow
+
+1. **Freeze scope — `spec.json`.** Each worker declares `reads`, `writes` and
+   the `declared_scope` that will be enforced.
+2. **Worktree isolation.** The worker executes in its own Git worktree, so an
+   in-flight change cannot touch the target branch or a sibling worker's files.
+3. **Scope validation.** Observed changes are diffed against `declared_scope`.
+   Unauthorized paths produce `INVALID_EVIDENCE`; changed paths the caller did
+   not account for produce `unaccounted_paths` and `SCOPE_INCOMPLETE` (exit 2).
+4. **Baseline vs. candidate delta gate.** The base commit is checked in a
+   separate baseline worktree; failing identities are compared and classified
+   (`NO_FAILURES`, `PRE_EXISTING_ONLY`, `NEW_FAILURES`, `UNKNOWN`).
+5. **SHA-256 evidence seal.** The evidence document is hashed and bound to the
+   run, and is issued only when the gates above pass.
+
+Worktree isolation is path isolation, not a security sandbox. A SHA-256 seal
+proves the recorded evidence was not altered — not that the code is correct.
+
+## v0.5.0 highlights
+
+- **Governed comparison contract.** Every governed run records `performed`,
+  `comparable`, `reason` and `detail` for the baseline comparison, plus
+  `baseline_failures`, `current_failures` and `delta_failures` when the
+  comparison actually ran. `reason` is `COMPARED`, `NOT_COMPARED`,
+  `BASE_EQUALS_TARGET` or `INVENTORY_MISMATCH`; tree identifiers are never
+  invented.
+- **Fail-closed identity.** `baseline_failures_unparsed` yields an inconclusive
+  comparison, a `FAILED` worker, no seal, and no authorization for dependents.
+- **Acceptance gate.** `--acceptance CMD` must demonstrably pass: supplied but
+  not executed, zero tests collected, and skip/deselect-only runs all fail. The
+  record (`command, supplied, ran, exit_code, outcome`) is sealed into worker
+  evidence, and a command that never ran keeps `exit_code: null`.
+- **Scope accounting.** `unaccounted_paths` is written into every payload and
+  `SCOPE_INCOMPLETE` exits 2 instead of reporting a pass.
+- **Worktree source binding.** A worktree run takes dependencies from the
+  original checkout while imports stay bound to the worktree's own source; a
+  fail-closed probe refuses to validate another checkout's copy. Windows
+  `.venv/Scripts` layouts are supported alongside POSIX `.venv/bin`.
+- **MCP server.** `asha-mcp` and `python -m asha.mcp_server` are the same stdio
+  JSON-RPC server (protocol `2024-11-05`). The v0.5.0 release was smoke-tested
+  for the initialization handshake — not certified against every client.
+- **Measured runtime.** In the frozen A–D benchmark the Asha/direct wall-time
+  ratio was `1.042×` median and `1.089×` mean (three trials; see below).
+
+### Governance overhead, measured honestly
+
+The local scope and evidence gates are deterministic Python and add no model
+calls of their own. That does **not** mean an end-to-end run uses no extra
+tokens: the measured ratios below vary above and below `1.0` depending on prompt
+caching and call count.
 
 ## Quickstart
 
-### One command, one tool (recommended)
-
-You do not need to know the tool boundaries. Invoke **`asha`** (MCP tool)
-or the same-named CLI forms and Asha routes deterministically from your
-inputs and the repository state — strict precedence
-`cmd` > `branches` > `target` > zero-config, never guessing:
+Requires Python 3.11+ (stdlib only; no runtime dependencies).
 
 ```bash
-# MCP: one tool, auto-routed
-asha(root=".")                                  # clean tree -> status + sealed pre-push tip evidence
-asha(cmd="pytest -q")                          # atomic in-place run, auto "@diff" scope, rollback on failure
-asha(branches=["feat1","feat2"], base_ref="origin/dev")   # ordered stack lineage verification
-asha(target=["app.py:foo", "app.py:bar"])      # batch surgical AST context
-
-# CLI: the same flows, one command each
-asha /path/to/repo          # zero-config: status + tip evidence when clean
-asha --verify               # in-place tip verification with checks, seals evidence
-asha --stack b1 b2 b3 --base origin/dev
-asha --context app.py:foo app2.py:bar
-asha --exec "pytest -q"     # governed atomic in-place command
-asha-mcp /path/to/repo      # bare path routes to the unified tool (exit 0 ok / 1 refused / 2 usage)
-
-# flags and the positional PATH may appear in ANY order (Phase 11.1)
-asha /path/to/repo --exec "pytest -q" --base origin/dev
-asha --base origin/dev /path/to/repo --exec pytest -q --json
-asha --json /path/to/repo --stack b1 b2 b3 --base origin/dev
-asha /path/to/repo --verify --base origin/dev
+git clone https://github.com/xenups/Asha.git
+cd Asha
+pip install -e .            # registers the `asha` and `asha-mcp` console scripts
 ```
 
-A dirty tree is never a failure of status reading: you get the exact
-changed scope and `ready_to_push: false (TIP_DIRTY)`.
-
-Phase 11.1 -- `--exec`/`cmd` is safe INSIDE an iterative TDD loop: an
-uncommitted WIP tree is accepted, its exact state (tracked edits, index,
-untracked files) is snapshotted before the command runs, and a failing or
-out-of-scope command rolls the tree back to that snapshot -- never to
-`HEAD`, so uncommitted work survives. A command that passes on a dirty
-tree returns `state: "DONE"`, `validation_result: "PASS"` and
-`ready_to_push: false` with `reason: "WIP_UNCOMMITTED_PASS"`: the tests
-passed, the commit is still missing. `--` hands everything after it to
-`--exec` verbatim (`asha PATH --exec -- pytest -q`). Merge-conflict
-(unmerged) or in-flight git operations still fail closed before anything
-runs.
-
-```bash
-pip install -e .          # editable install; registers the console scripts
-```
-
-Registered CLI commands:
-
-```text
-asha [--root <path>] [--paths <file>...] [--json] [--no-execute] [--ui] [--ui-out <path>]
-asha inspect <file> [--ui-out <path>]
-                                              # governance CLI (schema v1)
-asha status [PATH] [--root <path>] [--json]
-                                              # read-only tip facts; a bare
-                                              # positional PATH maps to root
-asha --root <path> run --spec <spec.json> [--apply]   # scheduler CLI
-asha-mcp                                              # stdio JSON-RPC MCP server
-asha-mcp TOOL [k=v ...] [PATH]                        # one-shot tool call; bare
-                                                      # PATH maps to root=PATH
-asha-mcp PATH                                         # bare directory routes to the
-                                                      # unified 'asha' zero-config tool
-asha [PATH] [--root <path>] [--base REF] [--json] [--no-color] [--ui] [--ui-out <path>] ...
-                                              # unified one-command forms; flags and
-                                              # PATH may appear in ANY order (Phase 11.1)
-asha PATH                                             # unified zero-config check
-asha --verify [PATH] [--base REF]                     # tip verification (checks on)
-asha --stack B1 [B2 ...] [--base REF]                 # ordered stack verification
-asha --context FILE:SYMBOL [FILE:SYMBOL ...]         # batch surgical context
-asha --exec CMD... [--base REF]                       # atomic in-place governed run;
-                                                      # WIP-safe (snapshot rollback)
-asha PATH --exec -- CMD [ARG ...]                     # `--` = verbatim argv, no shlex
-.claude/commands/asha.md   →  /asha                   # thin passthrough
-```
-
-`asha` (the default command) is a thin adapter over the existing engine:
-git state -> scope resolver -> classifier -> eligibility engine, then the
-existing execution authority: one synthesized validation worker through
-the orchestrator against a committed target (Spec 6.5.5 — only the
-scheduler may take the SCOPED runtime path, so an uncommitted target is
-evaluated but never executed). It never re-decides anything: every
-semantic field in its output is the engine's own.
-
-CLI contract (schema_version 1):
-
-* target discovery: `--root` defaults to the current directory and walks
-  up to the git toplevel; without `--paths` the change set is one coherent
-  snapshot (a single `git status --porcelain=v1 -z` read plus the scope
-  resolver's own `base..worktree` membership source), reporting per-path
-  states (`staged`, `unstaged`, `deleted`, `untracked`, `renamed`) inside
-  `change_set.states`. Merge-conflict (unmerged) state exits `2` with
-  `error: "REPOSITORY_CONFLICT"` — an operational condition, never a
-  synthesized verdict. `--paths` accepts relative or absolute paths under
-  the repository and normalizes them to the identical sorted form;
-  anything outside the repository exits `2`. It is a narrowing filter,
-  never a way to forget a change: give it once (repeating the flag is a
-  usage error), a comma-separated value is split, and any discovered
-  changed path the caller omits exits `2` with
-  `error: "SCOPE_INCOMPLETE"`. `unaccounted_paths` carries that shortfall
-  in every payload (an empty list means the accounting is complete).
-* `--acceptance <CMD>`: one argv string (split once, never a shell) run
-  in the candidate worktree through the existing worker
-  `verify_command` abstraction, after the primary action and before
-  checks are collected. The run may only report `PASS` when that command
-  demonstrably passed: a supplied-but-unexecuted command, a nonzero exit,
-  runner exit `4`/`5`, or a tail with `0 passed` and skips/deselects is
-  `FAIL` (exit `1`). The outcome is sealed into evidence and echoed as
-  `acceptance: {command, supplied, ran, exit_code, outcome}` where
-  `outcome` is `not_required` | `not_executed` | `inconclusive` |
-  `failed` | `passed`; a command that never ran keeps `exit_code: null`
-  rather than a fabricated status. Blank `--acceptance` exits `2`
-  (`INVALID_ARGUMENTS`).
-* `comparison`: every sealed result (success or failure) reports whether
-  a baseline-versus-candidate regression comparison actually happened:
-  `{performed, baseline_tree, candidate_tree, comparable, reason,
-  verdict, detail}`. `reason` is `COMPARED`, `NOT_COMPARED` (no baseline
-  inventory), `BASE_EQUALS_TARGET` (candidate tree identical to the
-  baseline, so no attribution is possible) or `INVENTORY_MISMATCH`
-  (baseline and candidate check/scope inventories differ). A missing or
-  empty tree identifier is `NOT_COMPARED` with
-  `detail: "missing_tree_identifier"` — tree ids are never invented. A
-  baseline check that ran and failed without yielding a single failure
-  identity (pytest collection error, crash, timeout) is `NOT_COMPARED`
-  with `detail: "baseline_failures_unparsed"`: its failures are
-  unattributable, so it is unknown rather than an empty failure set and
-  cannot yield a verdict.
-  `performed` is true only for `COMPARED`; `verdict` is populated only
-  then (`NO_FAILURES` | `PRE_EXISTING_ONLY` | `NEW_FAILURES` |
-  `UNKNOWN`) and is `null` otherwise — a run that was not compared is
-  never described as regression-free. When `performed` is true the same
-  payload also records `baseline_failures`, `current_failures` and
-  `delta_failures` (success included, where an empty list means
-  "compared, nothing failed"); when it is false those keys are absent,
-  so an uncomputed delta can never be mistaken for an empty one. A
-  `PRE_EXISTING_ONLY` verdict only excuses a failing check (worker
-  `DONE`) when `performed` is true; with `performed: false` the worker is
-  `FAILED` and its sealed evidence still records the failures.
-* Governed runs require attribution: when the baseline pass ran
-  (`baseline_deferred`) and its failures could not be identified
-  (`detail: "baseline_failures_unparsed"`), a candidate whose checks all
-  pass is still `FAILED` — `reason: "comparison_inconclusive:baseline_
-  failures_unparsed"`, no seal, no dependents. Passing checks alone never
-  imply "no regression". A baseline that never produced checks at all
-  (`NOT_COMPARED`, no detail) is not attribution evidence either way and
-  keeps the documented `DONE` contract: nothing is being misread as an
-  empty failure set. Consequence: a TDD-style fixture whose baseline
-  tests cannot be collected is `FAILED`; supporting that workflow needs
-  an explicit policy choice, not a silent exemption.
-* Baseline pass: the baseline runs AFTER the worker, in its own clean
-  worktree at the base commit, using the candidate's own scoping
-  decision (same mode, targeted tests, mypy targets). Running it before
-  the worker — on an empty change set — produced a canonical inventory
-  that could never match the scoped candidate inventory, so `COMPARED`
-  was unreachable. Files the worker adds are absent at base and are
-  therefore excluded from the baseline's target lists (same checks, base
-  subset); a selection consisting only of added files is
-  `baseline_selection_unavailable_at_base` and stays incomparable.
-* `/asha` thin wrapper: `.claude/commands/asha.md` is a pure passthrough
-  (`asha $ARGUMENTS`); it inspects nothing and decides nothing.
-* stdout: human result block (file states listed under `Changes`), or
-  exactly one JSON document with `--json`
-  (no progress logs; diagnostics go to stderr). ANSI color appears only
-  on a TTY; `--no-color` (or `NO_COLOR`, or piped output) disables it.
-* `--ui` / `--ui-out <path>`: after the run completes, also write a
-  passive HTML inspection report (default
-  `.jspace/reports/inspector.html`); the path goes to stderr, stdout
-  contract unchanged. `asha inspect <file>` renders the same report
-  from an existing artifact JSON with zero git/governance calls:
-  recorded facts only (`"Not recorded"`/`"Unknown"` for absent fields,
-  impact-set view when no edge data exists), single self-contained
-  file, no script tags, no network references.
-* JSON fields: `schema_version`, `repository`, `change_set`,
-  `changed_files`, `decision`, `eligible`, `fallback_reason`,
-  `execution_mode` (`targeted`|`canonical`), `validation_result`
-  (`PASS`|`FAIL`), `duration_ms`, `evidence_id`, `evidence_verification`,
-  `replay_verification`, `acceptance`, `comparison`, `error`,
-  `status` (`NO_CHANGES`).
-  Missing data is explicit `null`; no absolute local paths; deterministic
-  apart from `duration_ms`.
-* exit codes: `0` validation completed (SCOPED or canonical COMPLETE) or
-  `NO_CHANGES` / `--no-execute` evaluation success; `1` validation
-  failed; `2` operational or engine error (including canonical
-  execution refused on an uncommitted target and evidence verification
-  failure); `130` interrupted (never reported as PASS).
-* `COMPLETE` is not a failure: a canonical run that passes exits `0`.
-
-`asha-mcp` and `python -m asha.mcp_server` are the same server. `--apply`
-runs the governed integration path: single-commit staging, unified-tree
-verification gate, all-or-nothing rollback with zero residue.
-
-## Universal MCP Integration
-
-### Google Antigravity
-
-```json
-{
-  "mcpServers": {
-    "asha": {
-      "command": "python",
-      "args": ["-m", "asha.mcp_server"],
-      "cwd": "/absolute/path/to/Asha"
-    }
-  }
-}
-```
-
-### Hermes Agent CLI
-
-```bash
-hermes mcp add asha --command python --args -m asha.mcp_server
-hermes mcp test asha
-```
-
-### Claude Desktop / Cursor / Windsurf
-
-Standard stdio connection using either entry point:
-
-```yaml
-command: asha-mcp            # or: python -m asha.mcp_server
-```
-
-The server speaks JSON-RPC over stdio on MCP protocol `2024-11-05`,
-negotiated verbatim when the client requests it.
-
-## MCP Tools Reference
-
-| Tool | Behavior |
-| --- | --- |
-| `asha(root, cmd?, target?, branches?, base_ref?, run_checks?)` | **#1 recommended entrypoint** (Phase 11): deterministic intent auto-routing with strict precedence `cmd` > `branches` > `target` > zero-config, delegating to the same specialized handlers below — `cmd` runs `in_place_atomic` with auto `"@diff"` scope and rollback; `branches` verifies the ordered stack; `target` (`"file.py:Symbol"`, single/list/comma-separated, `TARGET_FORMAT_INVALID` fail-closed) extracts surgical context; zero-config returns the status summary and seals pre-push tip evidence when the tree is clean (dirty → `ready_to_push: false (TIP_DIRTY)`, never a status failure). |
-| `asha_status(root)` | Git repository cleanliness, current HEAD SHA, active worktree tracking, and lock detection — plus a deterministic, always non-empty `response` one-liner derived only from git facts (`tip <sha12>: clean\|dirty (N path(s)); worktrees X active, Y orphaned; control lock held\|free`), stable across every state: clean, dirty, detached HEAD, mid-rebase, orphaned worktrees. The `root` argument also accepts a bare positional path from the CLI (`asha status /path/to/repo`, `asha-mcp asha_status /path/to/repo`). |
-| `asha_plan_dag(root, spec_content)` | Static AST dependency inspection, topological generations, write/read collision analysis, and safety classification (`safe` vs `uncertain`). Never executes anything. |
-| `asha_run_spec(root, spec_content, apply)` | `apply=false`: simulation only — DAG rows as `SIMULATED_DONE`, zero subprocesses, zero side effects. `apply=true`: isolated execution in dedicated Git worktrees, cryptographic evidence collection (`HEAD^{tree}`), per-worker states and evidence paths. Atomic branch integration is a separate governed step (`asha --root … run --apply`) so execution evidence never doubles as ship authorization; failure rolls back with zero residue. |
-| `asha_get_surgical_context(target_file, target_symbol, repo_path)` | Read-only Phase 4.1 pipeline: AST index → code graph → dependency closure → surgical slice for one symbol. Returns `target`, `context`, `dependencies`, `unresolved`, `full_source_bytes`, `context_source_bytes`, `reduction_ratio`. Every closure member is reported — UNRESOLVED boundaries are never silently dropped. `reduction_ratio` is SOURCE BYTES only, never a token claim. Phase 10 batch mode: optional `targets: [{target_file, target_symbol}, ...]` builds the AST index/graph ONCE per call and slices every requested symbol in a single pass; single-target calls stay byte-identical. |
-| `asha_dispatch_task(id, declared_scope, reads, writes, deps, cmd, prompt, root)` | Dispatches ONE governed worker through the real pipeline: Phase 4.0 `classify_task` → `governance_profile` → Phase 4.2 `route` (fail-closed) → `GovernedScheduler` (worktrees, conflict gating, scope verification, sealed evidence). The classifier's context envelope comes from this repo's own sealed execution records (`.jspace/cache/orchestrator/*.json`) — no records means `UNKNOWN`, never a vacuous disjoint proof. Result carries `classification`, `reason_code`, `runtime_mode`, `routing`, `evidence`, `worktrees`, `timings`; `authorized_to_ship` stays `false`. Phase 10: `declared_scope`/`reads`/`writes` accept `"@diff"` / `"@diff:<base_ref>"` (reads auto-grow by the AST dependency closure of the changed files), and `execution_mode` selects `"worktree"` (default, existing behavior) or `"in_place_atomic"` — in-place runs `cmd` on the current branch tip, refuses a dirty/conflicted tree immediately (`TIP_DIRTY`/`TIP_CONFLICTED`), verifies observed changes stay strictly inside scope, and rolls back with `git reset --hard <pre_head>` + `git clean -fd` on ANY failure (`CMD_FAILED`, `SCOPE_VIOLATION`, timeout) with zero unsealed residue, sealing digest-bound evidence with `authorized_to_ship: false` on success. |
-| `asha_verify_tip(root, base_ref, run_checks, declared_scope)` | Phase 9 in-place, fail-closed verification of the CURRENT working-tree tip, built for stacked-PR / multi-branch rebase workflows: no competing git worktree is ever spawned. A dirty, conflicted, mid-rebase, bad-base or out-of-scope tree is denied with a stable code (`TIP_DIRTY`, `TIP_CONFLICTED`, `TIP_DIFF_UNCLEAN`, `TIP_REBASE_IN_PROGRESS`, `TIP_BASE_UNKNOWN`, `TIP_SCOPE_MISSING`, `TIP_CHECKS_FAILED`) and no artifact is written. A clean tip binds to `snapshot_id_of(root)`, optionally runs the configured deterministic checks in-place, and seals digest-bound evidence (`evidence_sha256`) to `<state>/verify-tip/<head12>.evidence.json`; `authorized_to_ship` stays `false` — auditable pre-push verification evidence for `git push --force-with-lease`, never ship authority. `declared_scope` accepts the Phase 10 `"@diff"` / `"@diff:<base_ref>"` auto-scope sentinel (deterministic `git diff --name-only <base>...HEAD` expansion; protected `.github/`/`.jspace/` paths never unlocked implicitly; empty or unresolvable diff refused as `SCOPE_AUTO_EMPTY`). |
-| `asha_verify_stack(branches, base_ref, root)` | Phase 10 ordered multi-branch (stack) verification, in place with zero worktrees: per branch it computes `head_sha`/`parent_sha`/`merge_base`, checks linear ancestry (`merge_base == parent_sha`), returns the exact recovery recipe `git rebase --onto <parent_sha> <merge_base> <B>` on drift, and re-verifies the sealed verify-tip evidence (`evidence_sha256`) for every branch head. `stack_healthy` is true only when EVERY branch is linear AND sealed. Refusal codes: `STACK_EMPTY`, `BRANCH_NOT_FOUND`, `BASE_REF_NOT_FOUND`; report codes: `STACK_ANCESTRY_DRIFT`, `STACK_EVIDENCE_MISSING`, `STACK_EVIDENCE_TAMPERED`. |
-
-Planning never guesses: overlapping writes within one generation, unknown
-read/write sets, or dependencies without import facts downgrade the
-conflict matrix to `uncertain` instead of a false `safe`.
-
-## Runtime & Telemetry Protocols
-
-### Fast Path runtime configuration (Phase 4.3)
-
-`ASHA_FAST_PATH_ENABLED=1` is a **runtime configuration of the server
-process** (exact value `"1"` enables; anything else or unset is the safe
-`False` default). No MCP `inputSchema` carries this field, and no MCP
-task, prompt, spec or any agent-produced payload can set or override it —
-a client that sends it gets a structured `unknown field` error. Even
-with the flag on, Fast Path still requires a coherent
-`PROVEN_DISJOINT` classification; `PROVEN_SHARED`, `UNKNOWN`, malformed
-or inconsistent profiles all stay on FULL GOVERNANCE.
-
-### Telemetry vs evidence (Phase 4.3)
-
-Every `tools/call` invocation appends one JSONL event to
-`<repo>/.jspace/mcp_live_telemetry.jsonl` (`timestamp`, `tool`,
-`request_id`, `duration_ms`, `status`, allowlisted `metadata` only —
-never raw prompt, never raw `cmd`, never secrets or environment
-values). Telemetry is **operational observability only**: not
-authoritative evidence, not an audit proof, not tamper-proof, not a
-commitment — and it is fail-safe: a telemetry write failure can never
-change routing, authorization or execution semantics. Authoritative
-evidence remains exclusively the sealed worker records produced by the
-scheduler's `_collect` contract (`evidence.seal` + digest re-verify).
-
-## Dependency Model: Code Graph → Worker DAG
-
-Two graph layers, deliberately never collapsed into one:
-
-| Layer | Nodes | Edges | Published by |
-| --- | --- | --- | --- |
-| Code Graph | files | AST dependency facts (`dep_index`) | `graph_state.reconcile()` |
-| Worker DAG | workers | declared `deps` ∪ derived worker edges | `asha.worker_graph` projection → `TopologicalSorter` |
-
-**Online reconciliation.** Every drained completion batch is coalesced
-into ONE pass (overlapping completions are unioned first — never one
-topology mutation per worker), analyzed incrementally from the sealed
-evidence trees, and applied as a single atomic publication: GraphState
-candidate, WorkerGraph projection, cycle validation — only then do both
-graphs swap and the generation advance together. Any failure leaves the
-previous GraphState *and* WorkerGraph standing by reference. Cached
-facts and blob fingerprints ensure unaffected sources are never
-reparsed.
-
-**Derived worker dependencies.** For a file edge `src → tgt`, live
-owners are resolved (workers whose `declared_scope` covers the path,
-excluding workers that already completed): two different live owners
-mean the consumer owner depends on the provider owner and must be
-scheduled after it; same owner, missing owner, or no live owner yields
-no worker edge. Declared `deps` survive every publication untouched.
-
-**Generation-based invalidation.** A dispatch decision records the
-generation it was computed against. After each publication the loop
-builds a NEW sorter and replaces the readiness frontier wholesale:
-stale READY entries are discarded, PENDING/DEFERRED workers re-decide
-against dependency readiness + scope checks + ConflictManager, and
-RUNNING workers continue — execution state is permanent, scheduling
-state is not.
-
-**UNKNOWN / fail-closed.** `UNKNOWN != EMPTY != SAFE`. Two live owners
-of a path involved in a topology edge mark those workers
-`owner_ambiguous` (blocked at dispatch, never guessed). A worker-level
-cycle rejects the candidate WorkerGraph with the previous valid state
-retained — a plain code-level import cycle alone never fails worker
-scheduling. A batch where two workers produced the same file refuses to
-choose (no last-write-wins) and fails closed.
-
-**Add / delete / rename invalidation.** Reverse-dependency closure
-reconsiders dependents of every changed file in both directions. A raw
-unresolved import target is promoted to a real edge once the provider
-file enters the known set — without reparsing unchanged sources.
-Deletions pop their nodes; a rename is delete-old + add-new for
-invalidation purposes, with no reliance on Git rename detection.
-
-**Mixed / virtual integration analysis.** Concurrent worker outputs are
-read as a deterministic Virtual Integration View: per pass each file
-comes from the single producer whose sealed tree was just verified,
-identified by a `virtual:` fingerprint in the run report. It is an
-analysis identity only — never labeled a Git tree, never authorizing
-integration or shipping; merge authority stays with the integration
-gate.
-
-## Task Specification Format (`spec.json`)
+Minimal `spec.json` — one worker that writes one file and stays inside its
+declared scope:
 
 ```json
 {
   "workers": [
     {
-      "id": "update_docs",
+      "id": "docs",
       "deps": [],
-      "reads": ["README.md", "tests/"],
-      "writes": ["README.md"],
-      "declared_scope": ["README.md"],
-      "cmd": ["python", "scripts/fix_docs.py"],
-      "verify_command": ["python", "-m", "pytest", "tests/test_docs.py", "-q"],
-      "timeout": 300
-    },
-    {
-      "id": "refactor_scheduler",
-      "deps": ["update_docs"],
-      "reads": ["asha/"],
-      "writes": ["asha/scheduler.py"],
-      "declared_scope": ["asha/scheduler.py"],
-      "agent": "antigravity",
-      "task": "Split dispatch from evidence sealing; keep the FSM pure."
+      "reads": ["calc.py"],
+      "writes": ["NOTES.md"],
+      "declared_scope": ["NOTES.md"],
+      "cmd": ["python", "-c", "open('NOTES.md','w').write('# notes\\n')"],
+      "timeout": 120
     }
   ]
 }
 ```
 
-- `deps` — topological ordering only; readiness is never safety.
-- `reads` / `writes` — conflict-matrix inputs; `declared_scope` is checked
-  against observed changes after execution (fail-closed on empty or
-  unknown declarations).
-- Command runner: `cmd` (argv list) plus an optional `verify_command`
-  chain, which runs only after a zero primary exit.
-- Agent runner: `"agent": "antigravity"` dispatches a headless agent
-  (`--workspace <worktree> --non-interactive --task <prompt>`).
+Run it against a repository. Audit-only by default — the target branch is
+untouched; `--apply` merges verified results through the integration gate:
 
-## Governance Phases Status (Roadmap)
+```bash
+asha --root /path/to/repo run --spec spec.json
+```
 
-Phases 1-4 (engine hardening, evidence sealing, and the Phase 4.0-4.3
-classifier / surgical-context / router / fast-path + telemetry
-capabilities) are described inline in the sections above. The roadmap
-through the latest completed phase:
+Real output from exactly this spec (paths and hashes abbreviated):
 
-| Phase | Scope | Status |
-| --- | --- | --- |
-| Phase 5 | Cross-platform Windows/Linux test parity — 100% pass on both OS families | Complete |
-| Phase 6 | Linux remote node integration (deployment, parity guide, live semantic reviewer) — see `docs/LINUX_SERVER_DEPLOY.md` | Complete |
-| Phase 7 | Real-world anti-TOCTOU hardening & semantic governance verification | Complete |
-| Phase 8 | Full stdio MCP orchestration (initial 5-tool server surface, JSON-RPC over stdin/stdout) | Complete |
-| Phase 9 | Real-world telemetry hardening: positional CLI paths, deterministic `status` response, and in-place stack tip verification (`asha_verify_tip`) — driven by the Detailist stacked-PR production run (#222-#230) | Complete |
-| Phase 10 | Stack-native execution: `asha_verify_stack` multi-branch lineage, `"@diff"` auto-derived scope, batch surgical context, and atomic `in_place_atomic` dispatch — 7-tool server surface, v0.3.0 | Complete |
-| Phase 11 | Unified zero-friction entrypoint: `asha` auto-routing MCP tool (#1) plus one-command CLI (`PATH`, `--verify`, `--stack`, `--context`, `--exec`) — 8-tool surface, v0.4.0 | Complete |
-| Phase 11.1 | Order-free unified CLI (flags and PATH in any order, `--` verbatim) + snapshot-safe `in_place_atomic`: dirty-WIP trees accepted, snapshot rollback instead of `git reset --hard`, `WIP_UNCOMMITTED_PASS` evidence — v0.4.1 | Complete |
-| Phase 11.2 | Production telemetry hardening: `TIP_SCOPE_MISSING` deletion resilience (`deleted_in_scope`), AST `SyntaxError` diagnostics & fallback, and stack verification recognizing `in_place_atomic` evidence — v0.4.2 | Complete |
-| Phase 12 | Governed comparison contract: deferred baseline comparison with per-task inventory (`COMPARED`/`NOT_COMPARED`), `baseline_failures_unparsed` fail-closed identity, `comparison_inconclusive` DONE guard, `--acceptance` gate, and scope accounting (`SCOPE_INCOMPLETE`) — v0.5.0 | Complete |
+```json
+{
+  "status": "ok",
+  "completed": ["docs"],
+  "states": {
+    "docs": {
+      "state": "DONE",
+      "verdict": "NO_FAILURES",
+      "baseline_failures": [],
+      "current_failures": [],
+      "delta_failures": [],
+      "comparison": {
+        "performed": true,
+        "comparable": true,
+        "reason": "COMPARED",
+        "verdict": "NO_FAILURES"
+      }
+    }
+  },
+  "evidence": {"docs": ".../orchestrator/task/docs.json"}
+}
+```
 
-Verified baseline: **944 passed, 0 failed** (CPython 3.11+, stdlib
-only; green on both Ubuntu/Debian and Windows — skip counts are
-platform-dependent and never mask a failure).
+`DONE` here means: the worker's own checks passed, its diff stayed inside
+`declared_scope`, the baseline comparison ran and found no new failures, and the
+evidence document was sealed. Exit codes: `0` validation completed / no changes,
+`1` validation failed, `2` operational or engine error, `130` interrupted.
+`--json` writes exactly one JSON document to stdout; diagnostics go to stderr.
 
-## Core Architecture & Governance Invariants
+Agents instead of commands: replace `cmd` with `"agent": "<name>"` and
+`"task": "<prompt>"`. The same spec runs through MCP as `asha_run_spec`
+(simulation unless `apply=true`).
 
-| Invariant | Guarantee |
-| --- | --- |
-| Physical worktree isolation | Each worker runs in its own detached worktree; zero shared working-directory mutations. |
-| Process-tree containment | G3 lifecycle: one spawn primitive for everything; timeouts and cancellation call `kill_process_tree` (Windows `taskkill /T /F`, POSIX group kill) — no orphan processes. |
-| Scope resolution | S0–S4 blast-radius classification of every change set; checks are selected by scope, never skipped. |
-| Evidence sealing | Tamper-resistant `evidence.json`: commit, `HEAD^{tree}`, observed scope, check results; workers always seal `authorized_to_ship: false`. |
-| Merge law | Worker green proves only its own tree; the integration gate re-runs the full matrix against the merged tree. |
-| Verified test baseline | **944 passed, 0 failed** (CPython 3.11+, stdlib only; Ubuntu/Debian + Windows CI). |
+### Other entry points
 
-Fail-closed everywhere: a missing fact defers or blocks the run; it never
-unlocks one. `push` is not `done`, and a commit is not ship authorization.
+```bash
+asha --root /path/to/repo status                  # read-only tip facts
+asha --root /path/to/repo --paths src/calc.py     # validate a known change set
+asha --root /path/to/repo --acceptance "python -m pytest -q tests"
+asha --root /path/to/repo --verify                # in-place tip verification
+python -m asha.mcp_server                         # MCP over stdio (== asha-mcp)
+```
+
+MCP tools: `asha` (auto-routing entry point), `asha_status`, `asha_plan_dag`,
+`asha_run_spec`, `asha_verify_tip`, `asha_verify_stack`,
+`asha_get_surgical_context`, `asha_dispatch_task`. Client setup (Antigravity,
+Hermes, Claude Desktop, Cursor, Windsurf) is a standard stdio connection:
+`command: asha-mcp` or `python -m asha.mcp_server`.
+
+## Benchmark: frozen A–D reproducibility experiment
+
+Three repeated trials × four frozen scenarios × two methods = 24 execution arms,
+i.e. 12 paired comparisons. These are **four scenarios**, not 24 task types.
+
+| Scenario | Direct execution | Asha v0.5.0 | Governance outcome |
+|---|---|---|---|
+| **A** — valid change | Accepted | `DONE / COMPARED / NO_FAILURES`; accepted; sealed | Valid change passed |
+| **B** — injected regression | Rejected | `FAILED / COMPARED / NEW_FAILURES`; not sealed | Regression blocked |
+| **C** — unparseable baseline failure | Accepted | `FAILED / NOT_COMPARED / UNKNOWN`; `comparison_inconclusive:baseline_failures_unparsed`; not sealed | Unknown baseline failed closed |
+| **D** — scope violation | Modified both allowed and forbidden files | `INVALID_EVIDENCE / NOT_COMPARED`; `scope_violation:src/forbidden.py`; not sealed | Unauthorized change rejected |
+
+The same categorical outcomes were observed in all three trials.
+
+**Scenario B regression identities** (recorded):
+
+- Ruff `F811` at `parity.py:9:5` — `is_even` redefined.
+- Pytest failure `tests/test_parity.py::test_three`.
+
+**Scenario D:** the direct arm modified both `src/allowed.py` and
+`src/forbidden.py`; Asha rejected the forbidden-path change.
+
+### Wall time (Asha ÷ direct)
+
+| Trial | Ratio |
+|---|---:|
+| 1 | 1.023× |
+| 2 | 1.203× |
+| 3 | 1.042× |
+| **Median** | **1.042×** |
+| **Mean** | **1.089×** |
+
+### Token usage
+
+Observed ratios varied from roughly `0.62×` to `1.02×`, with 3–6 model calls per
+arm; prompt caching and call count changed between trials. Provider billing cost
+was not measured — the recorded estimated cost of `$0.0` is not evidence of zero
+real cost.
+
+### What this evidence is and is not
+
+- Frozen inputs and evaluators; their hashes were unchanged across the three
+  trials.
+- A controlled reproducibility experiment, not a large independent production
+  study. No statistical significance is claimed and no confidence intervals are
+  reported, because none were computed.
+- The four scenarios test specific behaviors (valid change, injected regression,
+  unparseable baseline, scope violation). They do not establish general
+  correctness or a universal performance advantage.
+- Wall-time results are specific to the tested environment and task harness.
+- Direct execution accepting scenario C shows a limitation of the direct
+  comparator for that scenario — not that every ungoverned agent fails this way.
+
+## Limitations and trust model
+
+- Git worktrees give **path isolation**, not process or network sandboxing. Code
+  under test runs with your user's permissions.
+- A SHA-256 seal establishes **evidence integrity**, not code correctness. A
+  sealed run of a bad change is still a bad change.
+- `UNKNOWN` is not `SAFE`. An inconclusive comparison blocks authorization; it
+  neither asserts nor rules out a regression.
+- Asha's verdict is only as good as the configured checks. Missing, skipped or
+  non-deterministic checks are reported (`no_verification_ran`,
+  `EXECUTION_FAILED`) rather than passing silently.
+- A worker passing its own tree does not authorize a merge: the integration gate
+  re-runs the matrix against the merged tree. `push` is not `done`, and a commit
+  is not ship authorization.
+- The benchmark above is bounded evidence from four frozen scenarios.
+
+## Further reading
+
+- [Governance orientation](docs/ORIENTATION.md) — module map and invariants.
+- [Linux server deployment](docs/LINUX_SERVER_DEPLOY.md)
+- [Design specs](docs/phase-5.0-design.md)
+- [v0.5.0 release notes](https://github.com/xenups/Asha/releases/tag/v0.5.0)
+- The previous README revision (full CLI contract, MCP tool reference, telemetry
+  protocol, code-graph → worker-DAG model, phase roadmap) remains in Git history
+  at commit `3c462b9`.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Asha contributors.

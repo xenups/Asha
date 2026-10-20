@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Asha: the agent edits only what you asked</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#E6ECF0;--paper:#F7F9FA;--ink:#15202B;--muted:#586875;--line:#9DAFBC;--amber:#D98F00;--amber-t:#FBEBC4;--red:#D7263D;--red-t:#F9D7DC;--green:#0E8A66;--green-t:#CFEEE2;--bot:#4F8FD6;--botd:#2F5F9E;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0E151C;--paper:#16202A;--ink:#E7EEF3;--muted:#93A4B2;--line:#3A4B59;--amber:#F2B233;--amber-t:#3A2D0E;--red:#FF5C70;--red-t:#3D1820;--green:#34C79A;--green-t:#0F3328}}
+:root[data-theme="dark"]{--bg:#0E151C;--paper:#16202A;--ink:#E7EEF3;--muted:#93A4B2;--line:#3A4B59;--amber:#F2B233;--amber-t:#3A2D0E;--red:#FF5C70;--red-t:#3D1820;--green:#34C79A;--green-t:#0F3328}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:'Bricolage Grotesque',system-ui,-apple-system,'Segoe UI',sans-serif;min-height:100vh;display:grid;place-items:center;padding:24px 16px}
+.wrap{width:100%;max-width:940px}
+.cap{min-height:112px;transition:opacity .2s,transform .2s}
+.cap.out{opacity:0;transform:translateY(6px)}
+.cap h1{font-size:clamp(22px,4vw,34px);line-height:1.14;margin:0 0 9px;font-weight:700;letter-spacing:-.01em;max-width:26ch}
+.cap p{margin:0;color:var(--muted);font-size:clamp(14px,2vw,17px);line-height:1.5;max-width:60ch}
+.card{background:var(--paper);border:1.5px solid var(--line);border-radius:16px;padding:8px;margin-top:16px;overflow:hidden}
+svg{display:block;width:100%;height:auto}
+.fn{font:500 15px 'JetBrains Mono',ui-monospace,monospace;fill:var(--ink)}
+.sm{font:500 12.5px 'Bricolage Grotesque',system-ui,sans-serif;fill:var(--muted)}
+.hd{font:700 18px 'Bricolage Grotesque',system-ui,sans-serif;fill:var(--ink)}
+.tg{font:700 12.5px 'Bricolage Grotesque',system-ui,sans-serif}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-weight:500}
+.cb{fill:var(--paper);stroke:var(--line);stroke-width:2}
+.bar{fill:var(--line);opacity:.7}
+.ctl{display:flex;gap:8px;margin-top:14px;align-items:stretch}
+.ch{flex:1;appearance:none;border:0;background:none;padding:0;cursor:pointer;text-align:left;color:var(--muted);font:500 13px 'Bricolage Grotesque',system-ui,sans-serif}
+.ch b{display:block;height:4px;border-radius:2px;background:var(--line);overflow:hidden;margin-bottom:7px}
+.ch i{display:block;height:100%;width:0;background:var(--ink)}
+.ch.on{color:var(--ink)}
+.pp{appearance:none;border:1.5px solid var(--line);background:var(--paper);color:var(--ink);border-radius:999px;padding:0 16px;font:700 13px 'Bricolage Grotesque',system-ui,sans-serif;cursor:pointer}
+.ch:focus-visible,.pp:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
+@media (max-width:560px){.ch{font-size:11px}.pp{padding:0 10px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="cap" id="cap"><h1 id="h"></h1><p id="p"></p></div>
+  <div class="card">
+  <svg id="s" viewBox="0 0 900 470" role="img" aria-label="Animated story: a coding agent fixes one file, then Asha keeps it inside its scope">
+    <defs><pattern id="hatch" width="9" height="9" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="9" stroke="var(--line)" stroke-width="2"/></pattern></defs>
+    <g id="w">
+      <line x1="30" x2="870" y1="436" y2="436" stroke="var(--line)" stroke-width="2" stroke-linecap="round"/>
+      <g id="shed"><rect x="90" y="150" width="305" height="298" rx="12" fill="none" stroke="var(--ink)" stroke-width="2" stroke-dasharray="8 7"/><text class="sm" x="104" y="172">isolated worktree</text></g>
+      <g id="cards"></g>
+      <g id="tk"><rect width="160" height="86" rx="6" fill="var(--amber-t)" stroke="var(--amber)" stroke-width="2"/><text class="sm" x="14" y="24">Ticket 214</text><text class="hd" x="14" y="50" style="font-size:15px">Fix parse_date():</text><text class="hd" x="14" y="70" style="font-size:15px">crashes on Feb 29</text></g>
+      <g id="fz"><rect x="-46" y="-15" width="92" height="30" rx="6" fill="none" stroke="var(--amber)" stroke-width="3"/><text class="tg mono" y="5" text-anchor="middle" fill="var(--amber)" style="font-size:15px">FROZEN</text></g>
+      <g id="ft"></g><g id="sum"></g><g id="tf"></g><g id="bk"></g>
+      <g id="lk1"></g><g id="lk2"></g>
+      <text id="un1" class="tg" x="485" y="320" text-anchor="middle" fill="var(--green)">untouched</text>
+      <text id="un2" class="tg" x="655" y="320" text-anchor="middle" fill="var(--green)">untouched</text>
+      <g id="ck"><circle r="15" fill="var(--green)"/><path d="M-6 0L-2 5L7-5" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></g>
+      <g id="df1"></g><g id="df2"></g>
+      <line id="lz" x1="400" x2="400" y1="165" y2="165" stroke="var(--red)" stroke-width="2.5" stroke-linecap="round"/>
+      <text id="lzt" class="sm" x="400" y="158" text-anchor="middle">scope boundary</text>
+      <ellipse id="sh" rx="30" ry="4.5" fill="#000" opacity=".18"/>
+      <g id="bot"><g>
+        <rect x="-19" y="-7" width="14" height="7" rx="3" fill="var(--botd)"/><rect x="5" y="-7" width="14" height="7" rx="3" fill="var(--botd)"/>
+        <line x1="0" y1="-62" x2="0" y2="-72" stroke="var(--botd)" stroke-width="3"/><circle cy="-75" r="4" fill="var(--amber)"/>
+        <rect x="-28" y="-62" width="56" height="56" rx="17" fill="var(--bot)"/>
+        <circle cx="-31" cy="-28" r="5" fill="var(--botd)"/><circle cx="31" cy="-28" r="5" fill="var(--botd)"/>
+        <rect x="-22" y="-54" width="44" height="34" rx="11" fill="#0E1620"/>
+        <g id="eL"><circle r="6" fill="#fff"/><circle id="pL" r="2.8" fill="#0E1620"/></g><g id="eR"><circle r="6" fill="#fff"/><circle id="pR" r="2.8" fill="#0E1620"/></g>
+        <line id="bL" stroke="#BFD7F2" stroke-width="2.4" stroke-linecap="round"/><line id="bR" stroke="#BFD7F2" stroke-width="2.4" stroke-linecap="round"/>
+        <path id="mo" fill="none" stroke="#FFD27A" stroke-width="2.4" stroke-linecap="round"/>
+      </g></g>
+      <g id="asha"><g>
+        <path d="M-32-38H32V8Q32 34 0 50Q-32 34 -32 8Z" fill="#26365A" stroke="var(--amber)" stroke-width="3.5" stroke-linejoin="round"/>
+        <rect x="-24" y="-26" width="48" height="19" rx="9.5" fill="#0E1620"/>
+        <circle id="aL" cx="-10" cy="-16.5" r="4.6" fill="#F2B233"/><circle id="aR" cx="10" cy="-16.5" r="4.6" fill="#F2B233"/>
+        <path d="M-9 15L-2 22L11 7" fill="none" stroke="#F2B233" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+        <line x1="-32" y1="8" x2="-46" y2="14" stroke="#F2B233" stroke-width="4" stroke-linecap="round"/>
+        <g id="st"><rect x="-4" y="-12" width="8" height="14" rx="3" fill="#F2B233"/><rect x="-12" y="2" width="24" height="7" rx="3" fill="#E6EDF3"/></g>
+      </g></g>
+      <g id="pn">
+        <g id="pb"><rect x="240" y="26" width="170" height="104" rx="10" fill="var(--paper)" stroke="var(--line)" stroke-width="2"/><text class="hd" x="256" y="54">Baseline</text><text class="sm" x="256" y="73">before the agent</text><text class="fn" x="256" y="103">2 failing</text><text class="sm" x="256" y="121">already broken</text></g>
+        <text class="hd" x="440" y="86" text-anchor="middle" style="fill:var(--muted);font-size:26px">=</text>
+        <g id="pc"><rect x="470" y="26" width="170" height="104" rx="10" fill="var(--paper)" stroke="var(--green)" stroke-width="2"/><text class="hd" x="486" y="54">Candidate</text><text class="sm" x="486" y="73">after the fix</text><text class="fn" x="486" y="103">2 failing</text><text class="sm" x="486" y="121">the same two</text></g>
+        <g id="pp"></g>
+      </g>
+      <g id="sl"><circle r="46" fill="var(--green-t)" stroke="var(--green)" stroke-width="4"/><circle r="38" fill="none" stroke="var(--green)" stroke-width="1.5" stroke-dasharray="3 5"/><text y="5" text-anchor="middle" font-family="Bricolage Grotesque,system-ui,sans-serif" font-weight="700" font-size="16" fill="var(--green)">SEALED</text></g>
+      <circle id="rp" cx="315" cy="265" r="50" fill="none" stroke="var(--green)" stroke-width="3"/>
+      <g id="sp"></g>
+      <text id="hs" class="fn" x="315" y="180" text-anchor="middle" style="font-size:12px">sha256 9f2c41…e41a</text>
+    </g>
+    <rect id="wipe" y="0" width="900" height="470" fill="#26365A"/>
+    <g id="end"><rect width="900" height="470" fill="var(--paper)" opacity=".94"/>
+      <text x="450" y="228" text-anchor="middle" font-family="Bricolage Grotesque,system-ui,sans-serif" font-weight="700" font-size="64" fill="var(--ink)">Asha</text>
+      <text x="450" y="274" text-anchor="middle" font-family="Bricolage Grotesque,system-ui,sans-serif" font-weight="500" font-size="23" fill="var(--muted)">The agent edits only what you asked.</text></g>
+  </svg>
+  </div>
+  <div class="ctl" id="ctl"></div>
+</div>
+<script>
+(function(){
+var NS='http://www.w3.org/2000/svg',DUR=26;
+var $=function(i){return document.getElementById(i)};
+var cl=function(x){return Math.max(0,Math.min(1,x))};
+var ez=function(x){return x<.5?4*x*x*x:1-Math.pow(-2*x+2,3)/2};
+var P=function(t,a,b){return ez(cl((t-a)/(b-a)))};
+var O=function(t,a,b){var x=cl((t-a)/(b-a));return 1+2.9*Math.pow(x-1,3)+1.9*Math.pow(x-1,2)};
+var bump=function(t,a,d){return Math.sin(cl((t-a)/d)*Math.PI)};
+function T(el,x,y,sx,sy,r){el.setAttribute('transform','translate('+x+' '+y+') rotate('+(r||0)+') scale('+sx+' '+(sy==null?sx:sy)+')')}
+function pill(id,w,txt,f,s,c,mono){var g=$(id);g.innerHTML='<rect x="'+(-w/2)+'" y="-13" width="'+w+'" height="26" rx="13" fill="'+f+'" stroke="'+s+'" stroke-width="1.5"/><text y="4.5" text-anchor="middle" class="tg'+(mono?' mono':'')+'" fill="'+c+'">'+txt+'</text>'}
+/* cards */
+var C=[['dates.py',245,'parse_date()'],['auth.py',415,'tokens'],['billing.py',585,'invoices']],h='';
+C.forEach(function(c,i){h+='<g transform="translate('+c[1]+' 190)"><rect class="cb" width="140" height="150" rx="8"/><rect id="rt'+i+'" width="140" height="150" rx="8" fill="var(--red-t)"/><rect id="ht'+i+'" width="140" height="150" rx="8" fill="url(#hatch)"/><rect id="sf'+i+'" width="140" height="150" rx="8" fill="none" stroke="var(--amber)" stroke-width="4"/><rect id="ok'+i+'" width="140" height="150" rx="8" fill="none" stroke="var(--green)" stroke-width="4"/><text class="fn" x="14" y="32">'+c[0]+'</text><rect class="bar" x="14" y="48" width="96" height="7" rx="3.5"/><rect class="bar" x="14" y="63" width="70" height="7" rx="3.5"/><rect class="bar" x="14" y="78" width="104" height="7" rx="3.5"/><text class="sm" x="14" y="110">'+c[2]+'</text></g>'});
+$('cards').innerHTML=h;
+pill('ft',150,'spec.json frozen','var(--amber-t)','var(--amber)','var(--amber)');
+pill('sum',250,'3 files changed. Only 1 was asked.','var(--red-t)','var(--red)','var(--red)');
+pill('tf',140,'1 new test failure','var(--red-t)','var(--red)','var(--red)');
+pill('bk',170,'outside scope','var(--red)','var(--red)','#fff');
+pill('df1',84,'+14 −9','var(--red-t)','var(--red)','var(--red)',1);
+pill('df2',84,'+8 −3','var(--red-t)','var(--red)','var(--red)',1);
+pill('pp',190,'NO_NEW_FAILURES','var(--green-t)','var(--green)','var(--green)',1);
+['lk1','lk2'].forEach(function(id){$(id).innerHTML='<rect x="-11" y="-4" width="22" height="17" rx="4" fill="var(--ink)"/><path d="M-6-4V-9a6 6 0 0 1 12 0V-4" fill="none" stroke="var(--ink)" stroke-width="3.5"/>'});
+var sp='';for(var k=0;k<10;k++)sp+='<circle id="sp'+k+'" r="3" fill="'+(k%2?'var(--amber)':'var(--green)')+'"/>';$('sp').innerHTML=sp;
+/* robot keyframes: t,x,sx,sy,rot,mood,look,hop? */
+var R=[[0,120,1,1,0,0,.6],[1,120,1,1,0,0,.2],[1.45,120,1.1,.82,0,0,.2,0],[2.35,315,1,1,0,0,.8],[3.5,315,1,1,0,0,.8],[3.7,315,1,1,0,1,.8],[4.5,485,1,1,0,1,1],[5.5,485,1,1,0,1,1],[6.3,655,1,1,0,1,1],[7.1,655,1,1,0,1,1],[7.5,655,1.06,.9,0,-1,-.6,0],[8.7,655,1.06,.9,0,-1,-.6,0],
+[9,120,1,1,0,0,0,0],[10,120,1,1,0,0,.6],[12.4,120,1,1,0,0,.6],[13.1,315,1,1,0,0,.8],[14.2,315,1,1,0,0,.8],[14.4,315,1,1,0,1,.8],[14.8,315,1.1,.84,-4,0,1,0],[15.25,366,.86,1.14,8,0,1,0],[15.4,372,1.25,.75,0,-1,1,0],[16,300,1,1,-8,-1,.2,0],[16.7,315,1.05,.92,0,-1,-.3,0],[17.6,315,1,1,0,0,0],[21.3,315,1,1,0,0,0],[21.55,315,1.15,.8,0,0,0,0],[21.9,315,.92,1.12,0,1,0,0],[22.5,315,1,1,0,1,0],[27,315,1,1,0,1,0]];
+var WG=[[2.5,3.5,3],[4.7,5.5,7],[6.5,7.1,7],[13.3,14.2,3]];
+function rk(t){var i=0;while(i<R.length-2&&t>R[i+1][0])i++;var a=R[i],b=R[i+1],u=cl((t-a[0])/(b[0]-a[0])),e=ez(u);
+ var L=function(k){return a[k]+(b[k]-a[k])*e},dx=Math.abs(b[1]-a[1]),hop=0;
+ if(a[7]!==0&&dx>1&&u>0&&u<1)hop=Math.abs(Math.sin(u*Math.PI*Math.max(1,Math.round(dx/70))))*12;
+ return{x:L(1),sx:L(2),sy:L(3),r:L(4),m:L(5),k:L(6),hop:hop}}
+var w=$('w'),bot=$('bot'),asha=$('asha');
+function render(t){
+ var A=t<8.9,i;
+ T(w,(t>21.85&&t<22.1)?(Math.random()-.5)*6:0,(t>21.85&&t<22.1)?(Math.random()-.5)*6:0,1);
+ /* cards */
+ var red=[0,A?P(t,4.8,5.2):0,A?P(t,6.6,7):0],lk=[0,P(t,10.8,11.2),P(t,11,11.4)],fade=1-P(t,22.1,22.4);
+ for(i=0;i<3;i++){$('rt'+i).style.opacity=red[i];$('ht'+i).style.opacity=lk[i]*fade*.6;
+  $('sf'+i).style.opacity=i==0?P(t,10.5,11)*(1-P(t,21.4,21.7)):0;$('ok'+i).style.opacity=P(t,22.2,22.6)}
+ var ck=A?O(t,3.5,3.9):O(t,14.3,14.7);T($('ck'),385,190,ck);
+ T($('df1'),485,316,A?O(t,4.9,5.3):0);T($('df2'),655,316,A?O(t,6.7,7.1):0);
+ T($('tf'),655+(A&&t<7.9?Math.sin(t*55)*2:0),170,A?O(t,7.2,7.6):0);T($('sum'),450,148,A?O(t,7.4,7.8):0);
+ T($('lk1'),485,262,O(t,10.8,11.3)*fade);T($('lk2'),655,262,O(t,11,11.5)*fade);
+ $('un1').style.opacity=$('un2').style.opacity=P(t,22.3,22.6);
+ /* ticket, tag */
+ T($('tk'),40,30,1,1,-3);T($('fz'),112,78,O(t,10.5,10.9),null,-14);
+ $('ft').style.opacity=P(t,10.6,11)*(1-P(t,21.4,21.7));T($('ft'),315,176,1);
+ /* shed + laser */
+ $('shed').style.opacity=P(t,12,12.7);
+ var fl=bump(t,15.35,.6);$('lz').setAttribute('y2',165+271*P(t,12.4,13));$('lz').setAttribute('stroke-width',2.5+6*fl);
+ $('lzt').style.opacity=P(t,13,13.5);
+ T($('bk'),400,128,O(t,15.45,15.75)*(1-P(t,16.5,16.9)));
+ /* robot */
+ var r=rk(t),rot=r.r,jy=0;
+ WG.forEach(function(g){if(t>g[0]&&t<g[1])rot+=Math.sin(t*28)*g[2]});
+ if(t>21.8&&t<22.4)jy=-Math.sin((t-21.8)/.6*Math.PI)*58;
+ var br=1+.014*Math.sin(t*3),bt=t%3.3,bl=bt<.12?1-Math.sin(bt/.12*Math.PI)*.9:1,m=r.m,jw=Math.max(0,m),wr=Math.max(0,-m);
+ T(bot,r.x,428-r.hop+jy,r.sx*(2-br),r.sy*br,rot);
+ var sh=$('sh');sh.setAttribute('cx',r.x);sh.setAttribute('cy',434);sh.setAttribute('rx',30-(r.hop+Math.abs(jy))*.25);
+ T($('eL'),-9+r.k*0,-40,1,bl);T($('eR'),9,-40,1,bl);
+ $('pL').setAttribute('cx',r.k*2.4);$('pR').setAttribute('cx',r.k*2.4);
+ var yb=-50-jw*2;
+ [['bL',-14,yb,-4,yb-wr*4],['bR',4,yb-wr*4,14,yb]].forEach(function(b){var e=$(b[0]);e.setAttribute('x1',b[1]);e.setAttribute('y1',b[2]);e.setAttribute('x2',b[3]);e.setAttribute('y2',b[4])});
+ $('mo').setAttribute('d','M-7 -27Q0 '+(-27+m*8)+' 7 -27');
+ /* asha */
+ var as=O(t,9.1,9.8);asha.style.opacity=as>.01?1:0;
+ var lk2=(t>10&&t<11.5)?Math.sin((t-10)*6)*3-1.5:(t<17?-2.5:t<21?-1:0),ab=t%4.1,abl=ab<.12?1-Math.sin(ab/.12*Math.PI)*.9:1;
+ T(asha,800,132+Math.sin(t*2)*5,Math.max(as,.001),null,(t>17.5&&t<20.5)?Math.sin(t*4)*3:0);
+ $('aL').setAttribute('cx',-10+lk2);$('aR').setAttribute('cx',10+lk2);$('aL').setAttribute('ry',4.6*abl);$('aR').setAttribute('ry',4.6*abl);
+ T($('st'),-52,12+18*(bump(t,10.2,.4)+bump(t,12,.4)+bump(t,21.5,.4)),1);
+ /* compare panel */
+ var po=P(t,17.3,17.8)*(1-P(t,20.6,21.1));$('pn').style.opacity=po;
+ T($('pb'),0,(1-P(t,17.3,17.9))*14,1);T($('pc'),0,(1-P(t,17.7,18.3))*14,1);$('pc').style.opacity=P(t,17.7,18.2);$('pb').style.opacity=P(t,17.3,17.8);
+ T($('pp'),440,155,O(t,19,19.5));
+ /* seal */
+ var su=Math.pow(1-(1-cl((t-21.6)/.3)),1),sc=2.6-1.6*su;
+ T($('sl'),315,265,sc,null,-8);$('sl').style.opacity=cl((t-21.6)/.1)*(1-P(t,24,24.2)*0);
+ var rq=cl((t-21.9)/.8);$('rp').setAttribute('r',50+90*rq);$('rp').style.opacity=rq>0&&rq<1?1-rq:0;
+ for(i=0;i<10;i++){var a=i/10*6.283,q=1-Math.pow(1-cl((t-21.9)/.9),3),e=$('sp'+i);e.setAttribute('cx',315+Math.cos(a)*(60+80*q));e.setAttribute('cy',265+Math.sin(a)*(60+80*q));e.setAttribute('r',q>0&&q<1?3.5*(1-q):0)}
+ $('hs').style.opacity=P(t,22.3,22.7);
+ /* transitions */
+ $('wipe').setAttribute('x',-920+1840*P(t,8.3,9.5));
+ $('end').style.opacity=P(t,23.6,24.4)*(1-P(t,25.4,26));
+}
+/* captions + controls */
+var CH=[['Without Asha','The agent fixes parse_date(), then helpfully “improves” two files nobody mentioned.',0],['Freeze scope','Asha turns the ticket into a frozen scope. Every other file is locked.',9],['Worktree isolation','The fix runs in an isolated worktree. One step outside the scope is rejected.',12],['Baseline compare','Failures that already existed aren’t blamed on the agent. Only new ones count.',17.2],['Seal','No new failures and a clean scope: the result is hashed, sealed and merged.',21.4]];
+var TT=['An agent fixes one bug and breaks two other things.','Asha freezes what the agent may touch.','The agent works inside a quarantine.','Asha compares before and after.','Sealed. Only the fix goes home.'];
+var cap=$('cap'),ctl=$('ctl'),btn=[],ci=-1,reduce=matchMedia('(prefers-reduced-motion:reduce)').matches,playing=!reduce,off=reduce?22.8:0,t0=performance.now();
+CH.forEach(function(c,k){var b=document.createElement('button');b.className='ch';b.type='button';b.innerHTML='<b><i></i></b>'+c[0];b.onclick=function(){off=c[2];t0=performance.now();draw(off)};ctl.appendChild(b);btn.push(b)});
+var pp=document.createElement('button');pp.className='pp';pp.type='button';ctl.appendChild(pp);
+function lab(){pp.textContent=playing?'Pause':'Play'}
+pp.onclick=function(){if(playing){off=(off+(performance.now()-t0)/1000)%DUR;playing=false}else{t0=performance.now();playing=true}lab()};
+var tb=document.createElement('button');tb.className='pp';tb.type='button';tb.setAttribute('aria-label','Toggle colour theme');ctl.appendChild(tb);
+function curDark(){var t=document.documentElement.dataset.theme;return t?t==='dark':matchMedia('(prefers-color-scheme:dark)').matches}
+function lab2(){tb.textContent=curDark()?'Light':'Dark';tb.setAttribute('aria-pressed',curDark()?'true':'false')}
+tb.onclick=function(){document.documentElement.dataset.theme=curDark()?'light':'dark';lab2()};lab2();
+function draw(t){render(t);var k=t<9?0:t<12?1:t<17.2?2:t<21.4?3:4;
+ btn.forEach(function(b,j){var s=CH[j][2],e=j<4?CH[j+1][2]:DUR;b.classList.toggle('on',j===k);b.firstChild.firstChild.style.width=(j<k?100:j===k?(t-s)/(e-s)*100:0)+'%'});
+ if(k!==ci){var first=ci<0;ci=k;if(first){$('h').textContent=TT[k];$('p').textContent=CH[k][1]}else{cap.classList.add('out');setTimeout(function(){$('h').textContent=TT[ci];$('p').textContent=CH[ci][1];cap.classList.remove('out')},190)}}}
+function loop(){if(playing)draw((off+(performance.now()-t0)/1000)%DUR);requestAnimationFrame(loop)}
+lab();draw(off);loop();
+})();
+</script>
+</body>
+</html>
