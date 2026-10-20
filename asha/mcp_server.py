@@ -1367,7 +1367,18 @@ ASHA_DISPATCH_TASK_SPEC: dict[str, Any] = {
                     "plus a proven-disjoint classification; no input "
                     "field can set or override it. Result carries the "
                     "decision and timings; authorized_to_ship stays "
-                    "false."),
+                    "false. Field contract: state is the worker's "
+                    "execution outcome (DONE = the command ran and its "
+                    "evidence was sealed, never a validation pass); "
+                    "executed says whether anything ran at all; "
+                    "reason_code is the run's own failure code and is "
+                    "null when it executed; classification_reason is why "
+                    "the router did not take Fast Path (e.g. "
+                    "missing_signal_surface) and is never a success "
+                    "signal. ready_to_push/validation_result stay "
+                    "independent verdicts, and task_completed is true "
+                    "only when the worker applied a change, validation "
+                    "passed and the tip is pushable."),
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -2509,7 +2520,14 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
             "state": worker_state,
             "execution_mode": execution_mode,
             "classification": decision.classification,
-            "reason_code": classification.reason_code,
+            # reason_code describes the RUN outcome (None when the worker
+            # executed); the classifier's code is a routing detail and must
+            # never sit next to state=DONE as if it were a failure verdict.
+            "reason_code": (None if states else
+                             (report.get("reason_code")
+                              or report.get("reason"))),
+            "classification_reason": classification.reason_code,
+            "executed": bool(states) or report.get("state") is not None,
             "runtime_mode": decision.mode.value,
             "routing_reason": decision.reason_code,
             "fast_path_enabled": fast_env,
@@ -2550,6 +2568,22 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
         payload["validation_status"] = (
             report.get("validation_status")
             or validation.VALIDATION_NOT_CONFIGURED)
+        # Per-worker effect, mirroring asha_run_spec: a run that changed
+        # nothing must say so instead of leaving `state: DONE` to be read as
+        # "the work landed".
+        _wstate = states.get(wid) or {}
+        payload["applied"] = bool(_wstate.get("applied", False))
+        payload["writes_observed"] = list(
+            _wstate.get("writes_observed") or [])
+        # state only says the command ran; this says the TASK is done. A
+        # missing-surface classification, absent validation, no applied
+        # change, or a dirty tip all leave this False, so no consumer has to
+        # infer completion from `state` alone.
+        payload["task_completed"] = bool(
+            payload["state"] == "DONE"
+            and payload["applied"]
+            and payload["validation_result"] == validation.VALIDATION_PASS
+            and payload["ready_to_push"])
         for key in ("head", "tree_hash", "snapshot_id", "wip", "checks"):
             if report.get(key) is not None:
                 payload[key] = report[key]

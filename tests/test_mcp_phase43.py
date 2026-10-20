@@ -321,7 +321,9 @@ def test_dispatch_unknown_never_fast(tmp_path, monkeypatch) -> None:
     payload = _payload(result)
     assert payload['classification'] == 'UNKNOWN'
     assert payload['runtime_mode'] == 'full_governance'
-    assert payload['reason_code'] == 'missing_context'  # no records yet
+    # classification detail is routing, never the run outcome
+    assert payload['classification_reason'] == 'missing_context'
+    assert payload['reason_code'] is None
     # full governance actually ran
     assert payload['worktrees'], payload
     assert payload['evidence']
