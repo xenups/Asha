@@ -1,27 +1,30 @@
 # Asha
 
-**A governance and evidence layer around agent-driven code changes.**
+**Asha helps you verify AI-generated code changes before you accept them.**
 
 [![release](https://img.shields.io/badge/release-v0.5.0-blue)](https://github.com/xenups/Asha/releases/tag/v0.5.0)
 [![CI](https://github.com/xenups/Asha/actions/workflows/ci.yml/badge.svg)](https://github.com/xenups/Asha/actions/workflows/ci.yml)
 ![python](https://img.shields.io/badge/python-3.11%2B-3776AB)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Asha wraps an existing coding agent — or a plain command — in a governed run:
-the task's file scope is frozen up front, the change executes in its own Git
-worktree, the observed diff is checked against that scope, the result is
-compared against a baseline of pre-existing failures, and the outcome is sealed
-into SHA-256 evidence. Your agent stays your agent; Asha decides whether the
-result may be recorded as a success.
+AI coding agents can change files you did not authorize, break things that used
+to work, or report success without enough evidence to back it up. Asha adds a
+checkpoint between the agent and your branch: it freezes the set of files the
+task may touch, runs the change in its own Git worktree, runs your checks on both
+the untouched baseline and the result, and then records whether the evidence
+supports accepting the change.
 
-**[▶ Interactive demo](docs/demo.html)** — a 26-second animation of the five
-stages below (standalone HTML, no build step):
+Asha does not guarantee bug-free code, and it does not replace human review. What
+it does is make the boundary, the checks and the reason for accepting or
+rejecting a change explicit and auditable — and it refuses to call a run
+successful when the evidence is missing or inconclusive.
 
-```bash
-open docs/demo.html          # macOS
-xdg-open docs/demo.html      # Linux
-start docs\demo.html         # Windows
-```
+[![Asha workflow: freeze scope, isolate worktree, run checks, compare baseline, and report the decision](docs/assets/asha-demo.gif)](docs/demo.html)
+
+*Animated overview of the five stages. [Open the interactive demo](docs/demo.html)
+for chapter controls, play/pause and a light/dark theme toggle — standalone HTML,
+no build step: `open docs/demo.html` (macOS), `xdg-open docs/demo.html` (Linux),
+`start docs\demo.html` (Windows).*
 
 GitHub Pages is not enabled for this repository, so there is no live demo URL.
 
