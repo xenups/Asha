@@ -424,8 +424,13 @@ def test_dispatch_result_contract(tmp_path, monkeypatch) -> None:
     assert set(timings) == {'classification_ms', 'routing_ms',
                             'context_ms', 'scheduler_ms', 'execution_ms',
                             'evidence_ms', 'total_ms'}
-    for value in timings.values():
-        assert isinstance(value, (int, float)) and value >= 0.0
+    for key, value in timings.items():
+        if key in ("execution_ms", "evidence_ms"):
+            # measured on the in-place path; None elsewhere (never a fake 0.0)
+            assert value is None or (isinstance(value, (int, float))
+                                     and value >= 0.0), (key, value)
+        else:
+            assert isinstance(value, (int, float)) and value >= 0.0
 
 
 def test_dispatch_classifies_against_real_recorded_envelope(

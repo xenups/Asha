@@ -282,6 +282,7 @@ def test_stack_verification_with_in_place_atomic_evidence(tmp_path: Path) -> Non
     result = server.asha_asha({
         "root": str(repo),
         "cmd": [PY, "-c", "pass"],
+        "validation": [PY + " -c pass"],
         "base_ref": "main"
     })
     payload = _payload(result)
@@ -294,6 +295,7 @@ def test_stack_verification_with_in_place_atomic_evidence(tmp_path: Path) -> Non
     result = server.asha_asha({
         "root": str(repo),
         "cmd": [PY, "-c", "pass"],
+        "validation": [PY + " -c pass"],
         "base_ref": "b1"
     })
     payload = _payload(result)
@@ -336,6 +338,7 @@ def test_stack_verification_wip_uncommitted_pass_not_valid_evidence(tmp_path: Pa
     result = server.asha_asha({
         "root": str(repo),
         "cmd": [PY, "-c", "pass"],
+        "validation": [PY + " -c pass"],
         "base_ref": "main"
     })
     payload = _payload(result)
@@ -347,6 +350,7 @@ def test_stack_verification_wip_uncommitted_pass_not_valid_evidence(tmp_path: Pa
     result = server.asha_asha({
         "root": str(repo),
         "cmd": [PY, "-c", "pass"],
+        "validation": [PY + " -c pass"],
         "base_ref": "b1"
     })
     payload = _payload(result)

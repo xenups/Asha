@@ -116,11 +116,13 @@ def test_unified_zero_config_clean_seals_evidence(tmp_path: Path) -> None:
     result = server.asha_asha({"root": str(repo)})
     payload = _payload(result)
     assert not result.get("isError"), payload
-    assert payload["ok"] is True
+    # zero-config sealing records a snapshot but validates nothing
+    assert payload["ok"] is False
     assert payload["authorized_to_ship"] is False
-    assert payload["ok"] and payload["evidence_sha256"]
+    assert payload["evidence_sha256"]
     assert payload["status"]["clean"] is True
-    assert payload["ready_to_push"] is True
+    assert payload["ready_to_push"] is False
+    assert payload["reason"] == "VALIDATION_NOT_CONFIGURED"
     assert payload["declared_scope"] == ["pkg/feature.py"]
     assert Path(payload["evidence_path"]).exists()
 
@@ -254,9 +256,11 @@ def test_cli_bare_path_zero_config(tmp_path: Path,
     code = cli.main([str(repo), "--json"])
     out = capsys.readouterr().out
     payload = json.loads(out)
-    assert code == 0
-    assert payload["ok"] is True
-    assert payload["ready_to_push"] is True
+    # an unvalidated tip is a non-success exit (fail-closed CLI contract)
+    assert code == 1
+    assert payload["ok"] is False
+    assert payload["ready_to_push"] is False
+    assert payload["reason"] == "VALIDATION_NOT_CONFIGURED"
 
 
 def test_cli_verify_flag(tmp_path: Path, monkeypatch: Any,

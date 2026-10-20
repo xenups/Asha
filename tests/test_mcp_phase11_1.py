@@ -245,7 +245,9 @@ def test_in_place_dirty_wip_pass_seals_wip_evidence(tmp_path: Path) -> None:
     before = _status_set(repo)
     result = server.asha_asha({"root": str(repo),
                                "cmd": [PY, "-m", "pytest", "-q",
-                                       "tests/test_wip.py"]})
+                                       "tests/test_wip.py"],
+                               "validation": [PY + " -m pytest -q "
+                                              "tests/test_wip.py"]})
     payload = _payload(result)
     assert not result.get("isError"), payload
     assert payload["state"] == "DONE", payload
@@ -256,19 +258,26 @@ def test_in_place_dirty_wip_pass_seals_wip_evidence(tmp_path: Path) -> None:
     assert payload["evidence"].get("evidence_sha256"), payload
     assert _status_set(repo) == before          # WIP survived the pass
     assert _read(repo / "pkg/base.py") == wip["pkg/base.py"]
-    # commit the WIP -> the zero-config facade seals commit-bound
-    # evidence and reports the tip pushable again
+    # commit the WIP -> sealing alone still does not validate anything, so
+    # the zero-config facade reports NOT_CONFIGURED and withholds readiness
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "wip became real")
     clean = _payload(server.asha_asha({"root": str(repo)}))
-    assert clean["ready_to_push"] is True, clean
+    assert clean["ready_to_push"] is False, clean
+    assert clean["reason"] == "VALIDATION_NOT_CONFIGURED", clean
+    # a validated run on the clean tip is ready
+    validated = _payload(server.asha_asha({
+        "root": str(repo), "cmd": [PY, "-c", "pass"],
+        "validation": [PY + " -c pass"]}))
+    assert validated["ready_to_push"] is True, validated
 
 
 def test_in_place_clean_tree_still_reports_ready_to_push(
         tmp_path: Path) -> None:
     repo = _feature_repo(tmp_path)
     result = server.asha_asha({"root": str(repo),
-                               "cmd": [PY, "-c", "print('clean')"]})
+                               "cmd": [PY, "-c", "print('clean')"],
+                               "validation": [PY + " -c pass"]})
     payload = _payload(result)
     assert not result.get("isError"), payload
     assert payload["state"] == "DONE", payload
@@ -352,7 +361,10 @@ def test_asha_mcp_bare_path_still_routes_to_unified(tmp_path: Path,
     code = server.main([str(repo)])
     payload = json.loads(capsys.readouterr().out)
     assert code == 0, payload
-    assert payload["ready_to_push"] is True
+    # routing still works, but a zero-config read validates nothing and so
+    # must not claim push readiness
+    assert payload["ready_to_push"] is False, payload
+    assert payload["reason"] == "VALIDATION_NOT_CONFIGURED", payload
 
 
 if __name__ == "__main__":  # pragma: no cover - manual probe
