@@ -119,7 +119,8 @@ def _commands(root: Path, names: list[str], changed_py: list[str]) -> list[tuple
 
 
 
-def _service_env(root: Path, changed_py: list[str]) -> ServiceEnvironment | None:
+def _service_env(root: Path, changed_py: list[str],
+                 deps_root: Path | None = None) -> ServiceEnvironment | None:
     """Resolve the service environment for the check run.
 
     ALL changed Python files must belong to the SAME service: a worker's
@@ -131,9 +132,15 @@ def _service_env(root: Path, changed_py: list[str]) -> ServiceEnvironment | None
     (fail-closed policy disabled fallback already raised; a missing .venv
     with fallback enabled yields a non-hermetic environment which is still
     returned).
+
+    ``deps_root`` (the original checkout) is passed when ``root`` is an
+    isolated worktree: dependencies are resolved there, while imports stay
+    bound to ``root`` so the worktree's own source is what gets validated.
     """
     if not changed_py:
-        return resolve_env_for_file(root, root)
+        return resolve_env_for_file(
+            root, root, deps_root=deps_root,
+            source_root=root if deps_root is not None else None)
     first_root = EnvironmentResolver().service_root_for(
         root, root / changed_py[0])
     for path in changed_py[1:]:
@@ -145,7 +152,9 @@ def _service_env(root: Path, changed_py: list[str]) -> ServiceEnvironment | None
                 f"{first_root} and {other_root}; a worker may only "
                 "execute checks within one service"
             )
-    return resolve_env_for_file(root, root / changed_py[0])
+    return resolve_env_for_file(
+        root, root / changed_py[0], deps_root=deps_root,
+        source_root=root if deps_root is not None else None)
 
 
 def _env_argv(env: ServiceEnvironment | None, name: str, argv: list[str]) -> list[str]:
@@ -165,7 +174,9 @@ def _env_argv(env: ServiceEnvironment | None, name: str, argv: list[str]) -> lis
         # select only tests marked "pytest" (silently exit 5).
         rest = argv[3:] if len(argv) > 3 and argv[1] == "-m" and argv[2] == "pytest" else argv[1:]
         return [str(env.pytest_bin), *rest]
-    if env.is_hermetic:
+    if Path(env.python_bin) != Path(sys.executable):
+        # Hermetic service interpreter, or a worktree-bound run whose
+        # dependencies come from the original checkout's venv.
         return [str(env.python_bin), *argv[1:]]
     return argv
 
@@ -174,11 +185,21 @@ def _env_cwd_env(env: ServiceEnvironment | None, root: Path) -> tuple[Path, dict
     """Execution cwd + environment for a resolved service.
 
     cwd = service_root when hermetic (the service's own layout), else the
-    repository root (historical behavior). env = service env vars merged
-    (isolated copy; the process environment is never mutated)."""
-    if env is not None and env.is_hermetic:
-        return env.service_root, dict(env.env_vars)
-    return root, os.environ.copy()
+    repository root (historical behavior). env = an isolated copy of the
+    process environment with the resolved service vars merged over it --
+    including a NON-hermetic bound run, whose PYTHONPATH must still point
+    at the worktree (the process environment is never mutated)."""
+    proc_env = os.environ.copy()
+    if env is None:
+        return root, proc_env
+    proc_env.update(env.env_vars)
+    if env.source_root is not None:
+        # Bound run: execute IN the source root (the worktree). The
+        # service root belongs to the dependency checkout and is only
+        # used to locate the interpreter.
+        return root, proc_env
+    cwd = env.service_root if env.is_hermetic else root
+    return cwd, proc_env
 
 def _exec_path_args(env: ServiceEnvironment | None, root: Path,
                     repo_relative: list[str]) -> list[str]:
@@ -191,7 +212,10 @@ def _exec_path_args(env: ServiceEnvironment | None, root: Path,
     rewriting it would run a test with the wrong interpreter. Non-hermetic
     and root cwd: paths are passed through unchanged (historical behavior).
     """
-    if env is None or not env.is_hermetic or env.service_root == root:
+    if (env is None or not env.is_hermetic or env.service_root == root
+            or env.source_root is not None):
+        # Bound runs execute at the source root, so repo-relative paths
+        # are already in the execution cwd's coordinate system.
         return list(repo_relative)
     # Normalize to forward slashes: on Windows Path.relative_to() yields
     # backslash paths while governance repo-relative paths are always
@@ -210,6 +234,77 @@ def _exec_path_args(env: ServiceEnvironment | None, root: Path,
     return out
 
 
+_BIND_PROBE = (
+    "import importlib.util as u, sys\n"
+    "spec = u.find_spec(sys.argv[1])\n"
+    "if spec is None:\n"
+    "    print('')\n"
+    "else:\n"
+    "    locs = list(spec.submodule_search_locations or [])\n"
+    "    print(locs[0] if locs else (spec.origin or ''))\n"
+)
+
+
+def _top_packages(root: Path, changed_py: list[str]) -> list[str]:
+    """Top-level packages owned by the changed files (import identity
+    targets). Empty when the change has no package context (single module,
+    docs, tests only), in which case binding is still applied but there is
+    no package origin to assert."""
+    packages: set[str] = set()
+    for rel in changed_py:
+        parts = Path(rel).parts
+        if parts and parts[0] == 'src':
+            parts = parts[1:]
+        if len(parts) < 2:
+            continue
+        name = parts[0]
+        src_pkg = root / 'src' / name
+        flat_pkg = root / name
+        base = src_pkg if src_pkg.is_dir() else flat_pkg
+        if (base / '__init__.py').is_file():
+            packages.add(name)
+    return sorted(packages)
+
+
+def verify_source_binding(env: ServiceEnvironment | None, root: Path,
+                          changed_py: list[str]) -> dict[str, str]:
+    """Fail closed unless every changed-file package imports from ``root``.
+
+    A worktree-bound run must validate the worktree's own source. Losing
+    the venue -- a venv that only exists in the original checkout, an
+    editable install, an inherited ``PYTHONPATH``, user site-packages --
+    silently swaps in another copy and produces a PASS about the wrong
+    bytes. This probe makes that outcome an explicit execution error.
+    """
+    if env is None:
+        raise CheckRunnerError('source binding: no resolved environment')
+    root = Path(root).resolve()
+    cwd, proc_env = _env_cwd_env(env, root)
+    origins: dict[str, str] = {}
+    for pkg in _top_packages(root, changed_py):
+        try:
+            proc = subprocess.run(
+                [str(env.python_bin), '-c', _BIND_PROBE, pkg],
+                cwd=cwd, capture_output=True, text=True, timeout=60,
+                env=proc_env)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise CheckRunnerError(
+                f'source binding probe failed for {pkg}: {exc}') from exc
+        origin = (proc.stdout or '').strip()
+        if proc.returncode != 0 or not origin:
+            raise CheckRunnerError(
+                'source binding: cannot resolve package '
+                f'{pkg} from {root} (rc={proc.returncode}): '
+                f'{(proc.stderr or "").strip()[-400:]}')
+        resolved = Path(origin).resolve()
+        if resolved != root and root not in resolved.parents:
+            raise CheckRunnerError(
+                f'source binding: package {pkg} resolves to {resolved}, '
+                f'outside {root} -- refusing to validate another checkout')
+        origins[pkg] = str(resolved)
+    return origins
+
+
 def _timeout_tail(exc: subprocess.TimeoutExpired, timeout: int) -> str:
     """Retained diagnostics for a timed-out check command: the partial
     output produced before the kill plus the exception text (which
@@ -226,14 +321,21 @@ def _timeout_tail(exc: subprocess.TimeoutExpired, timeout: int) -> str:
 
 
 def run(root: Path | str, resolved: dict,
-        timeout_s: int = CHECK_TIMEOUT_S) -> list[dict]:
-    """Execute the mandatory checks for a resolved scope."""
+        timeout_s: int = CHECK_TIMEOUT_S,
+        *, deps_root: Path | None = None) -> list[dict]:
+    """Execute the mandatory checks for a resolved scope.
+
+    ``deps_root`` binds the run to the worktree's source while taking
+    dependencies from the original checkout; it also enables the
+    fail-closed source-identity probe."""
     root = Path(root).resolve()
     names = resolved['checks']
     changed_py = [f for f in resolved['affected_files']
                   if f.endswith(('.py', '.pyi')) and (root / f).is_file()]
     results: list[dict] = []
-    env = _service_env(root, changed_py)
+    env = _service_env(root, changed_py, deps_root)
+    if deps_root is not None:
+        verify_source_binding(env, root, changed_py)
     cwd, proc_env = _env_cwd_env(env, root)
     for name, argv in _commands(root, names, changed_py):
         entry: dict = {
@@ -311,6 +413,7 @@ def run_scoped(
     targeted_tests: list[str],
     mypy_targets: list[str],
     timeout: int = CHECK_TIMEOUT_S,
+    deps_root: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Dumb executor of an affirmative eligibility decision (spec 1.1).
 
@@ -328,8 +431,10 @@ def run_scoped(
         file for file in changed_files
         if file.endswith(('.py', '.pyi')) and (root / file).is_file()
     ]
-    env = _service_env(root, changed_py)
-    py = str(env.python_bin) if env is not None and env.is_hermetic else sys.executable
+    env = _service_env(root, changed_py, deps_root)
+    if deps_root is not None:
+        verify_source_binding(env, root, changed_py)
+    py = str(env.python_bin) if env is not None else sys.executable
     cwd, proc_env = _env_cwd_env(env, root)
     scoped_mypy = [
         file for file in mypy_targets

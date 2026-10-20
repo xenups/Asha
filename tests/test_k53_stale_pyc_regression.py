@@ -120,8 +120,10 @@ def test_k53_t4_preexisting_plus_new_detected_both_modes(
 def test_k53_t3_preexisting_only_remains_clean_pass(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """T3 equivalent: pre-existing failures only, worker introduces
-    nothing -> DONE/CLEAN_PASS with an EMPTY delta preserved. The fix
-    must not turn pre-existing failures into false regressions."""
+    nothing -> delta stays EMPTY (no false regression) and the failures
+    are still recorded. The no-op worker leaves the target tree equal to
+    the base tree, so no comparison is possible and the worker is
+    FAILED rather than exonerated by a vacuous attribution."""
     root = _repo_with_app(tmp_path, failing=["old_1", "old_2", "old_3"])
     monkeypatch.setenv("ASHA_STATE_DIR", str(tmp_path / "state"))
     # import keeps python cmd runtime-only for ruff block below
@@ -132,9 +134,10 @@ def test_k53_t3_preexisting_only_remains_clean_pass(
     report = run_workers_dag(root, [worker], task_id="t-k53-t3",
                              preserve_on_failure=False)
     st = report["states"]["w1"]
-    # pre-existing-only: worker NOT attributed, DONE
-    assert st["state"] == "DONE", st
-    assert st.get("verdict") == "PRE_EXISTING_ONLY", st
+    # pre-existing-only: no false regression, but no exoneration either
+    assert st["verdict"] == "PRE_EXISTING_ONLY", st
+    assert st["comparison"]["performed"] is False, st
+    assert st["state"] == "FAILED", st
     base_fails = st.get("baseline_failures") or []
     assert len(base_fails) == 3, st
     deltas = st.get("delta_failures")

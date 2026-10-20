@@ -111,7 +111,69 @@ CLI contract (schema_version 1):
   `error: "REPOSITORY_CONFLICT"` — an operational condition, never a
   synthesized verdict. `--paths` accepts relative or absolute paths under
   the repository and normalizes them to the identical sorted form;
-  anything outside the repository exits `2`.
+  anything outside the repository exits `2`. It is a narrowing filter,
+  never a way to forget a change: give it once (repeating the flag is a
+  usage error), a comma-separated value is split, and any discovered
+  changed path the caller omits exits `2` with
+  `error: "SCOPE_INCOMPLETE"`. `unaccounted_paths` carries that shortfall
+  in every payload (an empty list means the accounting is complete).
+* `--acceptance <CMD>`: one argv string (split once, never a shell) run
+  in the candidate worktree through the existing worker
+  `verify_command` abstraction, after the primary action and before
+  checks are collected. The run may only report `PASS` when that command
+  demonstrably passed: a supplied-but-unexecuted command, a nonzero exit,
+  runner exit `4`/`5`, or a tail with `0 passed` and skips/deselects is
+  `FAIL` (exit `1`). The outcome is sealed into evidence and echoed as
+  `acceptance: {command, supplied, ran, exit_code, outcome}` where
+  `outcome` is `not_required` | `not_executed` | `inconclusive` |
+  `failed` | `passed`; a command that never ran keeps `exit_code: null`
+  rather than a fabricated status. Blank `--acceptance` exits `2`
+  (`INVALID_ARGUMENTS`).
+* `comparison`: every sealed result (success or failure) reports whether
+  a baseline-versus-candidate regression comparison actually happened:
+  `{performed, baseline_tree, candidate_tree, comparable, reason,
+  verdict, detail}`. `reason` is `COMPARED`, `NOT_COMPARED` (no baseline
+  inventory), `BASE_EQUALS_TARGET` (candidate tree identical to the
+  baseline, so no attribution is possible) or `INVENTORY_MISMATCH`
+  (baseline and candidate check/scope inventories differ). A missing or
+  empty tree identifier is `NOT_COMPARED` with
+  `detail: "missing_tree_identifier"` — tree ids are never invented. A
+  baseline check that ran and failed without yielding a single failure
+  identity (pytest collection error, crash, timeout) is `NOT_COMPARED`
+  with `detail: "baseline_failures_unparsed"`: its failures are
+  unattributable, so it is unknown rather than an empty failure set and
+  cannot yield a verdict.
+  `performed` is true only for `COMPARED`; `verdict` is populated only
+  then (`NO_FAILURES` | `PRE_EXISTING_ONLY` | `NEW_FAILURES` |
+  `UNKNOWN`) and is `null` otherwise — a run that was not compared is
+  never described as regression-free. When `performed` is true the same
+  payload also records `baseline_failures`, `current_failures` and
+  `delta_failures` (success included, where an empty list means
+  "compared, nothing failed"); when it is false those keys are absent,
+  so an uncomputed delta can never be mistaken for an empty one. A
+  `PRE_EXISTING_ONLY` verdict only excuses a failing check (worker
+  `DONE`) when `performed` is true; with `performed: false` the worker is
+  `FAILED` and its sealed evidence still records the failures.
+* Governed runs require attribution: when the baseline pass ran
+  (`baseline_deferred`) and its failures could not be identified
+  (`detail: "baseline_failures_unparsed"`), a candidate whose checks all
+  pass is still `FAILED` — `reason: "comparison_inconclusive:baseline_
+  failures_unparsed"`, no seal, no dependents. Passing checks alone never
+  imply "no regression". A baseline that never produced checks at all
+  (`NOT_COMPARED`, no detail) is not attribution evidence either way and
+  keeps the documented `DONE` contract: nothing is being misread as an
+  empty failure set. Consequence: a TDD-style fixture whose baseline
+  tests cannot be collected is `FAILED`; supporting that workflow needs
+  an explicit policy choice, not a silent exemption.
+* Baseline pass: the baseline runs AFTER the worker, in its own clean
+  worktree at the base commit, using the candidate's own scoping
+  decision (same mode, targeted tests, mypy targets). Running it before
+  the worker — on an empty change set — produced a canonical inventory
+  that could never match the scoped candidate inventory, so `COMPARED`
+  was unreachable. Files the worker adds are absent at base and are
+  therefore excluded from the baseline's target lists (same checks, base
+  subset); a selection consisting only of added files is
+  `baseline_selection_unavailable_at_base` and stays incomparable.
 * `/asha` thin wrapper: `.claude/commands/asha.md` is a pure passthrough
   (`asha $ARGUMENTS`); it inspects nothing and decides nothing.
 * stdout: human result block (file states listed under `Changes`), or
@@ -130,9 +192,10 @@ CLI contract (schema_version 1):
   `changed_files`, `decision`, `eligible`, `fallback_reason`,
   `execution_mode` (`targeted`|`canonical`), `validation_result`
   (`PASS`|`FAIL`), `duration_ms`, `evidence_id`, `evidence_verification`,
-  `replay_verification`, `error`, `status` (`NO_CHANGES`). Missing data
-  is explicit `null`; no absolute local paths; deterministic apart from
-  `duration_ms`.
+  `replay_verification`, `acceptance`, `comparison`, `error`,
+  `status` (`NO_CHANGES`).
+  Missing data is explicit `null`; no absolute local paths; deterministic
+  apart from `duration_ms`.
 * exit codes: `0` validation completed (SCOPED or canonical COMPLETE) or
   `NO_CHANGES` / `--no-execute` evaluation success; `1` validation
   failed; `2` operational or engine error (including canonical
@@ -333,6 +396,7 @@ through the latest completed phase:
 | Phase 11 | Unified zero-friction entrypoint: `asha` auto-routing MCP tool (#1) plus one-command CLI (`PATH`, `--verify`, `--stack`, `--context`, `--exec`) — 8-tool surface, v0.4.0 | Complete |
 | Phase 11.1 | Order-free unified CLI (flags and PATH in any order, `--` verbatim) + snapshot-safe `in_place_atomic`: dirty-WIP trees accepted, snapshot rollback instead of `git reset --hard`, `WIP_UNCOMMITTED_PASS` evidence — v0.4.1 | Complete |
 | Phase 11.2 | Production telemetry hardening: `TIP_SCOPE_MISSING` deletion resilience (`deleted_in_scope`), AST `SyntaxError` diagnostics & fallback, and stack verification recognizing `in_place_atomic` evidence — v0.4.2 | Complete |
+| Phase 12 | Governed comparison contract: deferred baseline comparison with per-task inventory (`COMPARED`/`NOT_COMPARED`), `baseline_failures_unparsed` fail-closed identity, `comparison_inconclusive` DONE guard, `--acceptance` gate, and scope accounting (`SCOPE_INCOMPLETE`) — v0.5.0 | Complete |
 
 Verified baseline: **944 passed, 0 failed** (CPython 3.11+, stdlib
 only; green on both Ubuntu/Debian and Windows — skip counts are

@@ -49,7 +49,12 @@ from typing import Any
 from . import git_context, scope_resolver, scoping, telemetry, ui, watcher
 from .classifier import classify_task, governance_profile
 from .governance.dag import run_workers_dag
-from .governance.worker_execution import run_worker_in_worktree, verify_worker_evidence
+from .governance.worker_execution import (
+    acceptance_failed,
+    build_acceptance,
+    run_worker_in_worktree,
+    verify_worker_evidence,
+)
 from .integrator import IntegrationResult, TreeIntegrator
 from .mcp_server import (
     _dispatch_context,
@@ -168,7 +173,8 @@ def evaluate(root: Path, paths: list[str] | None
 
 
 def _run_sealed(root: Path, affected: list[str], classification: Any,
-                run_id: str | None = None) -> dict[str, Any]:
+                run_id: str | None = None, *,
+                acceptance: str | None = None) -> dict[str, Any]:
     """Canonical execution of the validation path through the EXISTING
     orchestrator (worktree isolation, sealed evidence, authoritative
     record) -- identical to a client dispatch; no phase-specific or
@@ -181,18 +187,38 @@ def _run_sealed(root: Path, affected: list[str], classification: Any,
     wid = 'cli-' + os.urandom(4).hex()
     worker = {'id': wid, 'deps': [], 'declared_scope': list(affected),
               'reads': list(affected), 'writes': [],
-              'cmd': [sys.executable, '-c', 'pass']}
+              'cmd': [sys.executable, '-c', 'pass'],
+              **({'verify_command': acceptance} if acceptance else {})}
     report = run_worker_in_worktree(
         root, worker, task_id=run_id,
         fast_path=routed.mode is RuntimeMode.FAST_PATH)
     journal.append('execution_started',
-                   {'worker_id': wid, 'target_files': list(affected)},
+                   {'worker_id': wid, 'target_files': list(affected),
+                    'acceptance_command': acceptance or None},
                    critical=True)
-    state = (report.get('states', {}).get(wid) or {}).get('state')
+    state_report = report.get('states', {}).get(wid) or {}
+    state = state_report.get('state')
     ev_path = (report.get('evidence') or {}).get(wid)
-    if state != 'DONE' or not ev_path:
+    acceptance_record = state_report.get('acceptance')
+    comparison_record = state_report.get('comparison')
+    if (state != 'DONE' or not ev_path) and acceptance_failed(
+            acceptance_record):
+        # The required acceptance command did not demonstrably pass: a
+        # validation failure with the real exit code, never a PASS and
+        # never a fabricated evidence id.
+        journal.append('validation_failed',
+                       {'failed_checks': [],
+                        'acceptance': acceptance_record,
+                        'comparison': comparison_record}, critical=True)
+        journal.close()
+        return {'validation_result': 'FAIL', 'evidence_id': None,
+                'evidence_verification': None, 'replay_verification': None,
+                'acceptance': acceptance_record,
+                'comparison': comparison_record, 'error': None}
+    if not ev_path or state not in ('DONE', 'FAILED'):
         journal.append('execution_failed',
-                       {'state': state or 'UNKNOWN', 'evidence': None},
+                       {'state': state or 'UNKNOWN', 'evidence': None,
+                        'comparison': comparison_record},
                        critical=True)
         journal.close()
         raise CliError('EXECUTION_FAILED',
@@ -203,10 +229,21 @@ def _run_sealed(root: Path, affected: list[str], classification: Any,
     checks = list(payload.get('checks') or [])
     failed = [entry['name'] for entry in checks
               if entry.get('status') == 'failed']
-    validation = 'FAIL' if failed else 'PASS'
-    if failed:
-        journal.append('validation_failed', {'failed_checks': failed},
-                       critical=True)
+    acceptance_record = payload.get('acceptance') or acceptance_record
+    comparison_record = payload.get('comparison') or comparison_record
+    acceptance_bad = acceptance_failed(acceptance_record)
+    # Same attribution rule the scheduler uses: a PRE_EXISTING_ONLY verdict
+    # excuses failing checks only when a real comparison was performed, so
+    # the CLI result cannot contradict the worker's DONE/FAILED state.
+    verdict = payload.get('verdict') or state_report.get('verdict')
+    excused = (bool(failed) and verdict == 'PRE_EXISTING_ONLY'
+               and (comparison_record or {}).get('performed') is True)
+    validation = 'FAIL' if ((failed and not excused) or acceptance_bad) else 'PASS'
+    if failed and not excused or acceptance_bad:
+        journal.append('validation_failed',
+                       {'failed_checks': failed,
+                        'acceptance': acceptance_record,
+                        'comparison': comparison_record}, critical=True)
 
     journal.append('sealing_started', {'worker_id': wid}, critical=True)
     seal_ok = bool(verify_worker_evidence(Path(ev_path)))
@@ -234,12 +271,15 @@ def _run_sealed(root: Path, affected: list[str], classification: Any,
             'evidence_verification': ('PASS' if seal_ok and record_ok
                                       else 'FAIL'),
             'replay_verification': 'PASS' if bytes_ok else 'FAIL',
+            'acceptance': acceptance_record,
+            'comparison': comparison_record,
             'error': None}
 
 
 def execute(root: Path, resolved: dict[str, Any],
             decision: scoping.ScopingDecision, classification: Any, *,
-            no_execute: bool, run_id: str | None = None) -> dict[str, Any]:
+            no_execute: bool, run_id: str | None = None,
+            acceptance: str | None = None) -> dict[str, Any]:
     """Run validation through the existing architecture only.
 
     Runtime authority (Spec 6.5.5): only the scheduler may take the
@@ -254,6 +294,10 @@ def execute(root: Path, resolved: dict[str, Any],
     if no_execute:
         return {'validation_result': None, 'evidence_id': None,
                 'evidence_verification': None, 'replay_verification': None,
+                'acceptance': (build_acceptance(
+                    {'verify_command': acceptance}, None)
+                    if acceptance else None),
+                'comparison': None,
                 'error': None}
     dirty = bool(_git(root, 'status', '--porcelain').strip())
     if dirty:
@@ -263,16 +307,19 @@ def execute(root: Path, resolved: dict[str, Any],
             'target; commit the change or pass --no-execute '
             '(evaluation only)')
     affected = list(resolved.get('affected_files') or [])
-    return _run_sealed(root, affected, classification, run_id=run_id)
+    return _run_sealed(root, affected, classification, run_id=run_id,
+                       acceptance=acceptance)
 
 
 def _payload_base(root: Path, resolved: dict[str, Any],
-                  snap: git_context.WorkingState) -> dict[str, Any]:
+                  snap: git_context.WorkingState,
+                  unaccounted: list[str]) -> dict[str, Any]:
     return {
         'schema_version': SCHEMA_VERSION,
         'repository': _repository(root),
         'change_set': _change_set(root, resolved, snap),
         'changed_files': list(resolved.get('affected_files') or []),
+        'unaccounted_paths': list(unaccounted),
         'decision': None,
         'eligible': None,
         'fallback_reason': None,
@@ -282,6 +329,8 @@ def _payload_base(root: Path, resolved: dict[str, Any],
         'evidence_id': None,
         'evidence_verification': None,
         'replay_verification': None,
+        'acceptance': None,
+        'comparison': None,
         'error': None,
         'status': None,
     }
@@ -314,6 +363,12 @@ def render_human(payload: dict[str, Any], *, color: bool = False) -> str:
     if payload.get('validation_result'):
         tinted = tint(validation, '32' if validation == 'PASS' else '31')
         lines.append(f"Validation    {tinted}")
+    acceptance = payload.get('acceptance') or {}
+    if acceptance.get('supplied'):
+        lines.append(f"Acceptance    {acceptance.get('outcome')}")
+    comparison = payload.get('comparison') or {}
+    if comparison.get('reason'):
+        lines.append(f"Comparison    {comparison['reason']}")
     if payload.get('evidence_id'):
         lines.append(f"Evidence      {payload['evidence_id'][:12]}")
     lines.append(f"Duration      {payload['duration_ms'] / 1000.0:.2f}s")
@@ -763,6 +818,42 @@ def run_spec_cmd(argv: list[str]) -> int:
     return 0 if ok else 1
 
 
+class _OncePaths(argparse.Action):
+    """`--paths a b` in ONE flag; repeating the flag is a usage error.
+
+    argparse's default store action silently keeps the LAST occurrence,
+    so an earlier (usually larger) path list would disappear without a
+    trace -- the caller would be told its narrower list was complete.
+    """
+
+    def __call__(self, parser: argparse.ArgumentParser,
+                namespace: argparse.Namespace, values: Any,
+                option_string: str | None = None) -> None:
+        if getattr(namespace, self.dest, None) is not None:
+            parser.error('--paths may be given only once: list every path '
+                         'after a single --paths')
+        setattr(namespace, self.dest, values)
+
+
+def _split_path_args(raw: list[str]) -> list[str]:
+    """Expand the documented comma form; never drop an entry silently.
+
+    ``--paths a.py,b.py`` means the same as ``--paths a.py b.py`` (the
+    repository's declared-scope convention splits on commas). An empty
+    entry is a usage error instead of a silent omission; duplicates and
+    ordering are folded by ``git_context.normalize_paths``.
+    """
+    out: list[str] = []
+    for token in raw:
+        for part in token.split(','):
+            part = part.strip()
+            if not part:
+                raise CliError('INVALID_ARGUMENTS',
+                               f'empty path entry in --paths: {token!r}')
+            out.append(part)
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     command = _first_positional(argv)
@@ -802,12 +893,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--root', default='.',
                         help='repository root (default: cwd)')
     parser.add_argument('--paths', nargs='+', metavar='PATH',
+                        action=_OncePaths,
                         help='explicit target files (scope-resolver '
-                             'path mechanism)')
+                             'path mechanism); give ONE --paths flag with '
+                             'one or more paths (a comma-separated value is '
+                             'split too). Every discovered changed path must '
+                             'be named: anything omitted is refused with '
+                             'SCOPE_INCOMPLETE')
     parser.add_argument('--json', action='store_true', dest='as_json',
                         help='emit exactly one JSON document on stdout')
     parser.add_argument('--no-execute', action='store_true',
                         help='evaluate governance only; run no checks')
+    parser.add_argument('--acceptance', metavar='CMD', default=None,
+                        help='acceptance command (one argv string, split '
+                             'once, never a shell) that must pass for the '
+                             'run to report PASS; supplied-but-not-executed, '
+                             'no-tests-collected and skip/deselect-only '
+                             'outcomes fail closed. Its record is sealed '
+                             'into the evidence `acceptance` object')
     parser.add_argument('--no-color', action='store_true',
                         help='disable ANSI color (color is already off '
                              'when stdout is not a TTY or NO_COLOR is set)')
@@ -836,8 +939,13 @@ def main(argv: list[str] | None = None) -> int:
                  and sys.stdout.isatty() and not os.environ.get('NO_COLOR'))
     root = Path(args.root).expanduser()
     payload: dict[str, Any] | None = None
+    # discovered changed paths the caller did not name (empty = complete)
+    unaccounted: list[str] = []
     exit_code = EXIT_OK
     try:
+        if args.acceptance is not None and not args.acceptance.strip():
+            raise CliError('INVALID_ARGUMENTS',
+                           '--acceptance must be a non-empty command')
         if args.stepper:
             if as_json:
                 raise CliError(
@@ -870,9 +978,22 @@ def main(argv: list[str] | None = None) -> int:
                 'REPOSITORY_CONFLICT',
                 'unmerged paths (merge conflict in progress): '
                 + ', '.join(snap.conflicts))
-        explicit = (git_context.normalize_paths(root, args.paths)
+        explicit = (git_context.normalize_paths(root,
+                                                _split_path_args(args.paths))
                     if args.paths else None)
-        target_paths = list(snap.paths) if explicit is None else explicit
+        if explicit is None:
+            target_paths = list(snap.paths)
+        else:
+            # Explicit targets narrow what is EXAMINED, never what is
+            # ACCOUNTED FOR: a discovered change the caller did not name
+            # would otherwise vanish from scope, checks and evidence.
+            unaccounted = sorted(set(snap.paths) - set(explicit))
+            if unaccounted:
+                raise CliError(
+                    'SCOPE_INCOMPLETE',
+                    'explicit --paths omit changed paths: '
+                    + ', '.join(unaccounted))
+            target_paths = explicit
         run_id = 'cli-' + os.urandom(4).hex()
         if target_paths:
             journal_pre = telemetry.EventJournalWriter(root, run_id)
@@ -880,7 +1001,7 @@ def main(argv: list[str] | None = None) -> int:
                                {'target_files': list(target_paths)})
             journal_pre.close()
         resolved, decision, classification = evaluate(root, target_paths)
-        payload = _payload_base(root, resolved, snap)
+        payload = _payload_base(root, resolved, snap, unaccounted)
         if decision is None:
             payload['status'] = 'NO_CHANGES'
         else:
@@ -891,7 +1012,8 @@ def main(argv: list[str] | None = None) -> int:
                                          else 'canonical')
             _journal_scope_assessed(root, run_id, decision)
             outcome = execute(root, resolved, decision, classification,
-                              no_execute=bool(args.no_execute), run_id=run_id)
+                              no_execute=bool(args.no_execute), run_id=run_id,
+                              acceptance=args.acceptance)
             payload.update(outcome)
             if payload['validation_result'] == 'FAIL':
                 exit_code = EXIT_VALIDATION_FAILED
@@ -901,11 +1023,13 @@ def main(argv: list[str] | None = None) -> int:
             payload = {
                 'schema_version': SCHEMA_VERSION,
                 'repository': None, 'change_set': None,
-                'changed_files': [], 'decision': None, 'eligible': None,
+                'changed_files': [], 'unaccounted_paths': list(unaccounted),
+                'decision': None, 'eligible': None,
                 'fallback_reason': None, 'execution_mode': None,
                 'validation_result': None, 'duration_ms': 0,
                 'evidence_id': None, 'evidence_verification': None,
-                'replay_verification': None, 'error': exc.code,
+                'replay_verification': None, 'acceptance': None,
+                'comparison': None, 'error': exc.code,
                 'status': None,
             }
         else:

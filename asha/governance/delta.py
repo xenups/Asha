@@ -96,6 +96,18 @@ def has_failures(checks: list[dict]) -> bool:
     return any(e.get("status") == "failed" for e in checks)
 
 
+def unparsed_failures(checks: list[dict]) -> bool:
+    """A failed check whose output yielded no identity at all.
+
+    A collection error, a crash or a timeout exits non-zero without any
+    ``FAILED path::test`` line: the check really failed, but its failures
+    cannot be attributed. Such a result is UNKNOWN, never an empty set.
+    """
+    return any(entry.get("status") == "failed"
+               and not extract_failures([entry])
+               for entry in checks or [])
+
+
 def delta_failures(
     current: frozenset[FailureIdentity],
     baseline: frozenset[FailureIdentity] | None,

@@ -38,7 +38,7 @@ def test_initialize_echoes_supported_version() -> None:
     result: dict[str, Any] = response["result"]
     assert result["protocolVersion"] == "2025-06-18"
     assert result["serverInfo"] == {"name": "asha-orchestrator",
-                                    "version": "0.4.2"}
+                                    "version": "0.5.0"}
     assert result["capabilities"] == {"tools": {}}
     assert response["id"] == 1
     assert stderr.getvalue() == ""  # supported -> silent, no warning

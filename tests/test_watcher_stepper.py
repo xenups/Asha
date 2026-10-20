@@ -204,8 +204,10 @@ def test_watch_stepper_current_vs_last_sealed(tmp_path: Path) -> None:
 def test_governance_trio_frozen(tmp_path: Path) -> None:
     import subprocess as sp
     cwd = Path(__file__).resolve().parents[1]
-    # Frozen anchor: 4215bdd (Phase 1 + Phase 2 approved governance
-    # state): covers the user-approved Phase 1 hardening of
+    # Frozen anchor: d51fc11 (pytest-discovery fix in check_runner.py,
+    # committed with its own tests). Previous anchor: 4215bdd (Phase 1 +
+    # Phase 2 approved governance state): covers the user-approved Phase 1
+    # hardening of
     # check_runner.py -- 6c450a4 (verification diagnostics and cache
     # isolation) and be55c50 (baseline timeout 1800s) -- which is what
     # advanced the anchor past e7f70d2 (Phase K.1-K.4 settled state:
@@ -215,7 +217,7 @@ def test_governance_trio_frozen(tmp_path: Path) -> None:
     # b30f731 (pre worker_execution extraction). The anchor is
     # advanced only when the trio settles after an intentional,
     # review-approved refactor.
-    out = sp.run(['git', 'diff', '4215bdd..HEAD', '--',
+    out = sp.run(['git', 'diff', 'd51fc11..HEAD', '--',
                   'asha/scoping.py', 'asha/check_runner.py',
                   'asha/scheduler.py'],
                  cwd=cwd, capture_output=True, text=True, check=True)

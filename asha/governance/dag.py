@@ -198,30 +198,18 @@ class DAGCoordinator:
         scheduling loop free of extra assignments)."""
         for extra in ("verdict", "baseline_failures",
                       "current_failures", "delta_failures",
-                      "details"):
+                      "comparison", "details"):
             if outcome.get(extra) is not None:
                 target[extra] = outcome[extra]
 
     def _run_one(self, worker: dict[str, Any], path: Any, *,
                  base: str | None = None,
                  base_tree: str | None = None) -> dict[str, Any]:
-        baseline_journal: dict | None = None
-        base_c = base or self.dispatcher.base_commit
-        base_t = base_tree or self.dispatcher.base_tree
-        if base_c and base_t:
-            try:
-                baseline_journal = worker_execution.baseline_checks_recorded(
-                    worker, path, base_c, base_t, self.repo, self.task_id)
-            except Exception:
-                baseline_journal = None
-        # Strip verification caches the baseline pass left in the worktree
-        # (__pycache__/.pytest_cache/.ruff_cache/.mypy_cache). Without this
-        # the current pass can read a stale timestamped .pyc for a source
-        # file the worker rewrote within the same wall-clock second, so the
-        # current test run silently executes pre-change bytecode and the
-        # regression is missed (K.5.3: stale-pyc mtime race). Mirrors
-        # run_worker_in_worktree's post-baseline strip exactly.
-        worker_execution._strip_check_caches(path)
+        # Baseline runs after the worker, with the CANDIDATE's authoritative
+        # scoping decision, on its own clean worktree at `base_c` (see
+        # worker_execution.deferred_baseline_checks). Running it here, on an
+        # empty change set, produced a canonical inventory that could never
+        # match the scoped candidate inventory.
         try:
             result = self.execute(worker, path)
         except subprocess.TimeoutExpired:
@@ -241,11 +229,11 @@ class DAGCoordinator:
         return worker_execution.collect_worker_evidence(
             worker, path, rc, tail, self.task_id, self.evidence_dir,
             base=base, base_tree=base_tree,
+            deps_root=worker_execution._deps_root(path, self.repo),
             uncertain=set(self.worker_graph["uncertain"]),
             by_id=self.by_id, workers=self.workers,
-            baseline_checks=(
-                (baseline_journal or {}).get("checks")
-                if baseline_journal else None))
+            baseline_deferred=True,
+            repo=self.repo)
 
     def _run_one_fast(self, worker: dict[str, Any]) -> dict[str, Any]:
         with self._fast_lock:

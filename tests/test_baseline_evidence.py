@@ -12,7 +12,6 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -321,85 +320,45 @@ def _worker() -> dict:
     }
 
 
-def test_strip_failure_keeps_baseline_outcome_and_result(tmp_path: Path,
-                                                         monkeypatch):
+def test_baseline_runs_in_its_own_worktree(tmp_path: Path, monkeypatch) -> None:
+    """The deferred baseline never shares the candidate worktree: it runs
+    on a separate clean checkout of the base revision, which is then
+    removed (one baseline pass, one candidate pass)."""
     repo = _make_repo(tmp_path)
-    fixture = _journal(
-        [{"name": "pytest", "scope": "package", "status": "passed",
-          "exit_code": 0, "note": None, "output_tail": "1 passed in 0.10s"}]
-    )
-    monkeypatch.setattr(we, "baseline_checks", lambda *a, **k: fixture)
+    seen: list[Path] = []
+    real = we._run_checks
 
-    def strip_boom(path):
-        raise RuntimeError("strip boom")
+    def _spy(decision, path, resolved, **kw):
+        seen.append(Path(path).resolve())
+        return real(decision, path, resolved, **kw)
 
-    monkeypatch.setattr(we, "_strip_check_caches", strip_boom)
-
-    report = we.run_worker_in_worktree(repo, _worker(),
-                                       task_id="strip-task")
-    state = report["states"]["w1"]
-    # strip failure -> baseline_journal=None downstream (as before):
-    # current pytest fails in the fixture repo, baseline missing -> UNKNOWN
-    assert state["state"] == "FAILED"
-    assert state["reason"] == "verification_failed:pytest"
-    assert state.get("verdict") == "UNKNOWN"
-    assert state.get("baseline_failures") in (None, [])
-
-    # artifact truthfully says the baseline pass itself succeeded
-    art = _read_artifact(repo, "strip-task", "w1")
+    monkeypatch.setattr(we, "_run_checks", _spy)
+    report = we.run_worker_in_worktree(repo, _worker(), task_id="separate-task")
+    assert len(seen) == 2, seen            # baseline + candidate, one each
+    assert seen[0] != seen[1], seen        # distinct trees
+    assert not seen[0].exists(), seen      # baseline worktree cleaned up
+    art = _read_artifact(repo, "separate-task", "w1")
     assert art["execution"] == "ok"
-    assert art["checks"] == fixture["checks"]
+    assert report["states"]["w1"]["state"] == "FAILED"  # no-op => uncomparable
 
 
-def test_baseline_exception_skips_strip_exactly_as_before(tmp_path: Path,
-                                                          monkeypatch):
+def test_baseline_worktree_failure_is_recorded_not_fabricated(
+        tmp_path: Path, monkeypatch) -> None:
+    """A baseline that cannot run stays unknown: no empty baseline, no
+    comparison, and the failure is recorded in the artifact."""
     repo = _make_repo(tmp_path)
-    strip_calls: list = []
 
     def boom(*a, **k):
         raise RuntimeError("baseline boom")
 
-    monkeypatch.setattr(we, "baseline_checks", boom)
-    monkeypatch.setattr(we, "_strip_check_caches", strip_calls.append)
-
-    report = we.run_worker_in_worktree(repo, _worker(),
-                                       task_id="base-task")
+    monkeypatch.setattr(we, "_baseline_worktree", boom)
+    report = we.run_worker_in_worktree(repo, _worker(), task_id="base-task")
     state = report["states"]["w1"]
-    # identical to the pre-change behavior: baseline None -> UNKNOWN
-    assert state.get("verdict") == "UNKNOWN"
-    assert state.get("baseline_failures") in (None, [])
-
-    # strip never ran (baseline exception jumped past it, as before)
-    assert strip_calls == []
+    assert state["state"] == "FAILED"
+    assert state["comparison"]["performed"] is False
+    assert state["comparison"]["reason"] == "NOT_COMPARED"
+    assert state.get("baseline_failures") is None
 
     art = _read_artifact(repo, "base-task", "w1")
     assert art["execution"] == "exception"
     assert "baseline boom" in art["error"]
-
-
-# ---------------------------------------------------------------------------
-# 8. baseline timeout budget: baseline passes get BASELINE_TIMEOUT_S,
-#    worker verification keeps CHECK_TIMEOUT_S (rehearsal-v4 root cause)
-# ---------------------------------------------------------------------------
-
-def test_baseline_checks_request_the_longer_timeout(
-        monkeypatch: pytest.MonkeyPatch) -> None:
-    assert check_runner.BASELINE_TIMEOUT_S > check_runner.CHECK_TIMEOUT_S
-
-    calls: list[int] = []
-
-    def fake_run(path, resolved, timeout_s=check_runner.CHECK_TIMEOUT_S):
-        calls.append(timeout_s)
-        return []
-
-    monkeypatch.setattr(check_runner, "run", fake_run)
-    decision = SimpleNamespace(eligible=False)
-
-    # baseline pass explicitly requests the longer budget
-    we._run_checks(decision, Path("."), {},
-                   timeout_s=check_runner.BASELINE_TIMEOUT_S)
-    assert calls[-1] == check_runner.BASELINE_TIMEOUT_S
-
-    # worker-verification pass (collect_worker_evidence) keeps the default
-    we._run_checks(decision, Path("."), {})
-    assert calls[-1] == check_runner.CHECK_TIMEOUT_S

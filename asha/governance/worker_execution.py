@@ -19,9 +19,11 @@ evidence never authorizes ship (merge law).
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -32,6 +34,7 @@ from typing import Any
 from asha import check_runner, evidence, scope_resolver, scoping
 from asha.common import paths as common_paths
 from asha.conflict import covered
+from asha.governance import delta
 from asha.runner import dispatch_runner
 from asha.types import (
     TAIL_CHARS,
@@ -49,6 +52,24 @@ from asha.worktree import (
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 
 
+def execute_with_audit(worker: dict[str, Any], worktree: Path
+                       ) -> tuple[int, str, dict[str, Any]]:
+    """`default_execute` plus the runner's audit record (verify_* facts).
+
+    Same spawn/teardown primitive, same timeout policy, same
+    (rc, tail-of-combined-output) values -- the third element is what
+    evidence needs to record whether a supplied acceptance command
+    actually ran and how it exited. No second execution path.
+    """
+    timeout = worker.get("timeout")
+    if timeout is None:
+        timeout = WORKER_TIMEOUT_S
+    result = dispatch_runner(worker).execute(worker, worktree, timeout)
+    combined = (result.stdout or "") + (result.stderr or "")
+    return (result.exit_code, combined[-TAIL_CHARS:],
+            dict(result.audit_metadata or {}))
+
+
 def default_execute(worker: dict[str, Any], worktree: Path
                     ) -> tuple[int, str]:
     """Production execution: run the worker's primary action in its
@@ -59,12 +80,135 @@ def default_execute(worker: dict[str, Any], worktree: Path
     runner._spawn (shared by every AgentRunner) -- this hook keeps its
     (rc, tail-of-combined-output) contract byte-for-byte. (Extracted
     verbatim from scheduler.py.)"""
-    timeout = worker.get("timeout")
-    if timeout is None:
-        timeout = WORKER_TIMEOUT_S
-    result = dispatch_runner(worker).execute(worker, worktree, timeout)
-    combined = (result.stdout or "") + (result.stderr or "")
-    return result.exit_code, combined[-TAIL_CHARS:]
+    code, tail, _audit = execute_with_audit(worker, worktree)
+    return code, tail
+
+
+_ACCEPTANCE_PASSED_RE = re.compile(r"(\d+) passed")
+_ACCEPTANCE_SKIPPED_RE = re.compile(r"(\d+) skipped")
+_ACCEPTANCE_DESELECTED_RE = re.compile(r"(\d+) deselected")
+ACCEPTANCE_FAILING = ("not_executed", "inconclusive", "failed")
+
+
+def _last_count(tail: str, pattern: re.Pattern[str]) -> int | None:
+    """Last occurrence of a pytest counter in the tail (final summary)."""
+    found = pattern.findall(tail)
+    return int(found[-1]) if found else None
+
+
+def build_acceptance(worker: dict[str, Any],
+                     audit: dict[str, Any] | None) -> dict[str, Any]:
+    """The acceptance record carried into evidence and the CLI payload.
+
+    Outcomes: not_required | not_executed | inconclusive | failed |
+    passed. A command that did not run never gets a fabricated exit
+    code, and "ran but collected nothing" is not a pass.
+    """
+    command = worker.get("verify_command")
+    supplied = isinstance(command, str) and bool(command.strip())
+    meta: dict[str, Any] = audit or {}
+    ran = bool(meta.get("verify_ran"))
+    exit_code = meta.get("verify_exit") if ran else None
+    record: dict[str, Any] = {
+        "command": str(command) if supplied else None,
+        "supplied": supplied,
+        "ran": ran,
+        "exit_code": int(exit_code) if isinstance(exit_code, int) else None,
+        "outcome": "not_required",
+    }
+    if not supplied:
+        return record
+    if not ran:
+        record["outcome"] = "not_executed"
+        record["detail"] = "acceptance command was supplied but never ran"
+        return record
+    tail = str(meta.get("verify_output_tail") or "")
+    passed = _last_count(tail, _ACCEPTANCE_PASSED_RE)
+    skipped = _last_count(tail, _ACCEPTANCE_SKIPPED_RE)
+    deselected = _last_count(tail, _ACCEPTANCE_DESELECTED_RE)
+    # pytest's own statuses: 4 = usage/file error, 5 = no tests collected
+    if record["exit_code"] in (4, 5):
+        record["outcome"] = "inconclusive"
+        record["detail"] = (f"runner exit {record['exit_code']}: "
+                            "no usable acceptance tests")
+    elif record["exit_code"] != 0:
+        record["outcome"] = "failed"
+        record["detail"] = f"acceptance command exited {record['exit_code']}"
+    elif not passed and ((skipped or 0) > 0 or (deselected or 0) > 0):
+        record["outcome"] = "inconclusive"
+        record["detail"] = (f"0 passed, {skipped or 0} skipped, "
+                            f"{deselected or 0} deselected")
+    else:
+        record["outcome"] = "passed"
+        if passed is not None:
+            record["detail"] = f"{passed} passed"
+    return record
+
+
+def acceptance_failed(acceptance: dict[str, Any] | None) -> bool:
+    """True when a supplied acceptance command did not demonstrably pass."""
+    if not acceptance:
+        return False
+    return str(acceptance.get("outcome")) in ACCEPTANCE_FAILING
+
+
+COMPARISON_REASONS = ("COMPARED", "NOT_COMPARED", "BASE_EQUALS_TARGET",
+                      "INVENTORY_MISMATCH")
+
+
+def _check_inventory(checks: list[dict] | None) -> list[str]:
+    """Check-name inventory (the comparable part of a check run)."""
+    return sorted({str(entry.get("name")) for entry in (checks or [])})
+
+
+def build_comparison(*, base_tree: str | None, candidate_tree: str | None,
+                     baseline_checks: list[dict] | None,
+                     candidate_checks: list[dict] | None,
+                     baseline_scope: str | None = None,
+                     candidate_scope: str | None = None,
+                     verdict: str | None = None) -> dict[str, Any]:
+    """Truthful baseline-comparison status for one sealed result.
+
+    `performed` is true only when a candidate-versus-baseline delta was
+    actually computed over two compatible inventories AND the trees are
+    genuinely distinct. Inspecting tree ids is not a comparison, and an
+    identical baseline/candidate pair never yields "no regression".
+    """
+    record: dict[str, Any] = {
+        "performed": False,
+        "baseline_tree": base_tree,
+        "candidate_tree": candidate_tree,
+        "comparable": False,
+        "reason": "NOT_COMPARED",
+        "verdict": None,
+        "detail": None,
+    }
+    if not base_tree or not candidate_tree:
+        # Identity is mandatory: comparing without both tree ids would
+        # have to invent them, so the answer is "not compared".
+        record["detail"] = "missing_tree_identifier"
+        return record
+    if baseline_checks and delta.unparsed_failures(baseline_checks):
+        # The baseline check ran and failed, but produced no identity
+        # (pytest collection error, crash, timeout). That is unknown
+        # attribution, never an empty baseline: no verdict is possible.
+        record["detail"] = "baseline_failures_unparsed"
+        return record
+    if not baseline_checks or candidate_checks is None:
+        return record                      # no baseline inventory at all
+    if base_tree == candidate_tree:
+        record["reason"] = "BASE_EQUALS_TARGET"
+        return record
+    if _check_inventory(baseline_checks) != _check_inventory(candidate_checks):
+        record["reason"] = "INVENTORY_MISMATCH"
+        return record
+    if (baseline_scope is not None and candidate_scope is not None
+            and baseline_scope != candidate_scope):
+        record["reason"] = "INVENTORY_MISMATCH"
+        return record
+    record.update({"performed": True, "comparable": True,
+                   "reason": "COMPARED", "verdict": verdict})
+    return record
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
@@ -264,7 +408,8 @@ def baseline_checks(
     decision = scoping_decision(path, resolved, cls)
     checks = _run_checks(
         decision, path, resolved,
-        timeout_s=check_runner.BASELINE_TIMEOUT_S)
+        timeout_s=check_runner.BASELINE_TIMEOUT_S,
+        deps_root=_deps_root(path, repo))
     return {
         "checks": checks,
         "resolved": resolved,
@@ -430,18 +575,139 @@ def baseline_checks_recorded(
     return journal
 
 
+def _baseline_worktree(repo: Path, base: str) -> Path:
+    """Clean, isolated worktree checked out at `base` (baseline pass)."""
+    root = Path(tempfile.mkdtemp(prefix='asha-baseline-'))
+    wt = root / 'wt'
+    _git(repo, "worktree", "add", "--detach", str(wt), base)
+    return wt
+
+
+def _drop_baseline_worktree(repo: Path, wt: Path) -> None:
+    with _suppress(Exception):
+        _git(repo, "worktree", "remove", "--force", str(wt))
+    with _suppress(OSError):
+        shutil.rmtree(wt.parent, ignore_errors=True)
+
+
+def deferred_baseline_checks(
+    worker: dict[str, Any],
+    path: Path,
+    base: str,
+    base_tree: str | None,
+    repo: Path,
+    task_id: str,
+    resolved: dict[str, Any],
+    decision: Any,
+    deps_root: Path | None = None,
+) -> dict[str, Any] | None:
+    """Baseline pass that reuses the CANDIDATE's authoritative decision.
+
+    The candidate worktree already proved which files change and which
+    scoping decision that implies; running the baseline with that same
+    decision object (same mode, targeted tests, mypy targets, affected
+    files) is what makes the two check inventories comparable. The
+    checks themselves run on a fresh worktree at `base`, so the baseline
+    still sees the pre-worker source.
+
+    Never raises: a failed baseline is recorded as an error artifact and
+    yields ``None`` (unknown, never an empty baseline).
+    """
+    journal: dict[str, Any] | None = None
+    error: str | None = None
+    wt: Path | None = None
+    try:
+        wt = _baseline_worktree(repo, base)
+        head = _git(wt, "rev-parse", "HEAD").strip()
+        tree = _git(wt, "rev-parse", "HEAD^{tree}").strip()
+        if head != base:
+            raise OrchestratorError(
+                f"baseline worktree at {head!r}, expected {base!r}")
+        if base_tree and tree != base_tree:
+            raise OrchestratorError(
+                f"baseline worktree tree {tree!r}, expected {base_tree!r}")
+        affected = list(resolved.get("affected_files") or [])
+        present = [item for item in affected if (wt / item).exists()]
+        # A file the worker ADDS cannot be linted/type-checked at the base
+        # revision: dropping it keeps the SAME checks (same inventory)
+        # evaluated on the subset that exists at base, instead of
+        # inventing findings or silently skipping a whole check.
+        base_resolved = dict(resolved)
+        base_resolved["affected_files"] = present
+        targeted = list(getattr(decision, "targeted_tests", ()) or ())
+        mypy_targets = list(getattr(decision, "mypy_targets", ()) or ())
+        base_targets = [item for item in targeted if (wt / item).exists()]
+        if targeted and not base_targets:
+            # The whole test selection lives in files the worker created:
+            # there is no meaningful baseline for it.
+            raise OrchestratorError("baseline_selection_unavailable_at_base")
+        base_mypy = [item for item in mypy_targets if (wt / item).exists()]
+        if mypy_targets and not base_mypy:
+            raise OrchestratorError("baseline_selection_unavailable_at_base")
+        base_decision = decision
+        if (base_targets != targeted or base_mypy != mypy_targets):
+            base_decision = dataclasses.replace(
+                decision, targeted_tests=tuple(base_targets),
+                mypy_targets=tuple(base_mypy))
+        checks = _run_checks(
+            base_decision, wt, base_resolved,
+            timeout_s=check_runner.BASELINE_TIMEOUT_S, deps_root=deps_root)
+        journal = {
+            "checks": checks,
+            "resolved": resolved,
+            "decision_mode": getattr(decision, "mode", None),
+            "repo": str(Path(repo).resolve()),
+            "base": base,
+            "base_tree": base_tree,
+            "task_id": task_id,
+            "worktree_tree": tree,
+        }
+    except Exception as exc:
+        journal, error = None, f"{type(exc).__name__}: {exc}"
+    finally:
+        if wt is not None:
+            _drop_baseline_worktree(repo, wt)
+    persist_baseline_evidence(
+        journal, error=error, worker=worker, path=path, base=base,
+        base_tree=base_tree or "", repo=repo, task_id=task_id)
+    return journal
+
+
+def _deps_root(path: Path, repo: Path) -> Path | None:
+    """Dependency root for a check run: the original checkout when the
+    checks execute in an isolated worktree, else None.
+
+    A git worktree contains only TRACKED files, so a gitignored ``.venv``
+    never exists there. Without this the resolver fell back to the
+    interpreter that launched Asha, which imported an unrelated installed
+    package and produced EXECUTION_FAILED on a green repository.
+    """
+    try:
+        if Path(path).resolve() == Path(repo).resolve():
+            return None
+    except OSError:
+        return None
+    return Path(repo)
+
+
 def _run_checks(decision, path: Path, resolved: dict,
-                timeout_s: int = check_runner.CHECK_TIMEOUT_S) -> list[dict]:
+                timeout_s: int = check_runner.CHECK_TIMEOUT_S,
+                deps_root: Path | None = None) -> list[dict]:
     """Run the check matrix for a resolved scope (shared by baseline and
     current passes; identical machinery, identical environment)."""
+    # Only add the kwarg when it is actually set: unbound runs keep the
+    # pre-existing call shape (monkeypatched runners, external callers).
+    extra: dict[str, Any] = (
+        {'deps_root': deps_root} if deps_root is not None else {})
     if decision.eligible:
         return check_runner.run_scoped(
             path,
             changed_files=list(resolved["affected_files"]),
             targeted_tests=list(decision.targeted_tests),
             mypy_targets=list(decision.mypy_targets),
+            **extra,
         )
-    return check_runner.run(path, resolved, timeout_s=timeout_s)
+    return check_runner.run(path, resolved, timeout_s=timeout_s, **extra)
 
 
 def run_worker_in_worktree(
@@ -490,47 +756,25 @@ def run_worker_in_worktree(
             base = _git(repo, "rev-parse", "HEAD").strip()
             base_tree = _git(repo, "rev-parse", "HEAD^{tree}").strip()
             try:
-                result = default_execute(worker, repo)
+                result = execute_with_audit(worker, repo)
             except subprocess.TimeoutExpired:
                 outcome = {"state": "FAILED",
                            "reason": "timeout_exceeded", "evidence": None}
                 states[wid] = outcome
                 return _report(task_id, states, evidence_paths,
                                authoritative, dispatcher)
-            rc, tail = _split_result(result)
+            rc, tail, audit = result
             outcome = collect_worker_evidence(
                 worker, repo, rc, tail, task_id,
                 common_paths.get_orchestrator_dir(repo) / _safe_id(task_id),
-                base=base, base_tree=base_tree)
+                base=base, base_tree=base_tree,
+                deps_root=_deps_root(repo, repo),
+                audit=audit)
         else:
             path = dispatcher.create(wid)
             created_path = path
-            baseline_journal: dict | None = None
             try:
-                baseline_journal = baseline_checks_recorded(
-                    worker, path, base_commit, base_tree, repo, task_id)
-                if baseline_journal is not None:
-                    _strip_check_caches(path)
-            except Exception as exc:
-                # baseline must never mask the worker failure; a failed
-                # baseline yields UNKNOWN (fail closed) downstream
-                if baseline_journal is None:
-                    # helper failed before/while recording: best-effort
-                    # exception artifact (persist_baseline_evidence
-                    # never raises, so results/verdict stay untouched)
-                    persist_baseline_evidence(
-                        None,
-                        error=f"{type(exc).__name__}: {exc}",
-                        worker=worker,
-                        path=path,
-                        base=base_commit,
-                        base_tree=base_tree,
-                        repo=repo,
-                        task_id=task_id,
-                    )
-                baseline_journal = None
-            try:
-                result = default_execute(worker, path)
+                result = execute_with_audit(worker, path)
             except subprocess.TimeoutExpired:
                 outcome = {"state": "FAILED",
                            "reason": "timeout_exceeded", "evidence": None}
@@ -547,14 +791,15 @@ def run_worker_in_worktree(
                 return _report(task_id, states, evidence_paths,
                                authoritative, dispatcher, created_path,
                                fast_path_classification=fast_path_classification)
-            rc, tail = _split_result(result)
+            rc, tail, audit = result
             outcome = collect_worker_evidence(
                 worker, path, rc, tail, task_id,
                 common_paths.get_orchestrator_dir(repo) / _safe_id(task_id),
                 base=base_commit, base_tree=base_tree,
-                baseline_checks=(
-                    (baseline_journal or {}).get("checks")
-                    if baseline_journal else None))
+                deps_root=_deps_root(path, repo),
+                audit=audit,
+                baseline_deferred=True,
+                repo=repo)
         states[wid] = outcome
         if outcome.get("evidence"):
             evidence_paths[wid] = outcome["evidence"]
@@ -704,6 +949,11 @@ def collect_worker_evidence(
                             by_id: dict[str, dict[str, Any]] | None = None,
                             workers: list[dict[str, Any]] | None = None,
                             baseline_checks: list[dict] | None = None,
+                            baseline_journal: dict[str, Any] | None = None,
+                            baseline_deferred: bool = False,
+                            repo: Path | None = None,
+                            deps_root: Path | None = None,
+                            audit: dict[str, Any] | None = None,
                             ) -> dict[str, Any]:
     """Extracted GovernedScheduler._collect. `evidence_dir` is the
     scheduler-owned orchestrator dir (external Zone-2), NOT the ship
@@ -715,14 +965,24 @@ def collect_worker_evidence(
             "(run-level identity, captured before the worker commits)")
     effective_base = base
     effective_base_tree = base_tree
+    acceptance = build_acceptance(worker, audit)
+    if baseline_journal is not None and baseline_checks is None:
+        baseline_checks = baseline_journal.get("checks")
+    baseline_scope = ((baseline_journal or {}).get("resolved") or {}).get(
+        "scope")
+    comparison = build_comparison(
+        base_tree=base_tree, candidate_tree=None,
+        baseline_checks=baseline_checks, candidate_checks=None)
     if rc != 0:
-        return {"state": "FAILED", "reason": f"worker_exit_{rc}",
-                "evidence": None}
+        reason = "acceptance_failed" if acceptance_failed(acceptance) \
+            else f"worker_exit_{rc}"
+        return {"state": "FAILED", "reason": reason,
+                "evidence": None, "acceptance": acceptance,
+                "comparison": comparison}
     try:
         dirty = [line for line in
                  _git(path, "status", "--porcelain").splitlines()
                  if line.strip()]
-        delta_ran = False
         if dirty:
             _commit_all(path, f"orchestrator: worker {wid}")
         commit_line, tree_line = _git(path, "rev-parse", "HEAD",
@@ -738,7 +998,12 @@ def collect_worker_evidence(
             return {"state": "INVALID_EVIDENCE",
                     "reason": "scope_violation:"
                     + ",".join(violations[:5]),
-                    "evidence": None}
+                    "evidence": None,
+                    "comparison": build_comparison(
+                        base_tree=effective_base_tree,
+                        candidate_tree=target_tree,
+                        baseline_checks=baseline_checks,
+                        candidate_checks=None)}
         resolved = scope_resolver.resolve(
             path, base=effective_base, paths=observed)
         cls = classification
@@ -748,28 +1013,79 @@ def collect_worker_evidence(
                 str(wid), resolved, set(uncertain), by,
                 workers if workers is not None else [worker])
         decision = scoping_decision(path, resolved, cls)
-        checks = _run_checks(decision, path, resolved)
+        if baseline_deferred:
+            if repo is None:
+                raise OrchestratorError(
+                    "baseline_deferred requires repo (baseline worktree)")
+            # Same authoritative decision, clean tree at `base`: the only
+            # way the two check inventories are genuinely comparable.
+            baseline_journal = deferred_baseline_checks(
+                worker, path, effective_base, effective_base_tree,
+                Path(repo), task_id, resolved, decision, deps_root=deps_root)
+            baseline_checks = (baseline_journal or {}).get("checks")
+            baseline_scope = (
+                (baseline_journal or {}).get("resolved") or {}).get("scope")
+        checks = _run_checks(decision, path, resolved, deps_root=deps_root)
         failed = [entry["name"] for entry in checks
                   if entry["status"] == "failed"]
         if checks and all(entry["status"] == "skipped"
                           for entry in checks):
             return {"state": "INVALID_EVIDENCE",
-                    "reason": "no_verification_ran", "evidence": None}
+                    "reason": "no_verification_ran", "evidence": None,
+                    "comparison": build_comparison(
+                        base_tree=effective_base_tree,
+                        candidate_tree=target_tree,
+                        baseline_checks=baseline_checks,
+                        candidate_checks=None)}
+        from asha.governance import delta
+        baseline_list = (list(baseline_checks)
+                         if baseline_checks is not None else None)
+        unparsed_baseline = (baseline_list is not None
+                             and delta.unparsed_failures(baseline_list))
+        cur_fails = delta.extract_failures(checks)
+        base_fails = (delta.extract_failures(baseline_list)
+                      if baseline_list is not None and not unparsed_baseline
+                      else None)
+        new_fails = delta.delta_failures(cur_fails, base_fails)
+        verdict = delta.verdict_for(cur_fails, base_fails,
+                                    has_failed_checks=bool(failed))
+        comparison = build_comparison(
+            base_tree=effective_base_tree, candidate_tree=target_tree,
+            baseline_checks=baseline_list, candidate_checks=checks,
+            baseline_scope=baseline_scope,
+            candidate_scope=resolved["scope"], verdict=verdict)
+        # Governed runs require attribution: a passing candidate cannot
+        # authorize DONE when the baseline ran and its failures could not be
+        # identified. Unknown is neither "no failures" nor "pre-existing
+        # only". A baseline that was never collected (NOT_COMPARED with no
+        # failure-identity detail) keeps the documented DONE contract --
+        # there is nothing to attribute, and no failed check to misread.
+        if (baseline_deferred
+                and comparison["detail"] == "baseline_failures_unparsed"):
+            return {
+                "state": "FAILED",
+                "reason": "comparison_inconclusive:" + str(
+                    comparison["detail"] or comparison["reason"]),
+                "evidence": None,
+                "verdict": verdict,
+                "comparison": comparison,
+                "current_failures": [
+                    f.to_dict() for f in sorted(cur_fails,
+                                                key=lambda i: i.location)],
+            }
+        # Failure always records the delta decision (fail-closed, even
+        # without a baseline). Success records it only when a comparison
+        # was actually performed, so an empty list never impersonates
+        # data that was never collected.
+        delta_ran = bool(failed) or comparison["performed"]
+        blocked = False
         if failed:
-            from asha.governance import delta
-            baseline_checks = (list(baseline_checks)
-                               if baseline_checks is not None else None)
-            cur_fails = delta.extract_failures(checks)
-            base_fails = (delta.extract_failures(baseline_checks)
-                          if baseline_checks is not None else None)
-            verdict = delta.verdict_for(
-                cur_fails, base_fails, has_failed_checks=bool(failed))
-            new_fails = delta.delta_failures(cur_fails, base_fails)
             outcome: dict[str, Any] = {
                 "state": "FAILED",
                 "reason": "verification_failed:" + ",".join(failed),
                 "evidence": None,
                 "verdict": verdict,
+                "comparison": comparison,
                 "baseline_failures": (
                     [f.to_dict() for f in sorted(base_fails,
                                                key=lambda i: i.location)]
@@ -784,14 +1100,20 @@ def collect_worker_evidence(
                 "details": _failed_check_details(checks),
             }
             delta_ran = True
-            pre_existing_only = verdict == "PRE_EXISTING_ONLY"
-            if not pre_existing_only:
+            # A PRE_EXISTING_ONLY verdict only excuses these failures when a
+            # candidate-vs-baseline comparison actually happened. Without
+            # one the attribution is vacuous (identical trees make every
+            # failure "pre-existing") so the worker is not DONE; it is
+            # blocked and the sealed evidence records why.
+            pre_existing_authorized = (verdict == "PRE_EXISTING_ONLY"
+                                       and comparison["performed"])
+            if verdict != "PRE_EXISTING_ONLY":
                 return outcome
-            # Pre-existing-only failures are NOT attributed to this worker:
-            # the worker introduced no new failures, so its verification
-            # still passes. Fall through to the evidence seal below so the
-            # delta decision (baseline/current/verdict) is persisted and
-            # auditable; the payload carries the failure lists.
+            blocked = not pre_existing_authorized
+            # Pre-existing-only failures are not attributed to this worker
+            # only when the comparison above was actually performed; the
+            # fall-through below seals that decision either way (DONE when
+            # authorised, FAILED when not).
         diff = _git(path, "diff", effective_base,
                     target_commit, strip=False)
         payload: dict[str, Any] = {
@@ -814,6 +1136,8 @@ def collect_worker_evidence(
             "write_set": worker.get("writes"),
             "diff": diff,
             "exit_status": rc,
+            "acceptance": acceptance,
+            "comparison": comparison,
         }
         if delta_ran:
             payload["verdict"] = verdict
@@ -844,10 +1168,14 @@ def collect_worker_evidence(
             evidence.EvidenceError, OSError) as exc:
         return {"state": "INVALID_EVIDENCE",
                 "reason": f"{type(exc).__name__}: {exc}",
-                "evidence": None}
+                "evidence": None, "comparison": comparison}
     done: dict[str, Any] = {
-        "state": "DONE", "reason": None, "evidence": str(evi_path),
-        "observed": list(observed), "target_tree": target_tree}
+        "state": "FAILED" if blocked else "DONE",
+        "reason": ("verification_failed:" + ",".join(failed)) if blocked
+        else None,
+        "evidence": str(evi_path),
+        "observed": list(observed), "target_tree": target_tree,
+        "acceptance": acceptance, "comparison": comparison}
     if delta_ran:
         done["verdict"] = verdict
         done["baseline_failures"] = (

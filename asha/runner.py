@@ -50,7 +50,8 @@ def runner_kind(worker: Mapping[str, Any]) -> str:
 
 
 def _spawn(argv: list[str], cwd: Path,
-           timeout: float) -> tuple[int, str, str]:
+           timeout: float,
+           env: dict[str, str] | None = None) -> tuple[int, str, str]:
     """ONE process primitive for all runners -- same contract
     default_execute had: spawn failure -> (-1, msg); timeout ->
     kill_process_tree, then TimeoutExpired propagates for _run_one to
@@ -58,6 +59,7 @@ def _spawn(argv: list[str], cwd: Path,
     try:
         proc = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True,
+                                env=env,
                                 start_new_session=(os.name != 'nt'))
     except (OSError, subprocess.SubprocessError) as exc:
         return -1, '', f'{type(exc).__name__}: {exc}'
@@ -69,6 +71,24 @@ def _spawn(argv: list[str], cwd: Path,
     except (OSError, subprocess.SubprocessError) as exc:
         return -1, '', f'{type(exc).__name__}: {exc}'
     return proc.returncode, out or '', err or ''
+
+
+def _acceptance_env(argv: list[str]) -> dict[str, str]:
+    """Environment for the acceptance child.
+
+    The acceptance command runs in the CANDIDATE worktree, so whatever it
+    writes would be committed and read back as worker output (an
+    undeclared write -> INVALID_EVIDENCE). Suppress the two artifacts a
+    test run always makes: bytecode caches and pytest's cache dir. The
+    command itself is untouched.
+    """
+    env = dict(os.environ)
+    env['PYTHONDONTWRITEBYTECODE'] = '1'
+    if any('pytest' in token for token in argv):
+        add = '-p no:cacheprovider'
+        current = env.get('PYTEST_ADDOPTS', '').strip()
+        env['PYTEST_ADDOPTS'] = f'{current} {add}'.strip()
+    return env
 
 
 def _split_verify(verify: str) -> list[str]:
@@ -108,11 +128,14 @@ class BaseAgentRunner:
         verify = worker_spec.get('verify_command')
         verify_ran = False
         verify_exit: int | None = None
+        verify_tail = ''
         if code == 0 and isinstance(verify, str) and verify.strip():
             verify_ran = True
+            vargv = _split_verify(verify)
             verify_exit, vout, verr = _spawn(
-                _split_verify(verify), worktree_path, timeout)
+                vargv, worktree_path, timeout, env=_acceptance_env(vargv))
             out, err = out + vout, err + verr
+            verify_tail = (vout + verr)[-2000:]
             code = verify_exit
         return RunnerResult(
             exit_code=code, stdout=out, stderr=err,
@@ -125,6 +148,9 @@ class BaseAgentRunner:
                 'verify_command': verify,
                 'verify_ran': verify_ran,
                 'verify_exit': verify_exit,
+                # evidence needs the verify output to tell "passed" from
+                # "ran but collected nothing" (skip/deselect tails)
+                'verify_output_tail': verify_tail,
             })
 
 

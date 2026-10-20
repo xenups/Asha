@@ -76,7 +76,7 @@ from .worktree import _git
 SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18",
                                "2025-03-26", "2024-11-05"]
 DEFAULT_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]
-SERVER_INFO = {"name": "asha-orchestrator", "version": "0.4.2"}
+SERVER_INFO = {"name": "asha-orchestrator", "version": "0.5.0"}
 CAPABILITIES: dict[str, Any] = {"tools": {}}
 
 PARSE_ERROR = -32700

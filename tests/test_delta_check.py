@@ -203,12 +203,14 @@ def _repo_with_failing_test(tmp_path: Path, failing_nodeid: str = "") -> Path:
 
 def test_case10_integration_pre_existing_not_attributed(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A pre-existing failing test must not newly block the worker.
+    """A PRE_EXISTING_ONLY verdict does not exonerate a no-op worker.
 
     Base:  tests/test_x.py::test_old FAILS  (pre-existing)
-    Worker: no-op cmd (introduces nothing new)
+    Worker: no-op cmd (introduces nothing new, target tree == base tree)
     Expected: baseline has test_old, current has test_old, delta empty
-    -> PRE_EXISTING_ONLY -> worker DONE (failure not attributed)."""
+    -> PRE_EXISTING_ONLY, but the comparison is BASE_EQUALS_TARGET, so
+    the attribution is vacuous: the worker is FAILED (sealed evidence
+    retained), never DONE."""
     root = _repo_with_failing_test(tmp_path, "tests/test_x.py::test_old")
     (root / "tests" / "test_x.py").write_text(
         "def test_old():\n    assert False  # pre-existing failure\n",
@@ -226,8 +228,13 @@ def test_case10_integration_pre_existing_not_attributed(
               "cmd": [sys.executable, "-c", "pass"]}
     report = run_workers_dag(root, [worker], task_id="t-pre-existing")
     st = report["states"]["w1"]
-    assert st["state"] == "DONE", st
-    assert st.get("verdict") == "PRE_EXISTING_ONLY", st
+    assert st["verdict"] == "PRE_EXISTING_ONLY", st
+    assert st["delta_failures"] == [], st
+    # identical trees -> no comparison was performed -> not exonerated
+    assert st["comparison"]["reason"] == "BASE_EQUALS_TARGET", st
+    assert st["comparison"]["performed"] is False, st
+    assert st["state"] == "FAILED", st
+    assert (report.get("evidence") or {}).get("w1"), report
 
 
 def test_case6b_integration_unknown_baseline_fails_closed(
@@ -371,3 +378,73 @@ def test_failed_check_details_survive_and_merge_into_states() -> None:
     DAGCoordinator._merge_verdict_fields(target, outcome)
     assert target["details"] == details
     assert target["verdict"] == "UNKNOWN"
+
+def _comparison(reason: str, *, performed: bool,
+                verdict=None) -> dict:
+    return {"performed": performed, "baseline_tree": "a" * 40,
+            "candidate_tree": "b" * 40, "comparable": performed,
+            "reason": reason, "verdict": verdict, "detail": None}
+
+
+def test_merge_verdict_fields_preserves_comparison_base_equals_target() -> None:
+    """R2: the explicit comparison contract survives into DAG state and
+    stays distinguishable from a performed comparison."""
+    comparison = _comparison("BASE_EQUALS_TARGET", performed=False)
+    outcome = {"state": "FAILED", "verdict": "NEW_FAILURES",
+               "delta_failures": [], "comparison": comparison}
+    target: dict = {}
+    DAGCoordinator._merge_verdict_fields(target, outcome)
+    assert target["comparison"] == comparison
+    assert target["comparison"]["reason"] == "BASE_EQUALS_TARGET"
+    assert target["comparison"]["performed"] is False
+    # legacy verdict cannot replace or override the explicit contract
+    assert target["verdict"] == "NEW_FAILURES"
+    assert target["comparison"]["verdict"] is None
+
+
+def test_merge_verdict_fields_preserves_comparison_compared() -> None:
+    comparison = _comparison("COMPARED", performed=True,
+                             verdict="NO_FAILURES")
+    target: dict = {"state": "DONE"}
+    DAGCoordinator._merge_verdict_fields(
+        target, {"state": "DONE", "comparison": comparison})
+    assert target["comparison"]["reason"] == "COMPARED"
+    assert target["comparison"]["verdict"] == "NO_FAILURES"
+    assert target["comparison"] != _comparison("BASE_EQUALS_TARGET",
+                                               performed=False)
+
+
+def test_merge_verdict_fields_never_clears_comparison() -> None:
+    comparison = _comparison("NOT_COMPARED", performed=False)
+    target: dict = {"comparison": comparison}
+    DAGCoordinator._merge_verdict_fields(target, {"state": "FAILED"})
+    assert target["comparison"] == comparison
+
+
+def test_dependent_not_scheduled_when_attribution_is_missing(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """D1: a no-op worker with pre-existing failures is FAILED, so its
+    dependents never run."""
+    root = _repo_with_failing_test(tmp_path, "tests/test_x.py::test_old")
+    (root / "tests" / "test_x.py").write_text(
+        "def test_old():\n    assert False  # pre-existing failure\n",
+        encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True,
+                   capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(root), "-c", "user.email=t@t",
+         "-c", "user.name=t", "commit", "-qm", "add-failing"], check=True,
+        capture_output=True)
+    monkeypatch.setenv("ASHA_STATE_DIR", str(tmp_path / "state"))
+    w1 = {"id": "w1", "deps": [], "declared_scope": ["tests/test_x.py"],
+          "reads": ["tests/test_x.py"], "writes": [],
+          "cmd": [sys.executable, "-c", "pass"]}
+    w2 = {"id": "w2", "deps": ["w1"], "declared_scope": ["tests/test_x.py"],
+          "reads": ["tests/test_x.py"], "writes": [],
+          "cmd": [sys.executable, "-c", "pass"]}
+    report = run_workers_dag(root, [w1, w2], task_id="t-dependent")
+    st1 = report["states"]["w1"]
+    assert st1["state"] == "FAILED", st1
+    assert st1["comparison"]["performed"] is False, st1
+    st2 = report["states"]["w2"]
+    assert st2["state"] != "DONE", st2
