@@ -991,6 +991,9 @@ def collect_worker_evidence(
         observed = scope_resolver.changed_files(
             path, base=effective_base)
         declared = worker.get("declared_scope") or []
+        declared_writes = [str(entry) for entry in (worker.get("writes") or [])]
+        writes_observed = [entry for entry in declared_writes
+                           if entry in observed]
         violations = [item for item in observed
                       if not any(covered(item, entry)
                                  for entry in declared)]
@@ -1134,6 +1137,11 @@ def collect_worker_evidence(
             "observed_scope": observed,
             "read_set": worker.get("reads"),
             "write_set": worker.get("writes"),
+            # Truthful application facts: an idempotent rewrite and a
+            # forged claim look identical on disk, so this reports what
+            # the tree shows instead of inventing a verdict.
+            "applied": bool(observed),
+            "writes_observed": writes_observed,
             "diff": diff,
             "exit_status": rc,
             "acceptance": acceptance,
@@ -1175,6 +1183,7 @@ def collect_worker_evidence(
         else None,
         "evidence": str(evi_path),
         "observed": list(observed), "target_tree": target_tree,
+        "applied": bool(observed), "writes_observed": writes_observed,
         "acceptance": acceptance, "comparison": comparison}
     if delta_ran:
         done["verdict"] = verdict

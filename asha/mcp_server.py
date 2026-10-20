@@ -247,8 +247,14 @@ ASHA_RUN_SPEC_SPEC: dict[str, Any] = {
                     "GovernedScheduler (worktrees, conflict gating, "
                     "scope verification, checks, sealed evidence). "
                     "apply=false (default) is a simulation with zero "
-                    "side effects; apply=true executes for real but "
-                    "never grants ship authority."),
+                    "side effects; apply=true executes for real in "
+                    "isolated worktrees (the target tree is NOT "
+                    "modified) and never grants ship authority. Each "
+                    "worker reports applied/writes_observed: a run that "
+                    "produced no change says so (applied=false) instead "
+                    "of implying an application. Scope covers files "
+                    "only: shell and network activity are not "
+                    "intercepted."),
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -2376,6 +2382,13 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
             return _tool_error(
                 "execution_mode must be 'worktree' (default) or "
                 "'in_place_atomic'")
+        if validation_commands and execution_mode != "in_place_atomic":
+            # Worktree mode never runs validation commands; accepting them
+            # there would silently report NOT_CONFIGURED for a run the
+            # caller explicitly wanted validated.
+            return _tool_error(
+                "validation commands require execution_mode="
+                "'in_place_atomic'; nothing executed")
         root_arg = arguments.get("root", ".")
         if not isinstance(root_arg, str):
             return _tool_error("root must be a string")
@@ -2416,6 +2429,12 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
             resolved_entries, changed, auto_error = scope_res
             deleted = getattr(scope_res, "deleted", [])
             if auto_error is not None:
+                if auto_error.startswith("SCOPE_AUTO_EMPTY"):
+                    # Actionable, still fail-closed: an empty auto-scope is
+                    # never widened into an unrestricted one.
+                    return _tool_error(
+                        auto_error + " -- pass declared_scope explicitly "
+                        "(a cmd/auto run on a clean tree cannot infer it)")
                 return _tool_error(auto_error)
             all_changed.extend(changed)
             all_deleted.extend(deleted)
@@ -2519,8 +2538,12 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
         # reason WIP_UNCOMMITTED_PASS -- tests passed, the commit is
         # still missing.
         # A DONE worker means the command ran; it is never evidence that
-        # validation passed. Default to FAIL unless the runner said PASS.
-        payload["validation_result"] = report.get("validation_result") or "FAIL"
+        # validation passed. validation_result reports the VALIDATION
+        # verdict, never a blanket FAIL that contradicts a DONE state.
+        payload["validation_result"] = (
+            report.get("validation_result")
+            or report.get("validation_status")
+            or validation.VALIDATION_NOT_CONFIGURED)
         payload["ready_to_push"] = bool(report.get("ready_to_push"))
         if isinstance(report.get("execution"), dict):
             payload["execution"] = report["execution"]
@@ -2563,7 +2586,9 @@ ASHA_SPEC: dict[str, Any] = {
         "All seven specialized tools (asha_status, asha_verify_tip, "
         "asha_verify_stack, asha_dispatch_task, "
         "asha_get_surgical_context, asha_plan_dag, asha_run_spec) stay "
-        "fully available for direct use."),
+        "fully available for direct use. Enforcement covers the files a "
+        "governed run writes; it does not intercept the agent's shell, "
+        "network or other tool calls."),
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -2736,6 +2761,14 @@ def asha_asha(arguments: dict[str, Any]) -> dict[str, Any]:
                              for key in ("root", "head", "clean",
                                          "worktrees", "lock")}
         if tip.get("isError"):
+            raw = str(payload.get("raw") or "")
+            if raw.startswith("SCOPE_AUTO_EMPTY"):
+                # Clean tree with nothing since base: there is no work to
+                # verify. The empty scope is reported, never widened.
+                payload["ready_to_push"] = True
+                payload["response"] = ("clean; no changes since base; "
+                                       "nothing to verify")
+                return _tool_ok(payload)
             payload["ready_to_push"] = False
             return _tool_error(json.dumps(payload, sort_keys=True))
         # Readiness is decided by the tip evidence (validation status +

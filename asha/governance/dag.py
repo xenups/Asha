@@ -198,7 +198,8 @@ class DAGCoordinator:
         scheduling loop free of extra assignments)."""
         for extra in ("verdict", "baseline_failures",
                       "current_failures", "delta_failures",
-                      "comparison", "details"):
+                      "comparison", "details",
+                      "applied", "writes_observed"):
             if outcome.get(extra) is not None:
                 target[extra] = outcome[extra]
 
