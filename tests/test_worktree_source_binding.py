@@ -204,8 +204,15 @@ def test_source_binding_rejects_a_checkout_reached_through_a_link(tmp_path, monk
     shutil.rmtree(worktree / 'src' / 'pkg')
     _link_dir(original / 'src' / 'pkg', worktree / 'src' / 'pkg')
 
-    with pytest.raises(check_runner.CheckRunnerError):
-        check_runner.run(worktree, dict(RESOLVED), deps_root=original)
+    checks = check_runner.run(worktree, dict(RESOLVED), deps_root=original)
+    # fail-closed WITHOUT raising: every required check is recorded as
+    # not-launched, so the aggregate can only be BLOCKED
+    assert checks
+    assert all(entry["status"] == "failed" for entry in checks)
+    assert all(entry["launched"] is False for entry in checks)
+    assert all("source" in (entry.get("note") or "")
+               or "binding" in (entry.get("note") or "")
+               for entry in checks)
 
 
 def test_resolution_fails_closed_without_local_python(tmp_path):
@@ -221,8 +228,10 @@ def test_broken_interpreter_never_passes(tmp_path, monkeypatch):
     worktree = _repo(tmp_path, 'worktree', value='v0')
     _fake_venv(original, 'bin', 'python')  # empty file: not an interpreter
 
-    with pytest.raises(check_runner.CheckRunnerError):
-        check_runner.run(worktree, dict(RESOLVED), deps_root=original)
+    checks = check_runner.run(worktree, dict(RESOLVED), deps_root=original)
+    assert checks
+    assert all(entry["status"] != "passed" for entry in checks)
+    assert all(entry["launched"] is False for entry in checks)
 
 
 # --- 5. unbound behavior for supported layouts stays intact -------------

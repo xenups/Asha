@@ -29,7 +29,12 @@ from pathlib import Path
 
 from .common import paths as common_paths
 
-SCHEMA = 1
+SCHEMA = 1  # legacy: seal without execution/validation fields
+# Phase 12: records the executed command, its measured timing and output
+# digests, and a DERIVED validation status. Consumers must refuse it for
+# readiness unless validation_status is PASS; a schema-1 artifact can
+# never be re-interpreted as validation evidence.
+SCHEMA_VALIDATED = 2
 EVIDENCE_NAME = 'evidence.json'
 
 

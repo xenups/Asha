@@ -84,10 +84,17 @@ def _sha(repo: Path, ref: str) -> str:
 # ---------------------------------------------------------------- stack ---
 
 def _seal_tip_for_head(repo: Path) -> str:
-    """Seal verify-tip evidence for the CURRENT HEAD (clean tree)."""
-    result = server.asha_verify_tip({"root": str(repo)})
+    """Seal READINESS evidence for the CURRENT HEAD (clean tree).
+
+    A command-only run is an execution attestation, not validation evidence,
+    so the seal carries an explicit validation command that ran and passed.
+    """
+    result = server.asha_asha({"root": str(repo),
+                               "cmd": [PY, "-c", "pass"],
+                               "validation": [PY + " -c pass"]})
     assert not result.get("isError"), result
     payload = json.loads(result["content"][0]["text"])
+    assert payload["ready_to_push"] is True, payload
     return payload["head"]
 
 

@@ -41,6 +41,7 @@ if __package__ in (None, ""):
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -48,7 +49,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
-from time import perf_counter_ns
+from time import monotonic, perf_counter_ns
 from typing import Any, TextIO
 
 from . import (
@@ -58,6 +59,7 @@ from . import (
     evidence,
     graph_state,
     scope_resolver,
+    validation,
     worker_graph,
 )
 from .ast_indexer import ImportFact, ModuleIndex, index_module
@@ -568,17 +570,26 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
                     f"{type(exc).__name__}: {exc}")
             scope_level = str(scope.get("scope"))
             checks = check_runner.run(resolved_root, scope)
-        checks_ok = (checks is None
-                     or all(entry.get("status") in ("passed", "skipped")
-                            for entry in checks))
+        validation_state, validation_rule = validation.validation_status(
+            checks or [])
+        validation_policy = (validation.VALIDATION_POLICY_SCOPE_MATRIX
+                             if run_checks
+                             else validation.VALIDATION_POLICY_NONE)
+        checks_ok = validation_state == validation.VALIDATION_PASS
         sealed = evidence.seal({
-            "schema": evidence.SCHEMA,
+            "schema": evidence.SCHEMA_VALIDATED,
             "stage": "verify_tip",
             "scope": scope_level,
             "commit": head,
             "tree_hash": tree,
             "observed_at": evidence.now_iso(),
             "checks": checks if checks is not None else [],
+            "kind": ("verification" if checks_ok
+                     else "execution_attestation"),
+            "validation": {"status": validation_state,
+                           "policy": validation_policy,
+                           "rule": validation_rule},
+            "validation_status": validation_state,
             # a tip verification never grants ship authority; the ship
             # gate re-derives authorization from its own evidence chain.
             "authorized_to_ship": False,
@@ -588,6 +599,9 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
             "declared_scope": declared_scope,
             "run_checks": run_checks,
             "ok": checks_ok,
+            "ready_to_push": checks_ok,
+            "reason": (None if checks_ok
+                       else "VALIDATION_" + validation_state),
             # Phase 11.2: track deleted files in scope
             "deleted_in_scope": _auto_deleted if '_auto_deleted' in locals() else [],
         })
@@ -597,13 +611,18 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
             evidence.write_to(artifact, sealed)
         except OSError as exc:
             return _tool_error(f"EVIDENCE_WRITE_FAILED: {exc}")
-        if not checks_ok:
-            failed = sum(1 for entry in checks or []
-                         if entry.get("status") == "failed")
+        if run_checks and not checks_ok:
+            prefix = ("TIP_VALIDATION_FAILED"
+                      if validation_state == validation.VALIDATION_FAIL
+                      else "TIP_VALIDATION_BLOCKED")
+            detail = "; ".join(
+                str(entry.get("name")) + ": " + str(entry.get("status"))
+                + " exit=" + str(entry.get("exit_code"))
+                + (" " + str(entry.get("note")) if entry.get("note") else "")
+                for entry in (checks or []))
             return _tool_error(
-                "TIP_CHECKS_FAILED: "
-                f"{failed} check(s) failed; failure evidence sealed at "
-                f"{artifact}")
+                prefix + ": " + validation_rule + "; " + detail
+                + "; evidence sealed at " + str(artifact))
         if checks is None:
             check_summary = "checks not run"
         else:
@@ -619,9 +638,12 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
                    "declared_scope": declared_scope,
                    "run_checks": run_checks,
                    "checks": checks,
-                   "ok": True,
+                   "validation_status": validation_state,
+                   "ok": checks_ok,
                    "state": "DONE",
-                   "ready_to_push": True,
+                   "ready_to_push": checks_ok,
+                   "reason": (None if checks_ok
+                              else "VALIDATION_" + validation_state),
                    "authorized_to_ship": False,
                    "evidence_sha256": sealed["evidence_sha256"],
                    "evidence_path": str(artifact),
@@ -677,6 +699,70 @@ ASHA_VERIFY_STACK_SPEC: dict[str, Any] = {
         "additionalProperties": False,
     },
 }
+
+
+def _artifact_evidence_state(sealed: object, head_sha: str,
+                            tree_sha: str) -> str:
+    """Classify one sealed artifact for stack consumption.
+
+    A valid digest proves integrity of the serialized payload only; truth of
+    the claims inside it is established by the schema, the artifact kind, and
+    the derived validation status -- never by the digest. Anything that is not
+    unambiguous validation evidence is refused, and legacy schema-1 artifacts
+    are named as legacy rather than silently re-interpreted.
+    """
+    if not isinstance(sealed, dict):
+        return "tampered"
+    if evidence.compute_digest(sealed) != sealed.get("evidence_sha256"):
+        return "tampered"
+    if sealed.get("schema") != evidence.SCHEMA_VALIDATED:
+        return "legacy"
+    if sealed.get("kind") != "verification":
+        return "unvalidated"
+    if sealed.get("validation_status") != validation.VALIDATION_PASS:
+        return "unvalidated"
+    if sealed.get("commit") != head_sha:
+        return "mismatch"
+    if sealed.get("tree_hash") != tree_sha:
+        return "mismatch"
+    if sealed.get("ready_to_push") is not True:
+        return "unready"
+    return "verified"
+
+
+def _tip_evidence_state(state_dir: Path, head_sha: str,
+                        tree_sha: str) -> str:
+    """Canonical verify-tip evidence that fully validates this exact commit.
+
+    Dispatch evidence is only consulted when the canonical tip artifact is
+    absent, and it must satisfy the same rules (so an execution attestation
+    can never be mistaken for validation).
+    """
+    canonical = state_dir / "verify-tip" / f"{head_sha[:12]}.evidence.json"
+    if canonical.is_file():
+        try:
+            return _artifact_evidence_state(
+                json.loads(canonical.read_text(encoding="utf-8")),
+                head_sha, tree_sha)
+        except (OSError, ValueError):
+            return "tampered"
+    fallback_dir = state_dir / "dispatch-in-place"
+    states: list[str] = []
+    if fallback_dir.is_dir():
+        for path in sorted(fallback_dir.glob("*.evidence.json"),
+                           key=lambda item: item.stat().st_mtime,
+                           reverse=True):
+            try:
+                states.append(_artifact_evidence_state(
+                    json.loads(path.read_text(encoding="utf-8")),
+                    head_sha, tree_sha))
+            except (OSError, ValueError):
+                continue
+    for candidate in ("verified", "tampered", "legacy", "unvalidated",
+                      "mismatch", "unready"):
+        if candidate in states:
+            return candidate
+    return "missing"
 
 
 def asha_verify_stack(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -752,45 +838,24 @@ def asha_verify_stack(arguments: dict[str, Any]) -> dict[str, Any]:
             if not is_linear and merge_base is not None:
                 recipe = (f"git rebase --onto {parent_sha} "
                           f"{merge_base} {branch}")
-            artifact = (state_dir / "verify-tip"
-                        / f"{head_sha[:12]}.evidence.json")
-            evidence_state = "missing"
-            if artifact.is_file():
-                try:
-                    sealed = json.loads(
-                        artifact.read_text(encoding="utf-8"))
-                    digest_ok = (
-                        isinstance(sealed, dict)
-                        and evidence.compute_digest(sealed)
-                        == sealed.get("evidence_sha256"))
-                except (OSError, ValueError):
-                    digest_ok = False
-                evidence_state = "verified" if digest_ok else "tampered"
-            else:
-                # Phase 11.2: Check dispatch-in-place for clean-tree verified run
-                dip_dir = state_dir / "dispatch-in-place"
-                if dip_dir.is_dir():
-                    for f in sorted(dip_dir.glob("*.evidence.json"), key=lambda p: p.stat().st_mtime, reverse=True):
-                        try:
-                            s = json.loads(f.read_text(encoding="utf-8"))
-                            if not isinstance(s, dict):
-                                continue
-                            if evidence.compute_digest(s) != s.get("evidence_sha256"):
-                                evidence_state = "tampered"
-                                break
-                            if (s.get("commit") == head_sha
-                                    and not s.get("wip_uncommitted")
-                                    and s.get("ready_to_push")):
-                                evidence_state = "verified"
-                                break
-                        except (OSError, ValueError):
-                            continue
+            head_tree = _git(resolved_root, "rev-parse",
+                             head_sha + "^{tree}").strip()
+            evidence_state = _tip_evidence_state(state_dir, head_sha,
+                                                 head_tree)
             if not is_linear:
                 status = "STACK_ANCESTRY_DRIFT"
             elif evidence_state == "missing":
                 status = "STACK_EVIDENCE_MISSING"
             elif evidence_state == "tampered":
                 status = "STACK_EVIDENCE_TAMPERED"
+            elif evidence_state == "legacy":
+                status = "STACK_EVIDENCE_LEGACY"
+            elif evidence_state == "unvalidated":
+                status = "STACK_EVIDENCE_UNVALIDATED"
+            elif evidence_state == "mismatch":
+                status = "STACK_EVIDENCE_MISMATCH"
+            elif evidence_state == "unready":
+                status = "STACK_EVIDENCE_UNREADY"
             else:
                 status = None
             rows.append({
@@ -2047,18 +2112,36 @@ def _run_in_place(root: Path, worker: dict[str, Any],
         return {"refusal": refusal}
     snapshot = _snapshot_pre_state(root)
     cmd = [str(entry) for entry in worker["cmd"]]
+    declared_validation = [list(entry)
+                           for entry in (worker.get("validation") or [])]
+    exec_started_at = evidence.now_iso()
+    exec_started = monotonic()
     proc: subprocess.CompletedProcess[str] | None = None
     cmd_failure: str | None = None
     exit_code: int | None = None
+    termination = validation.EXECUTION_EXITED
     try:
         proc = subprocess.run(cmd, cwd=root, capture_output=True,
                               text=True, timeout=_IN_PLACE_TIMEOUT_S)
         exit_code = proc.returncode
     except subprocess.TimeoutExpired:
+        termination = validation.EXECUTION_TIMED_OUT
         cmd_failure = (f"CMD_TIMEOUT: exceeded "
                        f"{_IN_PLACE_TIMEOUT_S}s")
     except OSError as exc:
+        termination = validation.EXECUTION_LAUNCH_FAILED
         cmd_failure = f"CMD_FAILED: {type(exc).__name__}: {exc}"
+    # Bound evidence to what the process actually did. A zero exit here is
+    # evidence about the command only -- never about validation.
+    execution = validation.execution_record(
+        cmd, ".",
+        started_at=exec_started_at,
+        duration_ms=int((monotonic() - exec_started) * 1000),
+        exit_code=exit_code,
+        termination=termination,
+        stdout=(proc.stdout or "") if proc is not None else "",
+        stderr=(proc.stderr or "") if proc is not None else "",
+        known_policy_command=False)
     try:
         observed = _observed_paths(root)
     except Exception as exc:
@@ -2092,9 +2175,21 @@ def _run_in_place(root: Path, worker: dict[str, Any],
         return {"state": "FAILED", "reason": reason, "detail": detail,
                 "exit_code": exit_code, "observed": observed,
                 "rollback": rollback, "authorized_to_ship": False,
+                "execution": execution,
+                "validation_status": validation.VALIDATION_BLOCKED,
                 "validation_result": "FAIL", "ready_to_push": False,
                 "wip": not snapshot["clean"], "evidence": {}}
     wip = not snapshot["clean"]
+    if declared_validation:
+        checks = validation.run_validation_commands(declared_validation, root)
+        validation_policy = validation.VALIDATION_POLICY_EXPLICIT
+    else:
+        checks = []
+        validation_policy = validation.VALIDATION_POLICY_NONE
+    validation_state, validation_rule = validation.validation_status(checks)
+    ready_to_push, ready_reason = validation.push_readiness(
+        execution=execution, validation=validation_state,
+        clean_tree=not wip, evidence_verified=True)
     head_after = _git(root, "rev-parse", "HEAD").strip()
     tree_after = (_worktree_tree_sha(root, snapshot["index_tree"]) if wip
                   else _git(root, "rev-parse", "HEAD^{tree}").strip())
@@ -2115,15 +2210,24 @@ def _run_in_place(root: Path, worker: dict[str, Any],
             root, None, paths=declared).get("scope"))
     except Exception:
         in_place_scope = "unresolved"  # fail-closed: never assume S0
+    seal_started = monotonic()
     sealed = evidence.seal({
-        "schema": evidence.SCHEMA,
+        "schema": evidence.SCHEMA_VALIDATED,
         "stage": "dispatch_in_place_atomic",
         "scope": in_place_scope,
         "commit": head_after,
         "tree_hash": tree_after,
         "observed_at": evidence.now_iso(),
-        "checks": [],
-        "ok": True,
+        "kind": ("verification"
+                 if validation_state == validation.VALIDATION_PASS
+                 else "execution_attestation"),
+        "execution": execution,
+        "checks": checks,
+        "validation": {"status": validation_state,
+                       "policy": validation_policy,
+                       "rule": validation_rule},
+        "validation_status": validation_state,
+        "ok": ready_to_push,
         "task_id": task_id,
         "worker_id": worker.get("id"),
         "declared_scope": declared,
@@ -2134,7 +2238,8 @@ def _run_in_place(root: Path, worker: dict[str, Any],
         # bound to it and never grants push authority.
         "pre_state_sha256": snapshot["sha256"],
         "wip_uncommitted": wip,
-        "ready_to_push": not wip,
+        "ready_to_push": ready_to_push,
+        "reason": ready_reason if not ready_to_push else None,
         "execution_mode": "in_place_atomic",
         # Phase 10 invariant: in-place dispatch never grants ship
         # authority; the ship gate re-derives it from its own chain.
@@ -2150,19 +2255,33 @@ def _run_in_place(root: Path, worker: dict[str, Any],
                             / "verify-tip" / f"{head_after[:12]}.evidence.json")
             try:
                 tip_sealed = evidence.seal({
-                    "schema": evidence.SCHEMA,
+                    "schema": evidence.SCHEMA_VALIDATED,
                     "stage": "verify_tip",
                     "scope": in_place_scope,
                     "commit": head_after,
                     "tree_hash": tree_after,
                     "observed_at": evidence.now_iso(),
-                    "checks": [{"name": "in_place_atomic", "status": "passed"}],
+                    # An execution attestation describes how the command
+                    # ran; it is never represented as a check result.
+                    "kind": ("verification"
+                             if validation_state == validation.VALIDATION_PASS
+                             else "execution_attestation"),
+                    "execution": execution,
+                    "checks": checks,
+                    "validation": {"status": validation_state,
+                                   "policy": validation_policy,
+                                   "rule": validation_rule},
+                    "validation_status": validation_state,
                     "authorized_to_ship": False,
                     "snapshot_id": snapshot_id,
                     "declared_scope": declared,
-                    "run_checks": True,
-                    "ok": True,
-                    "ready_to_push": True,
+                    "run_checks": bool(declared_validation),
+                    "ok": validation_state == validation.VALIDATION_PASS,
+                    "ready_to_push": (
+                        validation_state == validation.VALIDATION_PASS),
+                    "reason": (None if validation_state
+                               == validation.VALIDATION_PASS
+                               else "VALIDATION_" + validation_state),
                 })
                 evidence.write_to(tip_artifact, tip_sealed)
             except OSError:
@@ -2175,12 +2294,21 @@ def _run_in_place(root: Path, worker: dict[str, Any],
                 "observed": observed, "rollback": rollback,
                 "authorized_to_ship": False, "validation_result": "FAIL",
                 "ready_to_push": False, "wip": wip, "evidence": {}}
+    evidence_ms = int((monotonic() - seal_started) * 1000)
     return {"state": "DONE", "exit_code": 0, "observed": observed,
             "head": head_after, "tree_hash": tree_after,
             "snapshot_id": snapshot_id,
-            "validation_result": "PASS",
-            "ready_to_push": not wip,
-            "reason": "WIP_UNCOMMITTED_PASS" if wip else None,
+            "execution": execution,
+            "checks": checks,
+            "execution_ms": execution["duration_ms"],
+            "evidence_ms": evidence_ms,
+            "validation_status": validation_state,
+            "validation_rule": validation_rule,
+            "validation_result": (
+                "PASS" if validation_state == validation.VALIDATION_PASS
+                else "FAIL"),
+            "ready_to_push": ready_to_push,
+            "reason": ready_reason if not ready_to_push else None,
             "wip": wip,
             "evidence": {"path": str(artifact),
                          "evidence_sha256": sealed["evidence_sha256"]},
@@ -2200,6 +2328,7 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
     try:
         unknown = sorted(set(arguments) - {
             "id", "declared_scope", "reads", "writes", "deps", "cmd",
+            "validation",
             "prompt", "execution_mode", "root"})
         if unknown:
             return _tool_error("unknown field(s): " + ", ".join(unknown)
@@ -2226,6 +2355,12 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(cmd, list) or not cmd or not all(
                 isinstance(entry, str) for entry in cmd):
             return _tool_error("cmd must be a non-empty list of strings")
+        # Explicit validation policy: each entry is a command that MUST run
+        # and pass before the run can be push-ready. Omitting it leaves the
+        # run unvalidated (NOT_CONFIGURED), never implicitly passing.
+        validation_commands, error = _str_list(arguments, "validation")
+        if error:
+            return _tool_error(error)
         prompt = arguments.get("prompt")
         if prompt is not None and not isinstance(prompt, str):
             return _tool_error("prompt must be a string")
@@ -2317,7 +2452,9 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
 
         worker: dict[str, Any] = {
             "id": wid, "deps": deps, "declared_scope": list(declared),
-            "reads": reads, "writes": writes, "cmd": [str(x) for x in cmd]}
+            "reads": reads, "writes": writes, "cmd": [str(x) for x in cmd],
+            "validation": [shlex.split(entry) for entry in
+                           (validation_commands or [])]}
         # single authorization point: the fast flag is the ROUTER's
         # own decision (env AND proven-disjoint-coherent), never raw input
         sched_fast = decision.mode is RuntimeMode.FAST_PATH
@@ -2360,8 +2497,11 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
                 "routing_ms": round(routing_ms, 3),
                 "context_ms": 0.0,
                 "scheduler_ms": round(scheduler_ms, 3),
-                "execution_ms": 0.0,
-                "evidence_ms": 0.0,
+                # Measured on the in-place path; None (not 0.0) when the
+                # execution mode does not instrument it, so a fake zero
+                # can never be read as "instantaneous".
+                "execution_ms": report.get("execution_ms"),
+                "evidence_ms": report.get("evidence_ms"),
                 "total_ms": round(total_ms, 3),
             },
             # Merge law preserved verbatim: dispatch grants no ship
@@ -2373,10 +2513,18 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
         # seals a snapshot record with ready_to_push false +
         # reason WIP_UNCOMMITTED_PASS -- tests passed, the commit is
         # still missing.
-        payload["validation_result"] = (report.get("validation_result")
-                                        or ("PASS" if worker_state == "DONE"
-                                            else "FAIL"))
+        # A DONE worker means the command ran; it is never evidence that
+        # validation passed. Default to FAIL unless the runner said PASS.
+        payload["validation_result"] = report.get("validation_result") or "FAIL"
         payload["ready_to_push"] = bool(report.get("ready_to_push"))
+        if isinstance(report.get("execution"), dict):
+            payload["execution"] = report["execution"]
+        payload["validation_status"] = (
+            report.get("validation_status")
+            or validation.VALIDATION_NOT_CONFIGURED)
+        for key in ("head", "tree_hash", "snapshot_id", "wip", "checks"):
+            if report.get(key) is not None:
+                payload[key] = report[key]
         if report.get("state") == "FAILED":
             payload["detail"] = report.get("detail")
             payload["exit_code"] = report.get("exit_code")
@@ -2437,6 +2585,11 @@ ASHA_SPEC: dict[str, Any] = {
             "run_checks": {"type": "boolean", "default": False,
                            "description": "run configured checks during "
                                           "zero-config tip verification"},
+            "validation": {"type": "array", "items": {"type": "string"},
+                           "description": "explicit validation commands; "
+                                          "each must run and pass before the "
+                                          "run is push-ready. Omitting them "
+                                          "leaves the run NOT_CONFIGURED."},
         },
         "additionalProperties": False,
     },
@@ -2500,7 +2653,7 @@ def asha_asha(arguments: dict[str, Any]) -> dict[str, Any]:
     try:
         unknown = sorted(set(arguments) - {
             "root", "cmd", "target", "branches", "base_ref",
-            "run_checks"})
+            "run_checks", "validation"})
         if unknown:
             return _tool_error("unknown field(s): " + ", ".join(unknown))
         root = arguments.get("root", ".")
@@ -2512,6 +2665,12 @@ def asha_asha(arguments: dict[str, Any]) -> dict[str, Any]:
         run_checks = arguments.get("run_checks", False)
         if not isinstance(run_checks, bool):
             return _tool_error("run_checks must be a boolean")
+        validation_commands = arguments.get("validation")
+        if validation_commands is not None and (
+                not isinstance(validation_commands, list)
+                or not all(isinstance(item, str) and item
+                           for item in validation_commands)):
+            return _tool_error("validation must be a list of commands")
         cmd = arguments.get("cmd")
         if cmd is not None:
             if isinstance(cmd, str):
@@ -2528,6 +2687,7 @@ def asha_asha(arguments: dict[str, Any]) -> dict[str, Any]:
             return asha_dispatch_task({
                 "root": root, "id": "asha-unified", "cmd": argv_list,
                 "declared_scope": [_unified_diff_token(base_ref)],
+                "validation": validation_commands or [],
                 "execution_mode": "in_place_atomic"})
         branches = arguments.get("branches")
         if branches is not None:
@@ -2573,9 +2733,17 @@ def asha_asha(arguments: dict[str, Any]) -> dict[str, Any]:
         if tip.get("isError"):
             payload["ready_to_push"] = False
             return _tool_error(json.dumps(payload, sort_keys=True))
-        payload["ready_to_push"] = True
-        payload["response"] = (
-            f"ready to push: {payload.get('response', '')}")
+        # Readiness is decided by the tip evidence (validation status +
+        # clean tree), never asserted by the facade.
+        payload["ready_to_push"] = bool(payload.get("ready_to_push"))
+        if payload["ready_to_push"]:
+            payload["response"] = (
+                f"ready to push: {payload.get('response', '')}")
+        else:
+            payload["response"] = (
+                "not ready to push ("
+                + str(payload.get("reason") or "VALIDATION_NOT_CONFIGURED")
+                + "): " + str(payload.get("response", "")))
         return _tool_ok(payload)
     except Exception as exc:
         return _tool_error(f"{type(exc).__name__}: {exc}")

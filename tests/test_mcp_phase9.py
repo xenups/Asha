@@ -234,7 +234,10 @@ def test_verify_tip_clean_tip_seals_evidence(tmp_path: Path) -> None:
     result = _tip(repo)
     assert not result["isError"], result
     payload = result["payload"]
-    assert payload["ok"] is True
+    # a zero-config seal is an attestation, not a validation verdict
+    assert payload["ok"] is False
+    assert payload["validation_status"] == "NOT_CONFIGURED"
+    assert payload["ready_to_push"] is False
     assert payload["head"] == head
     assert payload["snapshot_id"] == audit_snapshot.snapshot_id_of(repo)
     assert _HEX64.match(payload["evidence_sha256"])

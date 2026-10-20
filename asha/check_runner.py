@@ -8,6 +8,7 @@ delegates. Every command is fail-closed: nonzero exit -> status "failed".
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
@@ -23,6 +24,11 @@ from asha.governance.env_resolver import (
 )
 
 TAIL_CHARS = 2000
+
+
+def validation_digest(text: str) -> str:
+    """SHA-256 of a captured stream (output identity, no retention)."""
+    return hashlib.sha256((text or '').encode('utf-8', 'replace')).hexdigest()
 
 # Single-check timeout budget. Measured evidence: the full suite takes
 # 734s on the reference host (rehearsal-v2 reproduction in a retained
@@ -320,32 +326,69 @@ def _timeout_tail(exc: subprocess.TimeoutExpired, timeout: int) -> str:
     return _redact_env(joined[-TAIL_CHARS:])
 
 
-def run(root: Path | str, resolved: dict,
-        timeout_s: int = CHECK_TIMEOUT_S,
-        *, deps_root: Path | None = None) -> list[dict]:
-    """Execute the mandatory checks for a resolved scope.
+def _service_groups(root: Path,
+                    changed_py: list[str]) -> list[tuple[str, list[str]]]:
+    """Changed paths grouped by owning service root, deterministically.
 
-    ``deps_root`` binds the run to the worktree's source while taking
-    dependencies from the original checkout; it also enables the
-    fail-closed source-identity probe."""
-    root = Path(root).resolve()
-    names = resolved['checks']
-    changed_py = [f for f in resolved['affected_files']
-                  if f.endswith(('.py', '.pyi')) and (root / f).is_file()]
+    A multi-service diff is not a refusal: each service runs the same matrix
+    in its own environment. The grouping uses the resolver's own marker walk,
+    so there is no second notion of "service" in this module.
+    """
+    if not changed_py:
+        return [('.', [])]
+    resolver = EnvironmentResolver()
+    groups: dict[str, list[str]] = {}
+    for rel in changed_py:
+        service_root = resolver.service_root_for(root, root / rel)
+        try:
+            label = service_root.relative_to(root).as_posix() or '.'
+        except ValueError:
+            label = '.'
+        groups.setdefault(label, []).append(rel)
+    return sorted(groups.items())
+
+
+def _blocked_group(reason: str, names: list[str], label: str) -> list[dict]:
+    """Entries for a group whose environment never resolved.
+
+    Recorded as failed + launched False so the aggregate reports BLOCKED:
+    not a test failure, and never a silent omission.
+    """
+    return [{
+        'name': name,
+        'scope': CHECK_SCOPE[name],
+        'status': 'failed',
+        'launched': False,
+        'exit_code': None,
+        'note': 'service ' + label + ': ' + reason,
+        'service': label,
+    } for name in names]
+
+
+def _run_group(root: Path, names: list[str], changed_py: list[str],
+               label: str, timeout_s: int,
+               deps_root: Path | None) -> list[dict]:
+    """Run the matrix for one service group in that service's environment."""
+    try:
+        env = _service_env(root, changed_py, deps_root)
+        if deps_root is not None:
+            verify_source_binding(env, root, changed_py)
+        cwd, proc_env = _env_cwd_env(env, root)
+    except (CheckRunnerError, OSError) as exc:
+        return _blocked_group(f'{type(exc).__name__}: {exc}', names, label)
     results: list[dict] = []
-    env = _service_env(root, changed_py, deps_root)
-    if deps_root is not None:
-        verify_source_binding(env, root, changed_py)
-    cwd, proc_env = _env_cwd_env(env, root)
     for name, argv in _commands(root, names, changed_py):
         entry: dict = {
             'name': name,
             'scope': CHECK_SCOPE[name],
             'status': 'passed',
+            'launched': True,
             'exit_code': 0,
+            'service': label,
         }
         if not argv:
             entry['status'] = 'skipped'
+            entry['launched'] = False
             entry['note'] = 'no applicable target'
             results.append(entry)
             continue
@@ -359,13 +402,11 @@ def run(root: Path | str, resolved: dict,
             entry['status'] = 'failed'
             entry['exit_code'] = -1
             if isinstance(exc, subprocess.TimeoutExpired):
-                # Explicit timeout outcome with retained diagnostics
-                # (partial output + command + budget), never an
-                # unexplained empty tail.
                 entry['note'] = f'timed out after {timeout_s}s'
-                entry['output_tail'] = _timeout_tail(
-                    exc, timeout_s)
+                entry['output_tail'] = _timeout_tail(exc, timeout_s)
             else:
+                entry['launched'] = False
+                entry['note'] = f'launch failed: {type(exc).__name__}: {exc}'
                 entry['output_tail'] = str(exc)
             entry['duration_ms'] = int((time.monotonic() - started) * 1000)
             results.append(entry)
@@ -373,16 +414,38 @@ def run(root: Path | str, resolved: dict,
         entry['exit_code'] = proc.returncode
         entry['status'] = 'passed' if proc.returncode == 0 else 'failed'
         if name == 'pytest' and proc.returncode != 0:
-            # Informational only (gate_states derives authority from
-            # status+exit_code): keeps a red suite distinguishable from a
-            # runner that never produced a verdict.
             entry['note'] = _pytest_exit_note(proc.returncode)
         combined = (proc.stdout or '') + (proc.stderr or '')
-        # same secret redaction as the scoped path (tail is retained in
-        # evidence and, on failure, in the FAILED outcome's details)
-        entry['output_tail'] = _redact_env(combined[-TAIL_CHARS:])
+        entry['output_tail'] = redact_secrets(combined[-TAIL_CHARS:])
+        entry['stdout_sha256'] = validation_digest(proc.stdout or '')
+        entry['stderr_sha256'] = validation_digest(proc.stderr or '')
         entry['duration_ms'] = int((time.monotonic() - started) * 1000)
         results.append(entry)
+    return results
+
+
+def run(root: Path | str, resolved: dict,
+        timeout_s: int = CHECK_TIMEOUT_S,
+        *, deps_root: Path | None = None) -> list[dict]:
+    """Execute the mandatory checks for a resolved scope.
+
+    One group per service root: each runs the full matrix for its own files
+    in its own environment, so a diff spanning services is validated instead
+    of refused. A group whose environment cannot resolve is recorded as
+    failed + launched False (aggregate BLOCKED); other groups still report.
+
+    ``deps_root`` binds the run to the worktree's source while taking
+    dependencies from the original checkout; it also enables the
+    fail-closed source-identity probe.
+    """
+    root = Path(root).resolve()
+    names = resolved['checks']
+    changed_py = [f for f in resolved['affected_files']
+                  if f.endswith(('.py', '.pyi')) and (root / f).is_file()]
+    results: list[dict] = []
+    for label, paths in _service_groups(root, changed_py):
+        results.extend(_run_group(root, names, paths, label, timeout_s,
+                                  deps_root))
     return results
 
 
@@ -395,15 +458,22 @@ _SCOPED_CHECK_SCOPE = {
 _SECRET_NAME_RE = re.compile(r'SECRET|TOKEN|PASSWORD|PASSWD|CRED|API_?KEY|_KEY$', re.IGNORECASE)
 
 
-def _redact_env(text: str) -> str:
+def redact_secrets(text: str) -> str:
     """Mechanical privacy scrub (Phase 5.0 spec 6.8): remove values of
-    secret-looking environment variables from captured output."""
+    secret-looking environment variables from captured output.
+
+    Public because every artifact that can retain argv or process output
+    (execution records, validation entries) passes through it before sealing.
+    """
     for name, value in os.environ.items():
         if len(value) < 6 or not _SECRET_NAME_RE.search(name):
             continue
         if value in text:
             text = text.replace(value, '[REDACTED]')
     return text
+
+
+_redact_env = redact_secrets
 
 
 def run_scoped(
