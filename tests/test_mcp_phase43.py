@@ -443,6 +443,7 @@ def test_dispatch_classifies_against_real_recorded_envelope(
     evidence_dir layout (cache/orchestrator/<task_id>/<wid>.json) --
     not only against hand-seeded files."""
     monkeypatch.delenv(server.FAST_PATH_ENV, raising=False)
+    monkeypatch.setenv('ASHA_STATE_DIR', str(tmp_path / 'state'))
     repo = _make_repo(tmp_path)
     first = _payload(_dispatch(repo, 'rr1', writes=['probe_rr1.py']))
     assert first['classification'] == 'UNKNOWN'  # no records yet
@@ -476,7 +477,9 @@ def test_dispatch_context_ignores_baseline_artifacts(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------
 # 4. Telemetry (JSONL, privacy, fail-safe)
 # ---------------------------------------------------------------------
-def test_telemetry_success_and_failure_events(tmp_path) -> None:
+def test_telemetry_success_and_failure_events(tmp_path,
+                                              monkeypatch) -> None:
+    monkeypatch.setenv('ASHA_STATE_DIR', str(tmp_path / 'state'))
     repo = _make_repo(tmp_path)
     ok = _call('asha_get_surgical_context',
                {'target_file': 'pkg/user.py', 'target_symbol': 'use_base',
@@ -555,7 +558,9 @@ def test_telemetry_never_stores_prompt_or_cmd(tmp_path) -> None:
             assert f'"{banned}"' not in blob, (banned, event)
 
 
-def test_telemetry_lines_always_valid_json(tmp_path) -> None:
+def test_telemetry_lines_always_valid_json(tmp_path,
+                                           monkeypatch) -> None:
+    monkeypatch.setenv('ASHA_STATE_DIR', str(tmp_path / 'state'))
     repo = _make_repo(tmp_path)
     for index in range(4):
         _call('asha_status', {'root': str(repo)}, request_id=index)
