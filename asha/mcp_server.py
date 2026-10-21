@@ -1376,9 +1376,7 @@ ASHA_DISPATCH_TASK_SPEC: dict[str, Any] = {
                     "the router did not take Fast Path (e.g. "
                     "missing_signal_surface) and is never a success "
                     "signal. ready_to_push/validation_result stay "
-                    "independent verdicts, and task_completed is true "
-                    "only when the worker applied a change, validation "
-                    "passed and the tip is pushable."),
+                    "independent verdicts."),
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -2575,15 +2573,6 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
         payload["applied"] = bool(_wstate.get("applied", False))
         payload["writes_observed"] = list(
             _wstate.get("writes_observed") or [])
-        # state only says the command ran; this says the TASK is done. A
-        # missing-surface classification, absent validation, no applied
-        # change, or a dirty tip all leave this False, so no consumer has to
-        # infer completion from `state` alone.
-        payload["task_completed"] = bool(
-            payload["state"] == "DONE"
-            and payload["applied"]
-            and payload["validation_result"] == validation.VALIDATION_PASS
-            and payload["ready_to_push"])
         for key in ("head", "tree_hash", "snapshot_id", "wip", "checks"):
             if report.get(key) is not None:
                 payload[key] = report[key]

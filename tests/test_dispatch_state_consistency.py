@@ -92,7 +92,6 @@ def test_missing_signal_surface_never_reads_as_task_success(
     assert payload["executed"] is True
     assert payload["classification_reason"] == "missing_signal_surface"
     # ...and nothing says the TASK is done
-    assert payload["task_completed"] is False
     assert payload["applied"] is False
     assert payload["ready_to_push"] is False
     assert payload["authorized_to_ship"] is False
@@ -246,7 +245,6 @@ def test_mcp_serialization_matches_in_process(tmp_path: Path) -> None:
     ref_payload = json.loads(refused["result"]["content"][0]["text"])
     assert refused["result"]["isError"] is False
     assert ref_payload["classification_reason"] == "missing_signal_surface"
-    assert ref_payload["task_completed"] is False
     assert ref_payload["ready_to_push"] is False
 
     payload = json.loads(frame["result"]["content"][0]["text"])
@@ -256,5 +254,4 @@ def test_mcp_serialization_matches_in_process(tmp_path: Path) -> None:
     assert payload["classification_reason"] in CLASSIFICATION_CODES
     assert payload["executed"] is True
     assert payload["authorized_to_ship"] is False
-    assert payload["task_completed"] is False
     _assert_no_contradiction(payload)
