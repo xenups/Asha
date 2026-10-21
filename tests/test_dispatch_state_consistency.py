@@ -255,3 +255,32 @@ def test_mcp_serialization_matches_in_process(tmp_path: Path) -> None:
     assert payload["executed"] is True
     assert payload["authorized_to_ship"] is False
     _assert_no_contradiction(payload)
+
+
+# ------------------------------------- failure reason across both paths
+
+def test_worktree_failure_keeps_reason_code_null(tmp_path: Path) -> None:
+    """Default worktree path: the command ran and failed, so the outcome is
+    FAILED and reason_code stays null (it is not the worktree failure
+    channel)."""
+    repo = _repo(tmp_path)
+    payload = _payload(_dispatch(repo, "wtfail", cmd=[PY, "-c", PARTIAL]))
+
+    assert payload["state"] == "FAILED"
+    assert payload["executed"] is True
+    assert payload["reason_code"] is None
+
+
+def test_in_place_failure_carries_outcome_reason(tmp_path: Path) -> None:
+    """in_place_atomic DOES report a failure code for an executed run, which
+    is why the tool description may not claim reason_code is always null
+    after execution."""
+    repo = _repo(tmp_path)
+    payload = _payload(_dispatch(repo, "ipfail",
+                                 execution_mode="in_place_atomic",
+                                 cmd=[PY, "-c", PARTIAL]))
+
+    assert payload["state"] == "FAILED"
+    assert payload["executed"] is True
+    assert payload["reason_code"] == "CMD_FAILED"
+    assert payload["exit_code"] == 4
