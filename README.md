@@ -19,6 +19,13 @@ it does is make the boundary, the checks and the reason for accepting or
 rejecting a change explicit and auditable — and it refuses to call a run
 successful when the evidence is missing or inconclusive.
 
+**What Asha does not control.** These checks govern the work Asha runs itself:
+the worktree it creates and the files its workers change. Asha is not a sandbox
+and has no hook into your agent's shell, filesystem or network calls — a command
+the agent runs outside Asha is neither inspected nor blocked, and outbound
+traffic is not filtered. Scope enforcement means file-write scope inside an
+Asha-managed run; agent-wide control needs a separate enforcement layer.
+
 [![Asha workflow: freeze scope, isolate worktree, run checks, compare baseline, and report the decision](docs/assets/asha-demo.gif)](docs/demo.html)
 
 *Animated overview of the five stages. [Open the interactive demo](docs/demo.html)

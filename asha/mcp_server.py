@@ -247,8 +247,14 @@ ASHA_RUN_SPEC_SPEC: dict[str, Any] = {
                     "GovernedScheduler (worktrees, conflict gating, "
                     "scope verification, checks, sealed evidence). "
                     "apply=false (default) is a simulation with zero "
-                    "side effects; apply=true executes for real but "
-                    "never grants ship authority."),
+                    "side effects; apply=true executes for real in "
+                    "isolated worktrees (the target tree is NOT "
+                    "modified) and never grants ship authority. Each "
+                    "worker reports applied/writes_observed: a run that "
+                    "produced no change says so (applied=false) instead "
+                    "of implying an application. Scope covers files "
+                    "only: shell and network activity are not "
+                    "intercepted."),
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -1361,7 +1367,21 @@ ASHA_DISPATCH_TASK_SPEC: dict[str, Any] = {
                     "plus a proven-disjoint classification; no input "
                     "field can set or override it. Result carries the "
                     "decision and timings; authorized_to_ship stays "
-                    "false."),
+                    "false. Field contract: state is the worker's "
+                    "execution outcome (DONE = the command ran and its "
+                    "evidence was sealed, never a validation pass); "
+                    "executed says whether anything ran at all; "
+                    "reason_code is the run's own failure code when "
+                    "the execution path reports one and is null "
+                    "otherwise -- null does NOT mean nothing ran: it "
+                    "can be null even when executed is true and state "
+                    "is FAILED, and a non-null value (e.g. CMD_FAILED) "
+                    "can appear for a run that did execute; "
+                    "classification_reason is why the router did not "
+                    "take Fast Path (e.g. missing_signal_surface) and "
+                    "is never the run's failure code or a success "
+                    "signal. ready_to_push/validation_result stay "
+                    "independent verdicts."),
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -2376,6 +2396,13 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
             return _tool_error(
                 "execution_mode must be 'worktree' (default) or "
                 "'in_place_atomic'")
+        if validation_commands and execution_mode != "in_place_atomic":
+            # Worktree mode never runs validation commands; accepting them
+            # there would silently report NOT_CONFIGURED for a run the
+            # caller explicitly wanted validated.
+            return _tool_error(
+                "validation commands require execution_mode="
+                "'in_place_atomic'; nothing executed")
         root_arg = arguments.get("root", ".")
         if not isinstance(root_arg, str):
             return _tool_error("root must be a string")
@@ -2416,6 +2443,12 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
             resolved_entries, changed, auto_error = scope_res
             deleted = getattr(scope_res, "deleted", [])
             if auto_error is not None:
+                if auto_error.startswith("SCOPE_AUTO_EMPTY"):
+                    # Actionable, still fail-closed: an empty auto-scope is
+                    # never widened into an unrestricted one.
+                    return _tool_error(
+                        auto_error + " -- pass declared_scope explicitly "
+                        "(a cmd/auto run on a clean tree cannot infer it)")
                 return _tool_error(auto_error)
             all_changed.extend(changed)
             all_deleted.extend(deleted)
@@ -2490,7 +2523,14 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
             "state": worker_state,
             "execution_mode": execution_mode,
             "classification": decision.classification,
-            "reason_code": classification.reason_code,
+            # reason_code describes the RUN outcome (None when the worker
+            # executed); the classifier's code is a routing detail and must
+            # never sit next to state=DONE as if it were a failure verdict.
+            "reason_code": (None if states else
+                             (report.get("reason_code")
+                              or report.get("reason"))),
+            "classification_reason": classification.reason_code,
+            "executed": bool(states) or report.get("state") is not None,
             "runtime_mode": decision.mode.value,
             "routing_reason": decision.reason_code,
             "fast_path_enabled": fast_env,
@@ -2519,14 +2559,25 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
         # reason WIP_UNCOMMITTED_PASS -- tests passed, the commit is
         # still missing.
         # A DONE worker means the command ran; it is never evidence that
-        # validation passed. Default to FAIL unless the runner said PASS.
-        payload["validation_result"] = report.get("validation_result") or "FAIL"
+        # validation passed. validation_result reports the VALIDATION
+        # verdict, never a blanket FAIL that contradicts a DONE state.
+        payload["validation_result"] = (
+            report.get("validation_result")
+            or report.get("validation_status")
+            or validation.VALIDATION_NOT_CONFIGURED)
         payload["ready_to_push"] = bool(report.get("ready_to_push"))
         if isinstance(report.get("execution"), dict):
             payload["execution"] = report["execution"]
         payload["validation_status"] = (
             report.get("validation_status")
             or validation.VALIDATION_NOT_CONFIGURED)
+        # Per-worker effect, mirroring asha_run_spec: a run that changed
+        # nothing must say so instead of leaving `state: DONE` to be read as
+        # "the work landed".
+        _wstate = states.get(wid) or {}
+        payload["applied"] = bool(_wstate.get("applied", False))
+        payload["writes_observed"] = list(
+            _wstate.get("writes_observed") or [])
         for key in ("head", "tree_hash", "snapshot_id", "wip", "checks"):
             if report.get(key) is not None:
                 payload[key] = report[key]
@@ -2563,7 +2614,9 @@ ASHA_SPEC: dict[str, Any] = {
         "All seven specialized tools (asha_status, asha_verify_tip, "
         "asha_verify_stack, asha_dispatch_task, "
         "asha_get_surgical_context, asha_plan_dag, asha_run_spec) stay "
-        "fully available for direct use."),
+        "fully available for direct use. Enforcement covers the files a "
+        "governed run writes; it does not intercept the agent's shell, "
+        "network or other tool calls."),
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -2736,6 +2789,14 @@ def asha_asha(arguments: dict[str, Any]) -> dict[str, Any]:
                              for key in ("root", "head", "clean",
                                          "worktrees", "lock")}
         if tip.get("isError"):
+            raw = str(payload.get("raw") or "")
+            if raw.startswith("SCOPE_AUTO_EMPTY"):
+                # Clean tree with nothing since base: there is no work to
+                # verify. The empty scope is reported, never widened.
+                payload["ready_to_push"] = True
+                payload["response"] = ("clean; no changes since base; "
+                                       "nothing to verify")
+                return _tool_ok(payload)
             payload["ready_to_push"] = False
             return _tool_error(json.dumps(payload, sort_keys=True))
         # Readiness is decided by the tip evidence (validation status +
