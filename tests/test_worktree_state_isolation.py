@@ -33,8 +33,8 @@ def _commit(repo: Path, rel: str, text: str, message: str) -> None:
     _git(repo, "commit", "-q", "-m", message)
 
 
-def _repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "main-repo"
+def _repo(tmp_path: Path, name: str = "main-repo") -> Path:
+    repo = tmp_path / name
     repo.mkdir(parents=True)
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "config", "user.email", "fixture@example.com")
@@ -50,6 +50,27 @@ def _linked(repo: Path, tmp_path: Path) -> Path:
     linked = tmp_path / "linked"
     _git(repo, "worktree", "add", "-q", "-b", "linked-branch", str(linked))
     return linked
+
+
+def test_same_named_worktrees_get_distinct_state(tmp_path: Path) -> None:
+    """Same basename + same remote used to collapse onto one state directory."""
+    repo = _repo(tmp_path, name="Asha")
+    # one remote, one basename: only the checkout PATH can tell them apart
+    _git(repo, "remote", "add", "origin", "git@example.com:same/repo.git")
+    first = tmp_path / "w1" / "Asha"
+    second = tmp_path / "w2" / "Asha"
+    first.parent.mkdir()
+    second.parent.mkdir()
+    _git(repo, "worktree", "add", "-q", "-b", "w1", str(first))
+    _git(repo, "worktree", "add", "-q", "-b", "w2", str(second))
+
+    state_a = paths.get_state_dir(first)
+    state_b = paths.get_state_dir(second)
+    assert state_a != state_b
+    assert paths.get_state_dir(first) == state_a   # stable per checkout path
+    assert paths.get_state_dir(second) == state_b
+    # only the evidence store stays shared between these checkouts
+    assert paths.get_verify_tip_dir(first) == paths.get_verify_tip_dir(second)
 
 
 def test_linked_worktree_state_is_local_and_evidence_is_shared(

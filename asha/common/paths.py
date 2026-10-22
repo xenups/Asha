@@ -78,13 +78,16 @@ def _shared_root(repo_root: Path) -> Path:
 
 
 def get_state_dir(repo_root: Path) -> Path:
-    """Zone-2 root for ONE checkout: <state-root>/<repo-id>/.
+    """Zone-2 root for ONE checkout: <state-root>/<checkout-id>/.
 
-    Deliberately per checkout: telemetry, classification, locks, journals,
-    orchestrator data and caches must never be shared between linked
-    worktrees, or one dispatch observes another checkout's run.
+    Keyed by the resolved checkout PATH, not repository identity: two
+    checkouts of one remote that happen to share a basename (clones, or
+    worktrees added under same-named directories) would otherwise share
+    telemetry, locks, journals and orchestrator state.
     """
-    return _state_root() / _repo_id(Path(repo_root))
+    root = Path(repo_root).resolve()
+    digest = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:16]
+    return _state_root() / f"{digest}-{root.name}"
 
 
 def get_verify_tip_dir(repo_root: Path) -> Path:
