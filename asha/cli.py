@@ -446,7 +446,7 @@ _UNIFIED_FLAGS = ('--verify', '--stack', '--context', '--exec')
 # positional PATH binds `root` when it appears before a mode flag, and a
 # mode flag claims the tokens that follow it up to the next known flag.
 _UNIFIED_VALUED = {'--root': 'root', '--base': 'base_ref',
-                   '--ui-out': 'ui_out'}
+                   '--ui-out': 'ui_out', '--acceptance': 'acceptance'}
 _UNIFIED_SWITCHES = {'--json': 'as_json', '--no-color': 'no_color',
                      '--ui': 'ui'}
 _UNIFIED_KNOWN = (set(_UNIFIED_FLAGS) | set(_UNIFIED_VALUED)
@@ -478,7 +478,7 @@ def _parse_unified_argv(argv: list[str]
     two different mode flags is a usage error -- never a guess."""
     options: dict[str, Any] = {'as_json': False, 'no_color': False,
                                'ui': False, 'ui_out': None, 'root': None,
-                               'base_ref': None}
+                               'base_ref': None, 'acceptance': None}
     cut = argv.index('--') if '--' in argv else len(argv)
     head = argv[:cut]
     tail = argv[cut + 1:]
@@ -643,9 +643,18 @@ def _unified_cli(argv: list[str]) -> int:
                 return _fail_usage('give the repository either as the positional '
                                   'path or via --root, not both')
             root = args[0]
-        result = asha_verify_tip({
-            'root': root, 'base_ref': base_ref,
-            'run_checks': True, 'declared_scope': [scope_token]})
+        acceptance = options['acceptance']
+        if acceptance:
+            # explicit acceptance replaces the default matrix; both cannot
+            # run, or "which check decided PASS" becomes ambiguous.
+            result = asha_verify_tip({
+                'root': root, 'base_ref': base_ref,
+                'acceptance_command': acceptance,
+                'declared_scope': [scope_token]})
+        else:
+            result = asha_verify_tip({
+                'root': root, 'base_ref': base_ref,
+                'run_checks': True, 'declared_scope': [scope_token]})
     elif mode == '--stack':
         if not args or not all(args):
             return _fail_usage('--stack requires branch names')
@@ -656,6 +665,10 @@ def _unified_cli(argv: list[str]) -> int:
             return _fail_usage('--context requires FILE:SYMBOL selector(s)')
         result = asha_asha({'root': root, 'target': args})
     else:   # --exec
+        if options['acceptance']:
+            return _fail_usage('--acceptance is only valid with --verify '
+                              '(an exec run attests execution, not '
+                              'validation)')
         if not args:
             return _fail_usage('--exec requires a command')
         cmd_argv = (shlex.split(args[0]) if len(args) == 1

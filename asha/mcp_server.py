@@ -71,8 +71,9 @@ from .conflict import ConflictManager, covered, scope_status
 from .context_slicer import slice_context
 from .contracts.validation import validate_workers
 from .governance.dag import run_workers_dag
-from .governance.worker_execution import run_worker_in_worktree
+from .governance.worker_execution import build_acceptance, run_worker_in_worktree
 from .router import RuntimeMode, route
+from .runner import _acceptance_env
 from .types import OrchestratorError
 from .worktree import _git
 
@@ -305,6 +306,14 @@ ASHA_VERIFY_TIP_SPEC: dict[str, Any] = {
                                           "deterministic check set "
                                           "in-place for the resolved "
                                           "scope (default: false)"},
+            "acceptance_command": {
+                "type": "string",
+                "description": "Explicit acceptance command for this tip "
+                               "(split once, never a shell). When supplied "
+                               "it IS the required check: its real exit "
+                               "code and pytest pass/skip counts decide "
+                               "PASS, so a multi-service repo can seal "
+                               "without the default per-service matrix."},
             "declared_scope": {"type": "array",
                                "items": {"type": "string"},
                                "description": "Repo-relative files this "
@@ -491,6 +500,53 @@ def _inspect_tip(root: Path, allow_dirty: bool = False
     return None, git_dir, head, tree
 
 
+def _run_acceptance(root: Path, command: str
+                    ) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run the declared acceptance command in place; describe what happened.
+
+    The record comes from the same governance helper the dispatch path uses
+    (``build_acceptance``), so "ran but collected nothing" stays
+    inconclusive and a command that never launched is never a pass.
+    """
+    argv = shlex.split(command)
+    started = monotonic()
+    ran = False
+    launched = True
+    exit_code: int | None = None
+    tail = ""
+    try:
+        proc = subprocess.run(
+            argv, cwd=root, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+            timeout=validation.VALIDATION_TIMEOUT_S,
+            env=_acceptance_env(argv))
+        ran = True
+        exit_code = proc.returncode
+        tail = ((proc.stdout or "") + (proc.stderr or ""))[-2000:]
+    except subprocess.TimeoutExpired as exc:
+        tail = str(exc)
+    except OSError as exc:
+        launched = False
+        tail = f"{type(exc).__name__}: {exc}"
+    record = build_acceptance(
+        {"verify_command": command},
+        {"verify_ran": ran, "verify_exit": exit_code,
+         "verify_output_tail": tail})
+    outcome = str(record.get("outcome"))
+    entry = {
+        "name": "acceptance",
+        "scope": "explicit",
+        "launched": launched,
+        "status": ("passed" if outcome == "passed"
+                   else "failed" if outcome == "failed" else "skipped"),
+        "exit_code": exit_code,
+        "note": record.get("detail"),
+        "output_tail": check_runner.redact_secrets(tail),
+        "duration_ms": int((monotonic() - started) * 1000),
+    }
+    return record, entry
+
+
 def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
     """asha_verify_tip: in-place, fail-closed verification of the
     CURRENT working-tree tip for stacked-PR / multi-branch rebase
@@ -503,7 +559,12 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
     dirty tree -> `git diff --check` defects -> in-flight git
     operation -> unknown base_ref -> missing declared_scope path.
     A clean tip is bound to `snapshot_id_of(root)` and sealed to
-    <state>/verify-tip/<head12>.evidence.json (digest-bound, atomic).
+    <state>/verify-tip/<head12>-<tree12>.evidence.json (shared across
+    linked worktrees, digest-bound, atomic). A sealed PASS is monotone: a
+    later weaker run never replaces it. The stability check covers tracked,
+    staged and untracked paths plus the manifest's declared ignored inputs;
+    other Git-ignored paths are outside it by design, so a check that writes
+    only ignored files can still seal PASS.
     """
     try:
         root = arguments.get("root", ".")
@@ -520,6 +581,17 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
         run_checks = arguments.get("run_checks", False)
         if not isinstance(run_checks, bool):
             return _tool_error("run_checks must be a boolean")
+        acceptance_command = arguments.get("acceptance_command")
+        if acceptance_command is not None and (
+                not isinstance(acceptance_command, str)
+                or not acceptance_command.strip()):
+            return _tool_error(
+                "acceptance_command must be a non-empty string")
+        if run_checks and acceptance_command:
+            # Two required checks would make the sealed policy a lie about
+            # which one decided PASS; refuse instead of picking one.
+            return _tool_error(
+                "give run_checks or acceptance_command, not both")
         declared_scope = arguments.get("declared_scope")
         if declared_scope is not None:
             if (not isinstance(declared_scope, list)
@@ -571,6 +643,7 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
                 f"snapshot failed: {type(exc).__name__}: {exc}")
         checks: list[dict[str, Any]] | None = None
         scope_level = "unresolved"
+        acceptance_record: dict[str, Any] | None = None
         if run_checks:
             try:
                 scope = scope_resolver.resolve(resolved_root, base_ref,
@@ -581,12 +654,41 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
                     f"{type(exc).__name__}: {exc}")
             scope_level = str(scope.get("scope"))
             checks = check_runner.run(resolved_root, scope)
+        elif acceptance_command:
+            # A declared acceptance command IS the required check for this
+            # tip: recorded with its real exit code, never inferred from the
+            # caller's word. Multi-service repos use this instead of the
+            # default matrix (what every service needs differs per service).
+            acceptance_record, entry = _run_acceptance(resolved_root,
+                                                       acceptance_command)
+            checks = [entry]
+            scope_level = "explicit"
         validation_state, validation_rule = validation.validation_status(
             checks or [])
-        validation_policy = (validation.VALIDATION_POLICY_SCOPE_MATRIX
+        validation_policy = (validation.VALIDATION_POLICY_EXPLICIT
+                             if acceptance_command
+                             else validation.VALIDATION_POLICY_SCOPE_MATRIX
                              if run_checks
                              else validation.VALIDATION_POLICY_NONE)
         checks_ok = validation_state == validation.VALIDATION_PASS
+        if checks is not None:
+            # A check that edits the tree (or commits) makes its own PASS a
+            # claim about a tip that no longer exists: fail closed, seal
+            # nothing. Re-inspection is total -- any error refuses.
+            try:
+                post_refusal, _post_git, post_head, post_tree = _inspect_tip(
+                    resolved_root)
+                post_snapshot = audit_snapshot.snapshot_id_of(resolved_root)
+            except Exception as exc:
+                return _tool_error(
+                    "TIP_REINSPECTION_FAILED: "
+                    f"{type(exc).__name__}: {exc}")
+            if (post_refusal is not None or post_head != head
+                    or post_tree != tree or post_snapshot != snapshot_id):
+                return _tool_error(
+                    "TIP_CHANGED_DURING_VALIDATION: the tip moved while "
+                    "validation ran, so no seal was written"
+                    + (f" ({post_refusal})" if post_refusal else ""))
         sealed = evidence.seal({
             "schema": evidence.SCHEMA_VALIDATED,
             "stage": "verify_tip",
@@ -609,6 +711,7 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
             "base_sha": base_sha,
             "declared_scope": declared_scope,
             "run_checks": run_checks,
+            "acceptance": acceptance_record,
             "ok": checks_ok,
             "ready_to_push": checks_ok,
             "reason": (None if checks_ok
@@ -616,13 +719,14 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
             # Phase 11.2: track deleted files in scope
             "deleted_in_scope": _auto_deleted if '_auto_deleted' in locals() else [],
         })
-        artifact = (common_paths.get_state_dir(resolved_root)
-                    / "verify-tip" / f"{head[:12]}.evidence.json")
+        artifact = (common_paths.get_verify_tip_dir(resolved_root)
+                    / f"{head[:12]}-{tree[:12]}.evidence.json")
         try:
-            evidence.write_to(artifact, sealed)
+            evidence_written = _write_tip_evidence(artifact, sealed,
+                                                  head, tree)
         except OSError as exc:
             return _tool_error(f"EVIDENCE_WRITE_FAILED: {exc}")
-        if run_checks and not checks_ok:
+        if (run_checks or acceptance_command) and not checks_ok:
             prefix = ("TIP_VALIDATION_FAILED"
                       if validation_state == validation.VALIDATION_FAIL
                       else "TIP_VALIDATION_BLOCKED")
@@ -648,6 +752,7 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
                    "base_sha": base_sha,
                    "declared_scope": declared_scope,
                    "run_checks": run_checks,
+                   "acceptance": acceptance_record,
                    "checks": checks,
                    "validation_status": validation_state,
                    "ok": checks_ok,
@@ -658,13 +763,15 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
                    "authorized_to_ship": False,
                    "evidence_sha256": sealed["evidence_sha256"],
                    "evidence_path": str(artifact),
+                   "evidence_written": evidence_written,
                    # Phase 11.2: include deleted files in scope
                    "deleted_in_scope": _auto_deleted if '_auto_deleted' in locals() else [],
                    "response": (
                        f"tip {head[:12]} verified in place: clean tree; "
                        f"snapshot {snapshot_id[:12]}; {check_summary}; "
-                       f"evidence {sealed['evidence_sha256'][:12]} "
-                       "sealed")}
+                       + (f"evidence {sealed['evidence_sha256'][:12]} "
+                          "sealed" if evidence_written
+                          else "stronger existing verification seal kept"))}
         return _tool_ok(payload)
     except Exception as exc:
         return _tool_error(f"{type(exc).__name__}: {exc}")
@@ -736,20 +843,35 @@ def _artifact_evidence_state(sealed: object, head_sha: str,
         return "mismatch"
     if sealed.get("tree_hash") != tree_sha:
         return "mismatch"
+    # snapshot_id is the working-tree identity the seal was granted over. It
+    # cannot be recomputed here (a stack row need not be checked out), so its
+    # presence and shape are enforced and re-derivation stays the writer's
+    # job. base_ref/base_sha are advisory: they name the comparison base, not
+    # the state that was verified.
+    snapshot_id = sealed.get("snapshot_id")
+    if not isinstance(snapshot_id, str) or len(snapshot_id) != 64:
+        return "tampered"
     if sealed.get("ready_to_push") is not True:
         return "unready"
     return "verified"
 
 
-def _tip_evidence_state(state_dir: Path, head_sha: str,
-                        tree_sha: str) -> str:
+def _tip_evidence_state(state_dir: Path, head_sha: str, tree_sha: str, *,
+                        verify_tip_dir: Path) -> str:
     """Canonical verify-tip evidence that fully validates this exact commit.
 
-    Dispatch evidence is only consulted when the canonical tip artifact is
-    absent, and it must satisfy the same rules (so an execution attestation
-    can never be mistaken for validation).
+    The store is REQUIRED: a default would let a caller silently read one
+    checkout's local state as another's evidence (or miss the shared store
+    entirely). Dispatch evidence is only consulted when the canonical tip
+    artifact is absent, and it must satisfy the same rules (so an execution
+    attestation can never be mistaken for validation).
     """
-    canonical = state_dir / "verify-tip" / f"{head_sha[:12]}.evidence.json"
+    canonical = (verify_tip_dir
+                 / f"{head_sha[:12]}-{tree_sha[:12]}.evidence.json")
+    if not canonical.is_file():
+        # pre-tree-qualified seal; identity validation below still rejects a
+        # seal written for a different tree.
+        canonical = verify_tip_dir / f"{head_sha[:12]}.evidence.json"
     if canonical.is_file():
         try:
             return _artifact_evidence_state(
@@ -774,6 +896,34 @@ def _tip_evidence_state(state_dir: Path, head_sha: str,
         if candidate in states:
             return candidate
     return "missing"
+
+
+def _write_tip_evidence(path: Path, sealed: dict[str, Any],
+                        head_sha: str, tree_sha: str) -> bool:
+    """Write tip evidence unless a valid PASS seal already holds this identity.
+
+    Evidence is monotone per identity (commit+tree, encoded in the file name):
+    a weaker run -- no checks, a failed validation, an execution attestation --
+    must not erase an existing PASS. Anything short of a valid seal for THIS
+    tree (corrupt, foreign tree, legacy, unready) is not stronger and is
+    replaced. Atomic replace keeps a reader seeing a complete artifact; two
+    writers racing in the same instant can still let the weaker one land last,
+    which costs evidence, never truth (no seal can validate a different tree).
+    """
+    existing = "missing"
+    if path.is_file():
+        try:
+            existing = _artifact_evidence_state(
+                json.loads(path.read_text(encoding="utf-8")),
+                head_sha, tree_sha)
+        except (OSError, ValueError):
+            existing = "tampered"
+    if (existing == "verified"
+            and _artifact_evidence_state(sealed, head_sha, tree_sha)
+            != "verified"):
+        return False
+    evidence.write_to(path, sealed)
+    return True
 
 
 def asha_verify_stack(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -851,8 +1001,9 @@ def asha_verify_stack(arguments: dict[str, Any]) -> dict[str, Any]:
                           f"{merge_base} {branch}")
             head_tree = _git(resolved_root, "rev-parse",
                              head_sha + "^{tree}").strip()
-            evidence_state = _tip_evidence_state(state_dir, head_sha,
-                                                 head_tree)
+            evidence_state = _tip_evidence_state(
+                state_dir, head_sha, head_tree,
+                verify_tip_dir=common_paths.get_verify_tip_dir(resolved_root))
             if not is_linear:
                 status = "STACK_ANCESTRY_DRIFT"
             elif evidence_state == "missing":
@@ -2276,8 +2427,9 @@ def _run_in_place(root: Path, worker: dict[str, Any],
         evidence.write_to(artifact, sealed)
         # Phase 11.2: canonical commit-bound tip evidence
         if not wip and head_after:
-            tip_artifact = (common_paths.get_state_dir(root)
-                            / "verify-tip" / f"{head_after[:12]}.evidence.json")
+            tip_artifact = (common_paths.get_verify_tip_dir(root)
+                            / f"{head_after[:12]}-{tree_after[:12]}"
+                              ".evidence.json")
             try:
                 tip_sealed = evidence.seal({
                     "schema": evidence.SCHEMA_VALIDATED,
@@ -2308,7 +2460,8 @@ def _run_in_place(root: Path, worker: dict[str, Any],
                                == validation.VALIDATION_PASS
                                else "VALIDATION_" + validation_state),
                 })
-                evidence.write_to(tip_artifact, tip_sealed)
+                _write_tip_evidence(tip_artifact, tip_sealed,
+                                    head_after, tree_after)
             except OSError:
                 pass
     except OSError as exc:

@@ -51,9 +51,49 @@ def _repo_id(repo_root: Path) -> str:
     return f"{digest}-{Path(repo_root).name}"
 
 
+def _shared_root(repo_root: Path) -> Path:
+    """The MAIN worktree root for a linked worktree, else the path itself.
+
+    Evidence is keyed by repository identity (remote URL), and a stacked-PR
+    workflow checks each branch out in its own worktree. Without this, a seal
+    written in a worktree is invisible to ``--stack`` run from the main
+    checkout, so a fully verified stack still reads "0/N sealed".
+    """
+    root = Path(repo_root)
+    marker = root / '.git'
+    try:
+        if marker.is_file():
+            text = marker.read_text(encoding='utf-8', errors='replace').strip()
+            if text.startswith('gitdir:'):
+                gitdir = Path(text.split(':', 1)[1].strip())
+                if not gitdir.is_absolute():
+                    gitdir = (root / gitdir).resolve()
+                # <main>/.git/worktrees/<id> -> <main>; anything shallower is
+                # not a linked worktree (fail back to the caller's path).
+                if len(gitdir.parents) >= 3 and gitdir.parent.name == 'worktrees':
+                    return gitdir.parents[2]
+    except OSError:
+        return root
+    return root
+
+
 def get_state_dir(repo_root: Path) -> Path:
-    """Zone-2 root for a repository: <state-root>/<repo-id>/."""
+    """Zone-2 root for ONE checkout: <state-root>/<repo-id>/.
+
+    Deliberately per checkout: telemetry, classification, locks, journals,
+    orchestrator data and caches must never be shared between linked
+    worktrees, or one dispatch observes another checkout's run.
+    """
     return _state_root() / _repo_id(Path(repo_root))
+
+
+def get_verify_tip_dir(repo_root: Path) -> Path:
+    """Sealed verify-tip evidence: <state-root>/<main-repo-id>/verify-tip/.
+
+    The ONE store shared across linked worktrees: ``--stack`` reads every
+    branch's seal from the main checkout.
+    """
+    return _state_root() / _repo_id(_shared_root(repo_root)) / "verify-tip"
 
 
 def get_evidence_dir(repo_root: Path) -> Path:
