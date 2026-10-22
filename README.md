@@ -105,6 +105,16 @@ proves the recorded evidence was not altered — not that the code is correct.
   not executed, zero tests collected, and skip/deselect-only runs all fail. The
   record (`command, supplied, ran, exit_code, outcome`) is sealed into worker
   evidence, and a command that never ran keeps `exit_code: null`.
+- **Acceptance-sealed tips.** `--verify --acceptance CMD` makes the declared
+  command THE required check for that tip (the default ruff/pytest/mypy matrix
+  is skipped, since a multi-service repo has one venv and one lint baseline per
+  service). The sealed verify-tip artifact carries the same acceptance record,
+  stays bound to the exact commit and tree, and a command that failed,
+  collected nothing, or never launched keeps the tip out of `--stack`'s sealed
+  count. `authorized_to_ship` is unaffected: a seal is evidence, not a licence.
+  A sealed PASS is monotone (a later weaker run never replaces it); the
+  stability check covers tracked/staged/untracked paths and the manifest's
+  declared ignored inputs, not arbitrary Git-ignored output.
 - **Scope accounting.** `unaccounted_paths` is written into every payload and
   `SCOPE_INCOMPLETE` exits 2 instead of reporting a pass.
 - **Worktree source binding.** A worktree run takes dependencies from the
@@ -202,6 +212,8 @@ asha --root /path/to/repo status                  # read-only tip facts
 asha --root /path/to/repo --paths src/calc.py     # validate a known change set
 asha --root /path/to/repo --acceptance "python -m pytest -q tests"
 asha --root /path/to/repo --verify                # in-place tip verification
+asha --root /path/to/repo --verify --base origin/dev \
+     --acceptance "python -m pytest -q tests"     # team check seals the tip
 python -m asha.mcp_server                         # MCP over stdio (== asha-mcp)
 ```
 
