@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any
 
 from asha.execution import (
+    EXECUTION_DEADLINE_EXCEEDED,
+    EXECUTION_FAILED_TO_COLLECT,
     EXECUTION_LAUNCH_FAILED,
     ExecutionOutcome,
     spawn_capture,
@@ -26,7 +28,7 @@ from asha.governance.env_resolver import (
     ServiceEnvironment,
     resolve_env_for_file,
 )
-from asha.timeouts import DEFAULT_TIMEOUTS
+from asha.timeouts import DEFAULT_TIMEOUTS, Deadline
 
 TAIL_CHARS = 2000
 
@@ -316,6 +318,17 @@ def verify_source_binding(env: ServiceEnvironment | None, root: Path,
     return origins
 
 
+def _budget_note(result: ExecutionOutcome) -> str:
+    """One line naming which budget ran out -- and how long the child ran.
+
+    The operation budget alone would misdescribe a deadline-capped check
+    ("deadline exceeded after 900s" for a child killed at 2s)."""
+    if result.outcome == EXECUTION_DEADLINE_EXCEEDED:
+        return (f'deadline exceeded after {result.duration_ms / 1000:.1f}s '
+                f'(task budget; operation budget {result.timeout_s:g}s)')
+    return f'timed out after {result.timeout_s:g}s'
+
+
 def _outcome_tail(result: ExecutionOutcome) -> str:
     """Retained diagnostics for a check that did not exit on its own: the
     partial output produced before the kill plus one explicit line naming
@@ -325,11 +338,7 @@ def _outcome_tail(result: ExecutionOutcome) -> str:
     Without it a timeout surfaces as an empty diagnostic set and the delta
     verdict degrades to an unexplained UNKNOWN."""
     partial = result.stdout or ""
-    if result.outcome == 'deadline_exceeded':
-        reason = ('deadline exceeded after '
-                  f'{result.timeout_s:g}s (task budget)')
-    else:
-        reason = f'timed out after {result.timeout_s:g}s'
+    reason = _budget_note(result)
     joined = (partial + ("\n" if partial else "")
               + reason
               + f"; process_termination={result.process_termination}"
@@ -392,7 +401,8 @@ def _tool_unavailable(name: str, output: str) -> str | None:
 
 def _run_group(root: Path, names: list[str], changed_py: list[str],
                label: str, timeout_s: float,
-               deps_root: Path | None) -> list[dict]:
+               deps_root: Path | None,
+               deadline: Deadline | None = None) -> list[dict]:
     """Run the matrix for one service group in that service's environment."""
     try:
         env = _service_env(root, changed_py, deps_root)
@@ -419,7 +429,7 @@ def _run_group(root: Path, names: list[str], changed_py: list[str],
             continue
         argv = _env_argv(env, name, argv)
         result = spawn_capture(argv, cwd=cwd, timeout_s=timeout_s,
-                               env=proc_env)
+                               env=proc_env, deadline=deadline)
         entry['launched'] = result.launched
         entry['exit_code'] = result.exit_code
         entry['termination'] = result.outcome
@@ -432,12 +442,16 @@ def _run_group(root: Path, names: list[str], changed_py: list[str],
             entry['output_tail'] = redact_secrets(result.stderr[-TAIL_CHARS:])
             results.append(entry)
             continue
+        if result.outcome == EXECUTION_FAILED_TO_COLLECT:
+            entry['status'] = 'failed'
+            entry['note'] = ('output collection failed: '
+                             + result.termination_detail)
+            entry['output_tail'] = redact_secrets(result.stderr[-TAIL_CHARS:])
+            results.append(entry)
+            continue
         if result.timed_out:
             entry['status'] = 'failed'
-            entry['note'] = ('deadline exceeded after '
-                             f'{result.timeout_s:g}s'
-                             if result.outcome == 'deadline_exceeded'
-                             else f'timed out after {result.timeout_s:g}s')
+            entry['note'] = _budget_note(result)
             entry['output_tail'] = _outcome_tail(result)
             results.append(entry)
             continue
@@ -464,7 +478,8 @@ def _run_group(root: Path, names: list[str], changed_py: list[str],
 
 def run(root: Path | str, resolved: dict,
         timeout_s: float = CHECK_TIMEOUT_S,
-        *, deps_root: Path | None = None) -> list[dict]:
+        *, deps_root: Path | None = None,
+        deadline: Deadline | None = None) -> list[dict]:
     """Execute the mandatory checks for a resolved scope.
 
     One group per service root: each runs the full matrix for its own files
@@ -483,7 +498,7 @@ def run(root: Path | str, resolved: dict,
     results: list[dict] = []
     for label, paths in _service_groups(root, changed_py):
         results.extend(_run_group(root, names, paths, label, timeout_s,
-                                  deps_root))
+                                  deps_root, deadline))
     return results
 
 
@@ -522,6 +537,7 @@ def run_scoped(
     mypy_targets: list[str],
     timeout: float = CHECK_TIMEOUT_S,
     deps_root: Path | None = None,
+    deadline: Deadline | None = None,
 ) -> list[dict[str, Any]]:
     """Dumb executor of an affirmative eligibility decision (spec 1.1).
 
@@ -574,7 +590,7 @@ def run_scoped(
             results.append(entry)
             continue
         result = spawn_capture(command, cwd=cwd, timeout_s=timeout,
-                               env=proc_env)
+                               env=proc_env, deadline=deadline)
         entry['exit_code'] = result.exit_code
         entry['termination'] = result.outcome
         entry['process_termination'] = result.process_termination
@@ -587,12 +603,16 @@ def run_scoped(
             entry['output_tail'] = _redact_env(result.stderr[-TAIL_CHARS:])
             results.append(entry)
             continue
+        if result.outcome == EXECUTION_FAILED_TO_COLLECT:
+            entry['status'] = 'failed'
+            entry['note'] = ('output collection failed: '
+                             + result.termination_detail)
+            entry['output_tail'] = _redact_env(result.stderr[-TAIL_CHARS:])
+            results.append(entry)
+            continue
         if result.timed_out:
             entry['status'] = 'failed'
-            entry['note'] = ('deadline exceeded after '
-                             f'{result.timeout_s:g}s'
-                             if result.outcome == 'deadline_exceeded'
-                             else f'timed out after {result.timeout_s:g}s')
+            entry['note'] = _budget_note(result)
             entry['output_tail'] = _outcome_tail(result)
             results.append(entry)
             continue

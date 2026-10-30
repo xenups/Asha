@@ -850,10 +850,11 @@ def run_spec_cmd(argv: list[str]) -> int:
                             '(default: audit-only, target untouched)')
     run_p.add_argument('--deadline-seconds', type=float, default=None,
                        metavar='SECONDS',
-                       help='optional budget for the WHOLE run: every command '
-                            'is capped by what is left of it and no new '
-                            'worker starts once it is spent (default: no '
-                            'task deadline)')
+                       help='optional budget for the WHOLE run: every '
+                            'command (worker, check, baseline, validation) '
+                            'is capped by what is left of it and nothing new '
+                            'starts once it is spent (default: no task '
+                            'deadline)')
     args = parser.parse_args(argv)
     try:
         spec_path = Path(args.spec)

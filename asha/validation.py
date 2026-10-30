@@ -40,10 +40,11 @@ from .check_runner import redact_secrets
 from .execution import (
     EXECUTION_DEADLINE_EXCEEDED,
     EXECUTION_EXITED,
+    EXECUTION_FAILED_TO_COLLECT,
     EXECUTION_LAUNCH_FAILED,
     spawn_capture,
 )
-from .timeouts import DEFAULT_TIMEOUTS
+from .timeouts import DEFAULT_TIMEOUTS, Deadline
 
 VALIDATION_PASS = 'PASS'
 VALIDATION_FAIL = 'FAIL'
@@ -160,13 +161,15 @@ def push_readiness(*, execution: dict[str, object], validation: str,
 def run_validation_commands(commands: list[list[str]], root: Path,
                             timeout_s: float = VALIDATION_TIMEOUT_S, *,
                             execution_id_factory: Callable[[], str]
-                            | None = None
+                            | None = None,
+                            deadline: Deadline | None = None
                             ) -> list[dict]:
     """Execute each explicitly configured validation command.
 
     Every entry records what ran (argv, exit code, duration, output digests,
     bounded tail) and how it ended: ``termination`` is the execution outcome
-    (exited / timed_out / deadline_exceeded / launch_failed) and
+    (exited / timed_out / deadline_exceeded / launch_failed /
+    failed_to_collect) and
     ``process_termination`` says what could be verified about ending the
     child. A launch failure or a timeout is failed -- never a pass -- and a
     timed-out check keeps ``launched`` True because a process did exist.
@@ -179,7 +182,8 @@ def run_validation_commands(commands: list[list[str]], root: Path,
     results: list[dict] = []
     for index, argv in enumerate(commands):
         execution_id = (execution_id_factory or new_execution_id)()
-        result = spawn_capture(argv, cwd=root, timeout_s=timeout_s)
+        result = spawn_capture(argv, cwd=root, timeout_s=timeout_s,
+                               deadline=deadline)
         entry: dict = {
             'name': 'validation[' + str(index) + ']',
             'scope': 'explicit',
@@ -198,10 +202,17 @@ def run_validation_commands(commands: list[list[str]], root: Path,
         if result.outcome == EXECUTION_LAUNCH_FAILED:
             entry['note'] = f'launch failed: {result.termination_detail}'
             entry['output_tail'] = redact_secrets(result.stderr[-TAIL_CHARS:])
+        elif result.outcome == EXECUTION_FAILED_TO_COLLECT:
+            entry['note'] = ('output collection failed: '
+                             f'{result.termination_detail}')
+            entry['output_tail'] = redact_secrets(result.stderr[-TAIL_CHARS:])
         elif result.timed_out:
-            entry['note'] = (f'deadline exceeded after {_seconds(timeout_s)}s'
-                             if result.outcome == EXECUTION_DEADLINE_EXCEEDED
-                             else f'timed out after {_seconds(timeout_s)}s')
+            entry['note'] = (
+                'deadline exceeded after '
+                f'{result.duration_ms / 1000:.1f}s (task budget; operation '
+                f'budget {_seconds(timeout_s)}s)'
+                if result.outcome == EXECUTION_DEADLINE_EXCEEDED
+                else f'timed out after {_seconds(timeout_s)}s')
             entry['output_tail'] = redact_secrets(
                 (result.stdout + result.stderr)[-TAIL_CHARS:])
         else:

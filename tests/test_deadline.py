@@ -138,18 +138,15 @@ def test_no_deadline_keeps_the_unlimited_default(tmp_path: Path) -> None:
 
 def test_expired_deadline_blocks_dispatch_without_executing(
         tmp_path: Path) -> None:
+    # The real executor, not a hook: the marker can only exist if a process
+    # actually ran (an injected hook may not be combined with a deadline).
     repo = _repo(tmp_path)
-    calls: list[str] = []
-
-    def hook(worker, worktree, *, deadline=None):  # type: ignore[no-untyped-def]
-        calls.append(str(worker['id']))
-        return 0, ''
-
+    marker = tmp_path / 'ran.txt'
     deadline = Deadline(0.01)
     time.sleep(0.05)
-    report = dag.run_workers_dag(repo, [_worker('w1')], task_id='task-dl',
-                                 execute_hook=hook, deadline=deadline)
-    assert calls == []                       # nothing was launched
+    report = dag.run_workers_dag(repo, [_worker('w1', f'touch {marker}')],
+                                 task_id='task-dl', deadline=deadline)
+    assert not marker.exists()               # nothing was launched
     entry = report['states']['w1']
     assert entry['state'] == 'BLOCKED'
     assert entry['reason'] == 'deadline_exceeded'

@@ -26,8 +26,10 @@ from typing import Any
 from .execution import (
     EXECUTION_DEADLINE_EXCEEDED,
     EXECUTION_EXITED,
+    EXECUTION_FAILED_TO_COLLECT,
     EXECUTION_LAUNCH_FAILED,
     DeadlineExhausted,
+    ExecutionCollectFailed,
     ExecutionLaunchFailed,
     ExecutionTimeout,
     spawn_capture,
@@ -74,9 +76,15 @@ def _spawn(argv: list[str], cwd: Path,
         raise ExecutionLaunchFailed(result)
     if result.outcome == EXECUTION_DEADLINE_EXCEEDED and not result.launched:
         raise DeadlineExhausted(result)
+    if result.outcome == EXECUTION_FAILED_TO_COLLECT:
+        raise ExecutionCollectFailed(result)
     if result.outcome == EXECUTION_EXITED:
-        return (result.exit_code if result.exit_code is not None else 0,
-                result.stdout, result.stderr)
+        if result.exit_code is None:
+            # an exited child always carries a return code; a missing one is
+            # a broken invariant, never a success
+            raise OrchestratorError(
+                'execution_exited_without_exit_code')
+        return result.exit_code, result.stdout, result.stderr
     raise ExecutionTimeout(result)
 
 

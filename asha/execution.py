@@ -41,9 +41,13 @@ EXECUTION_EXITED = 'exited'
 EXECUTION_TIMED_OUT = 'timed_out'
 EXECUTION_DEADLINE_EXCEEDED = 'deadline_exceeded'
 EXECUTION_LAUNCH_FAILED = 'launch_failed'
+#: The child existed, but its output could not be collected. Never
+#: ``launch_failed``: that would say a process never ran when one did.
+EXECUTION_FAILED_TO_COLLECT = 'failed_to_collect'
 
 EXECUTION_OUTCOMES = (EXECUTION_EXITED, EXECUTION_TIMED_OUT,
-                      EXECUTION_DEADLINE_EXCEEDED, EXECUTION_LAUNCH_FAILED)
+                      EXECUTION_DEADLINE_EXCEEDED, EXECUTION_LAUNCH_FAILED,
+                      EXECUTION_FAILED_TO_COLLECT)
 
 # Re-exported here so callers describe outcomes from one module; the
 # vocabulary and its typed report live in ``types`` because the process-tree
@@ -102,6 +106,14 @@ class ExecutionLaunchFailed(RuntimeError):
 
     def __init__(self, execution: ExecutionOutcome) -> None:
         super().__init__(execution.termination_detail or 'launch failed')
+        self.execution = execution
+
+
+class ExecutionCollectFailed(RuntimeError):
+    """The child ran, but its output could not be collected."""
+
+    def __init__(self, execution: ExecutionOutcome) -> None:
+        super().__init__(execution.termination_detail or 'collect failed')
         self.execution = execution
 
 
@@ -184,10 +196,11 @@ def spawn_capture(argv: list[str], cwd: Path, *,
             process_termination=report.process_termination,
             termination_detail=report.detail)
     except (OSError, subprocess.SubprocessError) as exc:
+        # Popen already succeeded: the process ran, the collection did not.
         report = kill_process_tree(proc)
         return ExecutionOutcome(
             argv=tuple(argv), cwd=str(cwd),
-            outcome=EXECUTION_LAUNCH_FAILED, exit_code=None,
+            outcome=EXECUTION_FAILED_TO_COLLECT, exit_code=None,
             stdout='', stderr=f'{type(exc).__name__}: {exc}',
             duration_ms=elapsed(), timeout_s=budget, launched=True,
             process_termination=report.process_termination,

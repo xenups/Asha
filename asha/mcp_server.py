@@ -74,6 +74,7 @@ from .context_slicer import slice_context
 from .contracts.validation import validate_workers
 from .execution import (
     EXECUTION_EXITED,
+    EXECUTION_FAILED_TO_COLLECT,
     EXECUTION_LAUNCH_FAILED,
     spawn_capture,
 )
@@ -841,7 +842,15 @@ ASHA_VERIFY_STACK_SPEC: dict[str, Any] = {
 
 
 def _execution_ran(state: dict, report: dict) -> bool:
-    """True only when a worker process really ran (measured exit)."""
+    """True only when a worker process really ran.
+
+    An explicit ``launched`` flag wins over the exit status: a child killed
+    by a budget has no exit status, and "did not exit" must never be
+    reported as "never ran".
+    """
+    launched = state.get("launched")
+    if isinstance(launched, bool):
+        return launched
     execution = report.get("execution") if isinstance(report, dict) else None
     if isinstance(execution, dict) and execution.get("termination") is not None:
         return True
@@ -2419,6 +2428,9 @@ def _run_in_place(root: Path, worker: dict[str, Any],
     exit_code: int | None = result.exit_code
     if result.outcome == EXECUTION_LAUNCH_FAILED:
         cmd_failure = f"CMD_FAILED: {result.termination_detail}"
+    elif result.outcome == EXECUTION_FAILED_TO_COLLECT:
+        cmd_failure = ("CMD_FAILED: output collection failed: "
+                       f"{result.termination_detail}")
     elif result.timed_out:
         cmd_failure = (f"CMD_TIMEOUT: exceeded {result.timeout_s:g}s"
                        f" (process_termination={result.process_termination})")
@@ -2870,6 +2882,13 @@ def asha_dispatch_task(arguments: dict[str, Any], *,
         # nothing must say so instead of leaving `state: DONE` to be read as
         # "the work landed".
         _wstate = states.get(wid) or {}
+        # The execution facts the run observed travel to the client: a
+        # timeout that killed a real process must not read as "never ran",
+        # and nothing absent is invented.
+        for _key in ("launched", "timeout_s", "elapsed_ms",
+                     "process_termination", "execution_outcome"):
+            if _wstate.get(_key) is not None:
+                payload[_key] = _wstate[_key]
         payload["applied"] = bool(_wstate.get("applied", False))
         payload["writes_observed"] = list(
             _wstate.get("writes_observed") or [])
@@ -2881,8 +2900,11 @@ def asha_dispatch_task(arguments: dict[str, Any], *,
             payload["exit_code"] = report.get("exit_code")
             payload["observed"] = report.get("observed") or []
             payload["rollback"] = report.get("rollback")
-        if report.get("reason"):
-            payload["reason"] = report.get("reason")
+        # The run's own reason outranks the routing code above: a dispatch
+        # stopped by a budget must name its cause instead of a bare FAILED.
+        _run_reason = report.get("reason") or _wstate.get("reason")
+        if _run_reason:
+            payload["reason"] = _run_reason
         if isinstance(payload.get("execution"), dict):
             payload["execution"].setdefault("execution_id",
                                              execution_id)

@@ -297,6 +297,7 @@ class DAGCoordinator:
                       "applied", "writes_observed",
                       # execution facts: what the run observed about the
                       # process, so a timeout survives into the report
+                      "verification_status",
                       "execution_outcome", "launched", "exit_code",
                       "timeout_s", "elapsed_ms", "process_termination",
                       "detail"):
@@ -325,6 +326,13 @@ class DAGCoordinator:
             return {"state": "BLOCKED", "reason": "deadline_exceeded",
                     "evidence": None,
                     **worker_execution.execution_facts(exc.execution)}
+        except execution.ExecutionCollectFailed as exc:
+            # the child ran; only its output was lost -- never "launch failed"
+            return {"state": "FAILED",
+                    "reason": "output_collection_failed",
+                    "evidence": None,
+                    **worker_execution.execution_facts(exc.execution),
+                    "detail": exc.execution.termination_detail}
         except execution.ExecutionLaunchFailed as exc:
             return {"state": "FAILED",
                     "reason": "launch_failed",
@@ -347,6 +355,7 @@ class DAGCoordinator:
             base_tree = self.dispatcher.base_tree
         return worker_execution.collect_worker_evidence(
             worker, path, rc, tail, self.task_id, self.evidence_dir,
+            deadline=self.deadline,
             base=base, base_tree=base_tree,
             deps_root=worker_execution._deps_root(path, self.repo),
             uncertain=set(self.worker_graph["uncertain"]),
@@ -725,5 +734,12 @@ def run_workers_dag(
         journal=journal,
         deadline=deadline)
     if execute_hook is not None:
+        if deadline is not None:
+            # a callback cannot be made to honour a monotonic budget: refuse
+            # the combination instead of pretending the deadline holds
+            raise OrchestratorError(
+                "a task deadline cannot be enforced through an injected "
+                "execute_hook: supply --deadline-seconds only with the "
+                "default executor")
         coordinator.execute = execute_hook  # type: ignore[attr-defined]
     return coordinator.run()
