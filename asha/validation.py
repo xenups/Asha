@@ -33,6 +33,7 @@ import hashlib
 import os
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from .check_runner import redact_secrets
@@ -144,17 +145,24 @@ def push_readiness(*, execution: dict[str, object], validation: str,
 
 
 def run_validation_commands(commands: list[list[str]], root: Path,
-                            timeout_s: int = VALIDATION_TIMEOUT_S
+                            timeout_s: int = VALIDATION_TIMEOUT_S, *,
+                            execution_id_factory: Callable[[], str]
+                            | None = None
                             ) -> list[dict]:
     """Execute each explicitly configured validation command.
 
     Every entry records what ran (argv, exit code, duration, output digests,
     bounded tail) and how it ended. A launch failure or a timeout is recorded
     as failed with ``launched`` False -- never a pass.
+
+    Each entry is ONE invocation: ``execution_id`` is minted per check and
+    attached only when a process actually started (success or timeout), so
+    an entry without an id is an attempt that never reached the OS.
     """
     results: list[dict] = []
     for index, argv in enumerate(commands):
         started = time.monotonic()
+        execution_id = (execution_id_factory or new_execution_id)()
         entry: dict = {
             'name': 'validation[' + str(index) + ']',
             'scope': 'explicit',
@@ -168,6 +176,8 @@ def run_validation_commands(commands: list[list[str]], root: Path,
             proc = subprocess.run(argv, cwd=root, capture_output=True,
                                   text=True, timeout=timeout_s)
         except subprocess.TimeoutExpired as exc:
+            # the process was started (and killed): the attempt has an id
+            entry['execution_id'] = execution_id
             entry['note'] = f'timed out after {timeout_s}s'
             entry['duration_ms'] = int((time.monotonic() - started) * 1000)
             partial = exc.stdout or ''
@@ -182,6 +192,7 @@ def run_validation_commands(commands: list[list[str]], root: Path,
             results.append(entry)
             continue
         entry['launched'] = True
+        entry['execution_id'] = execution_id
         entry['exit_code'] = proc.returncode
         entry['status'] = 'passed' if proc.returncode == 0 else 'failed'
         combined = redact_secrets((proc.stdout or '') + (proc.stderr or ''))
