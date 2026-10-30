@@ -27,10 +27,10 @@ from __future__ import annotations
 
 import subprocess
 import threading
+from functools import partial
 from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import suppress as _suppress
-from functools import partial
 from graphlib import CycleError, TopologicalSorter
 from typing import Any
 
@@ -647,6 +647,12 @@ class DAGCoordinator:
                           for entry in self.states.values())
         for wid, entry in self.states.items():
             if entry["state"] not in ("PENDING", "DEFERRED"):
+                continue
+            if self.deadline is not None and self.deadline.expired():
+                # A spent task budget is the reason this worker never ran --
+                # it outranks "dependency not finished", which would blame a
+                # predecessor instead of the budget.
+                entry.update(state="BLOCKED", reason="deadline_exceeded")
                 continue
             deps = self.worker_graph["edges"].get(wid) or []
             unfinished = [dep for dep in deps
