@@ -102,6 +102,18 @@ def test_unresolved_boundary_not_false_complete(graph_env) -> None:
         assert sl.completeness == "INCOMPLETE"
 
 
+def _assert_stub_dominated(sl) -> None:  # type: ignore[no-untyped-def]
+    """The property the size bounds are protecting: emitted dependencies are
+    signature stubs, not full bodies. Checked structurally so a legitimately
+    larger dependency closure cannot quietly degrade into full-body emission.
+    """
+    sizes = sorted(len(st.text) for st in sl.stubs)
+    assert sizes, 'a COMPLETE slice always carries stubs'
+    median = sizes[len(sizes) // 2]
+    assert median <= 200, median          # a body would be far larger
+    assert sizes[-1] <= 6000, sizes[-1]   # five modules have big signatures
+
+
 def test_forward_slice_semantics_unchanged(graph_env) -> None:
     """Acceptance 5: forward slice of T3 target still complete + compact."""
     graph, indices = graph_env
@@ -113,9 +125,18 @@ def test_forward_slice_semantics_unchanged(graph_env) -> None:
         target_module="asha.governance.worker_execution",
         graph=graph, indices=tuple(indices.values()))
     assert sl.completeness == "COMPLETE"
-    # stub emissions must keep the slice small (< original full-body size)
+    _assert_stub_dominated(sl)
+    # Stub emissions must keep the slice small (< original full-body size).
+    # Calibration: <30000 predates asha.execution. default_execute now
+    # reaches the execution primitive and the timeout policy (via
+    # execute_with_audit -> runner -> asha.execution -> asha.timeouts), which
+    # added 30 signature stubs (+5.0 kB on collect_worker_evidence) and made
+    # both slices share the same ~78.7 kB stub set: measured 79394 here
+    # (target body only 688). Bound raised to 84000 (5.8% headroom) while
+    # _assert_stub_dominated keeps the actual regression -- full-body
+    # emission -- failing loudly.
     body_len = len(sl.target_source) + sum(len(st.text) for st in sl.stubs)
-    assert body_len < 30000
+    assert body_len < 84000, body_len
 
 
 def test_stub_emission_reduces_t1_context(graph_env) -> None:
@@ -148,8 +169,11 @@ def test_stub_emission_reduces_t1_context(graph_env) -> None:
     # target (9523) and stub count (341) were unchanged: measured slice
     # 83037. Bound kept tight (1.2% headroom) so stub degradation toward
     # full bodies still fails loudly.
+    # 88076: the same closure change measured above (371 stubs, target body
+    # 9523 unchanged). Bound 93000 is a 5.6% headroom over that measurement.
+    _assert_stub_dominated(sl)
     emitted = len(sl.target_source) + sum(len(st.text) for st in sl.stubs)
-    assert emitted < 84000, emitted
+    assert emitted < 93000, emitted
 
 
 def test_reverse_forward_combined_keeps_required_t3_context(graph_env) -> None:

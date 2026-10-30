@@ -116,13 +116,18 @@ def test_config_error_is_execution_error_not_pass(tmp_path: Path) -> None:
 def test_missing_runner_is_execution_error_not_pass(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Missing interpreter/pytest = OSError -> failed (-1), never a pass."""
+    """Missing interpreter/pytest = failed with NO exit code, never a pass.
+
+    The interpreter could not be created, so there is no exit code to
+    report: -1 was a synthetic sentinel that read like a real result.
+    """
     _write(tmp_path / "test_root.py", "def test_root():\n    assert True\n")
     monkeypatch.setattr(
         check_runner.sys, "executable", str(tmp_path / "no-such-python"))
     (entry,) = check_runner.run(tmp_path, _resolved())
     assert entry["status"] == "failed", entry
-    assert entry["exit_code"] == -1, entry
+    assert entry["exit_code"] is None, entry
+    assert entry["launched"] is False, entry
 
 
 # ---------------------------------------------------------------------------

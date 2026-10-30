@@ -96,17 +96,17 @@ def _run_reviewer(reviewer: ReviewerFn | None, root: Path,
         artifact = reviewer(root, snapshot_id, int(REVIEW_TIMEOUT_S))
     except (TimeoutError, subprocess.TimeoutExpired):
         checks.append({'name': 'semantic-review', 'status': 'failed',
-                       'exit_code': -1,
+                       'exit_code': None,
                        'note': f'timed out after {int(REVIEW_TIMEOUT_S)}s'})
         return _placeholder('timeout', 'reviewer timed out')
     except Exception as exc:  # any executor crash fails closed
         checks.append({'name': 'semantic-review', 'status': 'failed',
-                       'exit_code': -1,
+                       'exit_code': None,
                        'note': f'crashed: {type(exc).__name__}'})
         return _placeholder('crashed', type(exc).__name__)
     if not isinstance(artifact, dict):
         checks.append({'name': 'semantic-review', 'status': 'failed',
-                       'exit_code': -1,
+                       'exit_code': None,
                        'note': 'malformed reviewer output (non-object)'})
         return _placeholder('malformed', type(artifact).__name__)
     # A completed review is a POLICY check entry too (success path:
