@@ -220,7 +220,10 @@ def test_governance_trio_frozen(tmp_path: Path) -> None:
     # b30f731 (pre worker_execution extraction). The anchor is
     # advanced only when the trio settles after an intentional,
     # review-approved refactor.
-    out = sp.run(['git', 'diff', 'b3e7b7c..HEAD', '--',
+    # Anchor 376c0d2: a check whose own tool is missing is skipped
+    # (BLOCKED) instead of failed, so an unparseable baseline no longer
+    # blames the worker -- an intentional governance change.
+    out = sp.run(['git', 'diff', '376c0d2..HEAD', '--',
                   'asha/scoping.py', 'asha/check_runner.py',
                   'asha/scheduler.py'],
                  cwd=cwd, capture_output=True, text=True, check=True)
