@@ -155,12 +155,22 @@ class DAGCoordinator:
             return None
         outcome["execution_id"] = execution_id
         state = str(outcome.get("state") or "UNKNOWN")
+        payload: dict[str, Any] = {
+            "worker_id": worker_id, "state": state,
+            "reason": outcome.get("reason"),
+            "evidence": outcome.get("evidence"),
+        }
+        # Timeout facts travel with the existing terminal event (no new event
+        # type): only what the run actually observed, so a reader can
+        # reconstruct which budget ran out and what was verified about the
+        # kill. A launch failure reports no exit code -- and no invented one.
+        for key in ("execution_outcome", "launched", "exit_code", "timeout_s",
+                    "elapsed_ms", "process_termination", "detail"):
+            if key in outcome:
+                payload[key] = outcome[key]
         # one terminal event per worker: sealed only on DONE
         self._journal("sealed" if state == "DONE"
-                      else "execution_failed",
-                      {"worker_id": worker_id, "state": state,
-                       "reason": outcome.get("reason"),
-                       "evidence": outcome.get("evidence")},
+                      else "execution_failed", payload,
                       worker_id=worker_id,
                       execution_id=execution_id)
         return execution_id
@@ -284,7 +294,12 @@ class DAGCoordinator:
         for extra in ("verdict", "baseline_failures",
                       "current_failures", "delta_failures",
                       "comparison", "details",
-                      "applied", "writes_observed"):
+                      "applied", "writes_observed",
+                      # execution facts: what the run observed about the
+                      # process, so a timeout survives into the report
+                      "execution_outcome", "launched", "exit_code",
+                      "timeout_s", "elapsed_ms", "process_termination",
+                      "detail"):
             if outcome.get(extra) is not None:
                 target[extra] = outcome[extra]
 
