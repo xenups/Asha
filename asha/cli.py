@@ -73,6 +73,7 @@ SCHEMA_VERSION = 1
 EXIT_OK = 0
 EXIT_VALIDATION_FAILED = 1
 EXIT_ERROR = 2
+EXIT_UNVALIDATED = 3  # nothing was validated; 0 would read as success
 EXIT_INTERRUPTED = 130
 
 _SEP = '─' * 29
@@ -589,6 +590,13 @@ def _emit_unified(result: dict[str, Any], as_json: bool) -> int:
                  or payload.get('ok') is False
                  or payload.get('stack_healthy') is False)):
         exit_code = EXIT_VALIDATION_FAILED
+    if (exit_code == EXIT_OK and isinstance(payload, dict)
+            and 'change_set' in payload
+            and payload.get('validation_result') is None
+            and not payload.get('evidence_id')):
+        # evaluation-only: no check ran, so exit 0 would tell a script
+        # the change was validated
+        exit_code = EXIT_UNVALIDATED
     return exit_code
 
 

@@ -140,8 +140,10 @@ def test_stub_emission_reduces_t1_context(graph_env) -> None:
     # target body only 5992). Bound raised to 80000 (a ~22% headroom
     # over the measured 65845) -- it still fails loudly if stubs ever
     # degrade toward full-body serialization.
+    # 82000: worker_execution now also depends on asha.validation
+    # (validation_status), which adds its signature stubs to the slice.
     emitted = len(sl.target_source) + sum(len(st.text) for st in sl.stubs)
-    assert emitted < 80000, emitted
+    assert emitted < 82000, emitted
 
 
 def test_reverse_forward_combined_keeps_required_t3_context(graph_env) -> None:
