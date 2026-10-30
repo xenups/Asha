@@ -129,8 +129,10 @@ def test_check_budget_guards_a_caller_supplied_value() -> None:
         timeouts.check_budget('check', 0)
     with pytest.raises(ValueError):
         timeouts.check_budget('check', float('inf'))
+    # step names are validated where a step is named, not here: check_budget
+    # exists for a budget that arrives without one
     with pytest.raises(ValueError):
-        timeouts.check_budget('no-such-step', 30)
+        resolve('no-such-step')
 
 
 def test_no_deadline_means_no_cap() -> None:
