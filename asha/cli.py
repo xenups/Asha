@@ -196,8 +196,11 @@ def _run_sealed(root: Path, affected: list[str], classification: Any,
         root, worker, task_id=run_id,
         fast_path=routed.mode is RuntimeMode.FAST_PATH)
     journal.append('execution_started',
-                   {'worker_id': wid, 'target_files': list(affected),
-                    'acceptance_command': acceptance or None},
+                   telemetry.with_correlation(
+                       {'worker_id': wid,
+                        'target_files': list(affected),
+                        'acceptance_command': acceptance or None},
+                       task_id=run_id, worker_id=wid),
                    critical=True)
     state_report = report.get('states', {}).get(wid) or {}
     state = state_report.get('state')
@@ -210,9 +213,12 @@ def _run_sealed(root: Path, affected: list[str], classification: Any,
         # validation failure with the real exit code, never a PASS and
         # never a fabricated evidence id.
         journal.append('validation_failed',
-                       {'failed_checks': [],
-                        'acceptance': acceptance_record,
-                        'comparison': comparison_record}, critical=True)
+                       telemetry.with_correlation(
+                           {'failed_checks': [],
+                            'acceptance': acceptance_record,
+                            'comparison': comparison_record},
+                           task_id=run_id, worker_id=wid),
+                       critical=True)
         journal.close()
         return {'validation_result': 'FAIL', 'evidence_id': None,
                 'evidence_verification': None, 'replay_verification': None,
@@ -220,14 +226,21 @@ def _run_sealed(root: Path, affected: list[str], classification: Any,
                 'comparison': comparison_record, 'error': None}
     if not ev_path or state not in ('DONE', 'FAILED'):
         journal.append('execution_failed',
-                       {'state': state or 'UNKNOWN', 'evidence': None,
-                        'comparison': comparison_record},
+                       telemetry.with_correlation(
+                           {'state': state or 'UNKNOWN',
+                            'evidence': None,
+                            'comparison': comparison_record},
+                           task_id=run_id, worker_id=wid),
                        critical=True)
         journal.close()
         raise CliError('EXECUTION_FAILED',
                        f'validation run ended as {state or "UNKNOWN"}')
 
-    journal.append('validation_started', {'worker_id': wid}, critical=True)
+    journal.append('validation_started',
+                   telemetry.with_correlation({'worker_id': wid},
+                                             task_id=run_id,
+                                             worker_id=wid),
+                   critical=True)
     payload = json.loads(Path(ev_path).read_text(encoding='utf-8'))
     checks = list(payload.get('checks') or [])
     failed = [entry['name'] for entry in checks
@@ -244,11 +257,18 @@ def _run_sealed(root: Path, affected: list[str], classification: Any,
     validation = 'FAIL' if ((failed and not excused) or acceptance_bad) else 'PASS'
     if failed and not excused or acceptance_bad:
         journal.append('validation_failed',
-                       {'failed_checks': failed,
-                        'acceptance': acceptance_record,
-                        'comparison': comparison_record}, critical=True)
+                       telemetry.with_correlation(
+                           {'failed_checks': failed,
+                            'acceptance': acceptance_record,
+                            'comparison': comparison_record},
+                           task_id=run_id, worker_id=wid),
+                       critical=True)
 
-    journal.append('sealing_started', {'worker_id': wid}, critical=True)
+    journal.append('sealing_started',
+                   telemetry.with_correlation({'worker_id': wid},
+                                             task_id=run_id,
+                                             worker_id=wid),
+                   critical=True)
     seal_ok = bool(verify_worker_evidence(Path(ev_path)))
     evidence_id = payload.get('evidence_sha256')
     auth = (report.get('authoritative') or {}).get(wid, b'')
@@ -266,8 +286,12 @@ def _run_sealed(root: Path, affected: list[str], classification: Any,
         raise CliError('EVIDENCE_VERIFICATION_FAILED',
                        'sealed evidence failed verification')
     journal.append('sealed',
-                   {'evidence_id': evidence_id if seal_ok else None,
-                    'validation_result': validation}, critical=True)
+                   telemetry.with_correlation(
+                       {'evidence_id': evidence_id if seal_ok else None,
+                        'validation_result': validation},
+                       task_id=run_id, worker_id=wid,
+                       execution_id=_execution_id_of(payload)),
+                   critical=True)
     journal.close()
     return {'validation_result': validation,
             'evidence_id': evidence_id if seal_ok else None,
@@ -277,6 +301,17 @@ def _run_sealed(root: Path, affected: list[str], classification: Any,
             'acceptance': acceptance_record,
             'comparison': comparison_record,
             'error': None}
+
+
+def _execution_id_of(evidence_payload: dict[str, Any]) -> str | None:
+    """The execution id recorded INSIDE wSealed evidence, when present --
+    read, never derived: an absent id stays None."""
+    execution = evidence_payload.get('execution')
+    if isinstance(execution, dict):
+        value = execution.get('execution_id')
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 def execute(root: Path, resolved: dict[str, Any],

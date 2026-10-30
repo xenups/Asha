@@ -30,6 +30,7 @@ them as legacy, never as verified.
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -59,17 +60,24 @@ def digest_text(text: str) -> str:
     return hashlib.sha256((text or '').encode('utf-8', 'replace')).hexdigest()
 
 
+def new_execution_id() -> str:
+    """Identity of ONE executed command: a retry is a new execution."""
+    return 'exec-' + os.urandom(6).hex()
+
+
 def execution_record(argv: list[str], cwd_label: str, *,
                      started_at: str, duration_ms: int,
                      exit_code: int | None, termination: str,
                      stdout: str, stderr: str,
-                     known_policy_command: bool) -> dict[str, object]:
+                     known_policy_command: bool,
+                     execution_id: str | None = None) -> dict[str, object]:
     """One executed command, described by what actually happened.
 
     ``known_policy_command`` is False unless the caller declared this command
     as (part of) the validation policy; it never implies success by itself.
     """
     return {
+        'execution_id': execution_id or new_execution_id(),
         'argv': [redact_secrets(arg) for arg in argv],
         'cwd': cwd_label,
         'started_at': started_at,

@@ -69,6 +69,33 @@ def serialize_event(event: dict[str, Any]) -> str:
     return json.dumps(body, sort_keys=True, separators=(',', ':')) + '\n'
 
 
+CORRELATION_FIELDS = ('request_id', 'task_id', 'worker_id',
+                      'execution_id')
+
+
+def with_correlation(payload: dict[str, Any],
+                     **correlation: Any) -> dict[str, Any]:
+    """Copy of ``payload`` carrying the correlation ids that REALLY exist.
+
+    An absent/None id is never fabricated. An existing payload key with a
+    DIFFERENT value fails closed: two tasks can never share one event.
+    """
+    unknown = set(correlation) - set(CORRELATION_FIELDS)
+    if unknown:
+        raise ValueError('unknown correlation field: '
+                         + ', '.join(sorted(unknown)))
+    merged = dict(payload)
+    for key in CORRELATION_FIELDS:
+        value = correlation.get(key)
+        if value is None:
+            continue
+        if key in merged and merged[key] != value:
+            raise ValueError(f'correlation collision on {key}: '
+                             f'{merged[key]!r} != {value!r}')
+        merged[key] = value
+    return merged
+
+
 def validate_event(event: dict[str, Any]) -> None:
     """Minimum structural contract; raises TypeError/ValueError when
     violated."""

@@ -60,6 +60,7 @@ from . import (
     evidence,
     graph_state,
     scope_resolver,
+    telemetry,
     validation,
     worker_graph,
 )
@@ -149,7 +150,7 @@ _META_KEYS = ("classification", "reason_code", "runtime_mode",
               "routing_reason", "fast_path_enabled", "target",
               "dependencies_count", "unresolved_count",
               "full_source_bytes", "context_source_bytes",
-              "reduction_ratio", "state", "task_id")
+              "reduction_ratio", "state", "task_id", "execution_id")
 
 
 def _safe_metadata(payload: Any) -> dict[str, Any]:
@@ -1373,7 +1374,57 @@ def asha_plan_dag(arguments: dict[str, Any]) -> dict[str, Any]:
         return _tool_error(f"{type(exc).__name__}: {exc}")
 
 
-def asha_run_spec(arguments: dict[str, Any]) -> dict[str, Any]:
+def _new_task_id(factory: Callable[[], str] | None = None) -> str:
+    """Task identity for one MCP task: production default is ``mcp-`` +
+    12 hex. ``factory`` is a per-call test seam -- there is no module-level
+    mutable state, so concurrent tasks cannot share an injected id."""
+    return factory() if factory is not None else "mcp-" + os.urandom(6).hex()
+
+
+def _open_task_journal(root: Path, task_id: str, *, worker_id: str,
+                       execution_id: str, target_files: list[str],
+                       execution_mode: str) -> Any:
+    """Pipeline journal for one MCP task. ``run_id == task_id`` is the CLI
+    contract (cli.execute passes task_id=run_id); the terminal event is
+    appended by ``_close_task_journal``."""
+    journal = telemetry.EventJournalWriter(root, task_id)
+    journal.append("execution_started",
+                   telemetry.with_correlation(
+                       {"worker_id": worker_id,
+                        "target_files": list(target_files),
+                        "execution_mode": execution_mode},
+                       task_id=task_id, worker_id=worker_id,
+                       execution_id=execution_id), critical=True)
+    return journal
+
+
+def _close_task_journal(journal: Any, *, ok: bool, task_id: str,
+                        worker_id: str, execution_id: str,
+                        evidence_id: str | None,
+                        validation_result: Any,
+                        state: str | None = None) -> None:
+    """Exactly ONE terminal event: ``sealed`` on success,
+    ``execution_failed`` otherwise -- never both, never a fabricated
+    success."""
+    if ok:
+        journal.append("sealed",
+                       telemetry.with_correlation(
+                           {"evidence_id": evidence_id,
+                            "validation_result": validation_result},
+                           task_id=task_id, worker_id=worker_id,
+                           execution_id=execution_id), critical=True)
+    else:
+        journal.append("execution_failed",
+                       telemetry.with_correlation(
+                           {"state": state or "FAILED", "evidence": None},
+                           task_id=task_id, worker_id=worker_id,
+                           execution_id=execution_id), critical=True)
+    journal.close()
+
+
+def asha_run_spec(arguments: dict[str, Any], *,
+                  task_id_factory: Callable[[], str] | None = None
+                  ) -> dict[str, Any]:
     """Tool handler: DRY-RUN only (Phase 5.5). `apply=true` is
     intentionally rejected -- enabling real writes needs its own review.
     Workers reuse the Phase-5.4 normalizer, the validate_workers gate,
@@ -1443,7 +1494,7 @@ def asha_run_spec(arguments: dict[str, Any]) -> dict[str, Any]:
         # This handler adds no execution logic of its own: worktrees,
         # conflict gating, scope verification, checks and sealed
         # evidence are all the existing orchestrator's own.
-        task_id = "mcp-" + os.urandom(6).hex()
+        task_id = _new_task_id(task_id_factory)
         try:
             report = run_workers_dag(Path(plan["root"]), workers,
                                      task_id=task_id)
@@ -2285,7 +2336,8 @@ def _restore_snapshot(root: Path, snap: dict[str, Any]) -> dict[str, Any]:
 
 
 def _run_in_place(root: Path, worker: dict[str, Any],
-                  task_id: str) -> dict[str, Any]:
+                  task_id: str,
+                  execution_id: str | None = None) -> dict[str, Any]:
     """Phase 10 `in_place_atomic` execution: run cmd on the CURRENT
     branch tip, verify every observed change stays strictly inside
     declared_scope, and roll back to `pre_head` on ANY failure (cmd
@@ -2344,7 +2396,7 @@ def _run_in_place(root: Path, worker: dict[str, Any],
         termination=termination,
         stdout=(proc.stdout or "") if proc is not None else "",
         stderr=(proc.stderr or "") if proc is not None else "",
-        known_policy_command=False)
+        known_policy_command=False, execution_id=execution_id)
     try:
         observed = _observed_paths(root)
     except Exception as exc:
@@ -2433,6 +2485,7 @@ def _run_in_place(root: Path, worker: dict[str, Any],
         "ok": ready_to_push,
         "task_id": task_id,
         "worker_id": worker.get("id"),
+        "execution_id": execution.get("execution_id"),
         "declared_scope": declared,
         "observed": observed,
         "snapshot_id": snapshot_id,
@@ -2520,7 +2573,9 @@ def _run_in_place(root: Path, worker: dict[str, Any],
             "authorized_to_ship": False}
 
 
-def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
+def asha_dispatch_task(arguments: dict[str, Any], *,
+                       task_id_factory: Callable[[], str] | None = None
+                       ) -> dict[str, Any]:
     """Validation -> classify -> route -> GovernedScheduler -> result.
 
     Fail-closed ladder: unknown input fields (including anything that
@@ -2676,22 +2731,37 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
         # single authorization point: the fast flag is the ROUTER's
         # own decision (env AND proven-disjoint-coherent), never raw input
         sched_fast = decision.mode is RuntimeMode.FAST_PATH
-        task_id = "mcp-" + os.urandom(6).hex()
+        task_id = _new_task_id(task_id_factory)
+        execution_id = validation.new_execution_id()
+        journal = _open_task_journal(
+            root, task_id, worker_id=wid, execution_id=execution_id,
+            target_files=list(declared), execution_mode=execution_mode)
         run_started = perf_counter_ns()
         try:
             if execution_mode == "in_place_atomic":
-                report = _run_in_place(root, worker, task_id)
+                report = _run_in_place(root, worker, task_id,
+                                       execution_id=execution_id)
             else:
                 report = run_worker_in_worktree(
                         root, worker, task_id=task_id, fast_path=sched_fast,
                         fast_path_classification=decision.classification
                         or "UNKNOWN")
         except Exception as exc:
+            _close_task_journal(journal, ok=False, task_id=task_id,
+                                worker_id=wid,
+                                execution_id=execution_id,
+                                evidence_id=None, validation_result=None,
+                                state="ABORTED")
             return _tool_error(
                 f"orchestration aborted: {type(exc).__name__}: {exc}")
         if report.get("refusal"):
             # clean-tree precondition re-failed at execution time:
             # immediate refusal, nothing executed, nothing written
+            _close_task_journal(journal, ok=False, task_id=task_id,
+                                worker_id=wid,
+                                execution_id=execution_id,
+                                evidence_id=None, validation_result=None,
+                                state="REFUSED")
             return _tool_error(str(report["refusal"]))
         scheduler_ms = (perf_counter_ns() - run_started) / 1e6
         states: dict[str, Any] = report.get("states") or {}
@@ -2776,6 +2846,18 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
             payload["rollback"] = report.get("rollback")
         if report.get("reason"):
             payload["reason"] = report.get("reason")
+        if isinstance(payload.get("execution"), dict):
+            payload["execution"].setdefault("execution_id",
+                                             execution_id)
+        _close_task_journal(
+            journal,
+            ok=payload.get("state") == "DONE",
+            task_id=task_id, worker_id=wid, execution_id=execution_id,
+            evidence_id=(report.get("evidence") or {}).get(
+                "evidence_sha256"),
+            validation_result=payload.get("validation_status"),
+            state=str(payload.get("state") or "UNKNOWN"))
+        payload["execution_id"] = execution_id
         return _tool_ok(payload)
     except ValueError as exc:
         return _tool_error(str(exc))
