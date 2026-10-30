@@ -195,14 +195,18 @@ def _run_sealed(root: Path, affected: list[str], classification: Any,
     report = run_worker_in_worktree(
         root, worker, task_id=run_id,
         fast_path=routed.mode is RuntimeMode.FAST_PATH)
+    state_report = report.get('states', {}).get(wid) or {}
+    # the worker command's own identity (D-1): the worktree runner
+    # mints it at launch, so every event below can carry the same one
+    execution_id = state_report.get('execution_id')
     journal.append('execution_started',
                    telemetry.with_correlation(
                        {'worker_id': wid,
                         'target_files': list(affected),
                         'acceptance_command': acceptance or None},
-                       task_id=run_id, worker_id=wid),
+                       task_id=run_id, worker_id=wid,
+                       execution_id=execution_id),
                    critical=True)
-    state_report = report.get('states', {}).get(wid) or {}
     state = state_report.get('state')
     ev_path = (report.get('evidence') or {}).get(wid)
     acceptance_record = state_report.get('acceptance')
@@ -290,7 +294,8 @@ def _run_sealed(root: Path, affected: list[str], classification: Any,
                        {'evidence_id': evidence_id if seal_ok else None,
                         'validation_result': validation},
                        task_id=run_id, worker_id=wid,
-                       execution_id=_execution_id_of(payload)),
+                       execution_id=(execution_id
+                                     or _execution_id_of(payload))),
                    critical=True)
     journal.close()
     return {'validation_result': validation,

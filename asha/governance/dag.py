@@ -27,13 +27,13 @@ from __future__ import annotations
 
 import subprocess
 import threading
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import suppress as _suppress
 from graphlib import CycleError, TopologicalSorter
 from typing import Any
 
-from asha import dep_index, graph_state, worker_graph
+from asha import dep_index, graph_state, validation, worker_graph
 from asha.classifier import classify_task, governance_profile
 from asha.common import paths as common_paths
 from asha.conflict import ConflictManager, covered, scope_status
@@ -66,6 +66,7 @@ class DAGCoordinator:
         preserve_on_failure: bool = False,
         fast_path_enabled: bool = False,
         classification_context: tuple[Any, ...] = (),
+        execution_id_factory: Callable[[], str] | None = None,
     ) -> None:
         self.repo = repo
         self.workers = list(workers)
@@ -88,6 +89,10 @@ class DAGCoordinator:
             for wid in self.by_id}
         self.deferral_events: list[dict[str, str]] = []
         self.evidence_paths: dict[str, str] = {}
+        # one execution identity per dispatched worker command
+        self._execution_id_factory = (execution_id_factory
+                                      or validation.new_execution_id)
+        self.execution_ids: dict[str, str] = {}
         self.routes: dict[str, dict[str, Any]] = {}
         self.reconcile_log: list[dict[str, Any]] = []
         self.stale_intents_dropped = 0
@@ -107,6 +112,26 @@ class DAGCoordinator:
 
     def state_of(self, worker_id: str) -> str:
         return str(self.states[worker_id]["state"])
+
+    def _begin_execution(self, worker_id: str) -> str:
+        """Mint the execution identity of a real worker launch.
+
+        Called at dispatch, before the process starts. A worker that is
+        blocked, deferred or never dispatched gets no id (no fabricated
+        execution exists for it).
+        """
+        execution_id = self._execution_id_factory()
+        self.execution_ids[worker_id] = execution_id
+        self.states[worker_id]["execution_id"] = execution_id
+        return execution_id
+
+    def _end_execution(self, worker_id: str,
+                       outcome: dict[str, Any]) -> str | None:
+        """Attach the launch identity to the settled outcome."""
+        execution_id = self.execution_ids.get(worker_id)
+        if execution_id is not None:
+            outcome["execution_id"] = execution_id
+        return execution_id
 
     def _graph_report(self) -> dict[str, Any]:
         return {
@@ -436,6 +461,7 @@ class DAGCoordinator:
                         if fast_routed:
                             self._set(wid, "RUNNING", None)
                             self.conflicts.start(wid, worker)
+                            self._begin_execution(wid)
                             futures[pool.submit(
                                 self._run_one_fast, worker)] = wid
                             dispatched += 1
@@ -449,6 +475,7 @@ class DAGCoordinator:
                             continue
                         self._set(wid, "RUNNING", None)
                         self.conflicts.start(wid, worker)
+                        self._begin_execution(wid)
                         futures[pool.submit(
                             self._run_one, worker, path)] = wid
                         dispatched += 1
@@ -476,6 +503,10 @@ class DAGCoordinator:
                                       outcome.get("reason"))
                             type(self)._merge_verdict_fields(
                                 self.states[wid], outcome)
+                            self._end_execution(wid, outcome)
+                            if "execution_id" in outcome:
+                                self.states[wid]["execution_id"] = (
+                                    outcome["execution_id"])
                             if outcome.get("evidence"):
                                 self.evidence_paths[wid] = str(
                                     outcome["evidence"])
@@ -570,6 +601,7 @@ def run_workers_dag(
     classification_context: tuple[Any, ...] = (),
     execute_hook=None,
     preserve_on_failure: bool = False,
+    execution_id_factory: Callable[[], str] | None = None,
 ) -> dict[str, Any]:
     """Facade: minimal DAG coordinator for multi-worker governed runs.
 
@@ -580,7 +612,8 @@ def run_workers_dag(
         repo, validate_workers(workers), task_id=task_id, keep_worktrees=keep_worktrees,
         fast_path_enabled=fast_path_enabled,
         classification_context=classification_context,
-        preserve_on_failure=preserve_on_failure)
+        preserve_on_failure=preserve_on_failure,
+        execution_id_factory=execution_id_factory)
     if execute_hook is not None:
         coordinator.execute = execute_hook  # type: ignore[attr-defined]
     return coordinator.run()

@@ -28,6 +28,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from contextlib import suppress as _suppress
 from pathlib import Path
 from typing import Any
@@ -723,6 +724,8 @@ def run_worker_in_worktree(
     fast_path: bool = False,
     fast_path_classification: str = "UNKNOWN",
     preserve_on_failure: bool = False,
+    execution_id: str | None = None,
+    execution_id_factory: Callable[[], str] | None = None,
 ) -> dict[str, Any]:
     """Execute ONE worker through the modular path (H.2.1-C/D).
 
@@ -748,6 +751,11 @@ def run_worker_in_worktree(
     base_commit = dispatcher.base_commit
     base_tree = dispatcher.base_tree
     wid = worker["id"]
+    # one identity per worker-command invocation: the caller may own it
+    # (MCP dispatch already minted one), otherwise it is minted here.
+    if execution_id is None:
+        execution_id = (execution_id_factory
+                        or validation.new_execution_id)()
     states: dict[str, Any] = {}
     evidence_paths: dict[str, str] = {}
     authoritative: dict[str, bytes] = {}
@@ -763,7 +771,9 @@ def run_worker_in_worktree(
                 result = execute_with_audit(worker, repo)
             except subprocess.TimeoutExpired:
                 outcome = {"state": "FAILED",
-                           "reason": "timeout_exceeded", "evidence": None}
+                           "reason": "timeout_exceeded",
+                           "evidence": None,
+                           "execution_id": execution_id}
                 states[wid] = outcome
                 return _report(task_id, states, evidence_paths,
                                authoritative, dispatcher)
@@ -781,7 +791,9 @@ def run_worker_in_worktree(
                 result = execute_with_audit(worker, path)
             except subprocess.TimeoutExpired:
                 outcome = {"state": "FAILED",
-                           "reason": "timeout_exceeded", "evidence": None}
+                           "reason": "timeout_exceeded",
+                           "evidence": None,
+                           "execution_id": execution_id}
                 states[wid] = outcome
                 return _report(task_id, states, evidence_paths,
                                authoritative, dispatcher, created_path,
@@ -790,7 +802,8 @@ def run_worker_in_worktree(
                 outcome = {"state": "FAILED",
                            "reason": f"execution_error:{type(exc).__name__}: "
                                      f"{exc}",
-                           "evidence": None}
+                           "evidence": None,
+                           "execution_id": execution_id}
                 states[wid] = outcome
                 return _report(task_id, states, evidence_paths,
                                authoritative, dispatcher, created_path,
@@ -804,6 +817,7 @@ def run_worker_in_worktree(
                 audit=audit,
                 baseline_deferred=True,
                 repo=repo)
+        outcome["execution_id"] = execution_id
         states[wid] = outcome
         if outcome.get("evidence"):
             evidence_paths[wid] = outcome["evidence"]

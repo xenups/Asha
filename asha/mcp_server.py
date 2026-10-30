@@ -2745,7 +2745,7 @@ def asha_dispatch_task(arguments: dict[str, Any], *,
                 report = run_worker_in_worktree(
                         root, worker, task_id=task_id, fast_path=sched_fast,
                         fast_path_classification=decision.classification
-                        or "UNKNOWN")
+                        or "UNKNOWN", execution_id=execution_id)
         except Exception as exc:
             _close_task_journal(journal, ok=False, task_id=task_id,
                                 worker_id=wid,
