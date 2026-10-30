@@ -197,12 +197,12 @@ def test_without_a_deadline_work_still_runs(tmp_path: Path) -> None:
 
 def test_deadline_rejects_an_invalid_budget() -> None:
     # wrong type is refused by type, unusable number by value
-    for bad in (True, '30', None):
+    for wrong_type in (True, '30', None):
         with pytest.raises(TypeError):
-            Deadline(bad)  # type: ignore[arg-type]
-    for bad in (0, -1, float('nan'), float('inf')):
+            Deadline(wrong_type)  # type: ignore[arg-type]
+    for unusable in (0, -1, float('nan'), float('inf')):
         with pytest.raises(ValueError):
-            Deadline(bad)
+            Deadline(unusable)
     assert check_budget('in_place', 30) == 30.0
 
 

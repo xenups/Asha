@@ -27,10 +27,10 @@ from __future__ import annotations
 
 import subprocess
 import threading
-from functools import partial
 from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import suppress as _suppress
+from functools import partial
 from graphlib import CycleError, TopologicalSorter
 from typing import Any
 
