@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from asha import validation  # noqa: E402
+from asha import validation
 
 PY = sys.executable
 EXEC_ID_RE = re.compile(r"^exec-[0-9a-f]{12}$")
@@ -68,7 +68,7 @@ def test_factory_is_used_once_per_check(tmp_path: Path) -> None:
 
     def factory() -> str:
         minted.append(1)
-        return "exec-%012d" % len(minted)
+        return f"exec-{len(minted):012d}"
 
     entries = validation.run_validation_commands(
         [[PY, "-c", "pass"], [PY, "-c", "raise SystemExit(1)"]], tmp_path,

@@ -12,9 +12,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from asha import mcp_server, telemetry  # noqa: E402
-from asha.common import paths as common_paths  # noqa: E402
-from asha.governance import dag  # noqa: E402
+from asha import mcp_server, telemetry
+from asha.common import paths as common_paths
+from asha.governance import dag
 
 FILES = {"a.txt": "one\n", "test_ok.py": "def test_ok():\n    assert True\n"}
 
@@ -176,8 +176,8 @@ def test_concurrent_appends_keep_records_whole(tmp_path: Path) -> None:
         for _ in range(25):
             writer.append("execution_started",
                           telemetry.with_correlation(
-                              {"worker_id": "w%d" % worker},
-                              task_id=run_id, worker_id="w%d" % worker),
+                              {"worker_id": f"w{worker}"},
+                              task_id=run_id, worker_id=f"w{worker}"),
                           critical=True)
 
     threads = [threading.Thread(target=emit, args=(index,))

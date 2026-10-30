@@ -10,7 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from asha.governance import dag, worker_execution  # noqa: E402
+from asha.governance import dag, worker_execution
 
 PY = sys.executable
 EXEC_ID_RE = re.compile(r"^exec-[0-9a-f]{12}$")
