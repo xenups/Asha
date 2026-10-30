@@ -852,11 +852,21 @@ def run_spec_cmd(argv: list[str]) -> int:
         workers = spec.get('workers')
         if not isinstance(workers, list):
             raise OrchestratorError('spec.workers must be a list')
-        report = run_workers_dag(
-            Path(args.root), workers, task_id=task_id,
-            keep_worktrees=args.keep_worktrees,
-            preserve_on_failure=(
-                args.preserve_on_failure or args.keep_worktrees))
+        journal = telemetry.EventJournalWriter(Path(args.root), task_id)
+        journal.append('execution_started',
+                       telemetry.with_correlation(
+                           {'execution_mode': 'dag',
+                            'worker_count': len(workers)},
+                           task_id=task_id), critical=True)
+        try:
+            report = run_workers_dag(
+                Path(args.root), workers, task_id=task_id,
+                keep_worktrees=args.keep_worktrees,
+                journal=journal,
+                preserve_on_failure=(
+                    args.preserve_on_failure or args.keep_worktrees))
+        finally:
+            journal.close()
         if args.apply:
             report['integration'] = _integration_summary(
                 Path(args.root), report).as_dict()

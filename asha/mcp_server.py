@@ -1398,6 +1398,33 @@ def _open_task_journal(root: Path, task_id: str, *, worker_id: str,
     return journal
 
 
+def _open_dag_journal(root: Path, task_id: str,
+                      workers: list[dict[str, Any]]) -> Any:
+    """Journal for one multi-worker task: run_id == task_id, one start event
+    for the run. Per-worker events are appended by the DAG coordinator."""
+    journal = telemetry.EventJournalWriter(root, task_id)
+    journal.append("execution_started",
+                   telemetry.with_correlation(
+                       {"execution_mode": "dag",
+                        "worker_count": len(workers),
+                        "workers": [str(worker.get("id")) for worker in workers]},
+                       task_id=task_id), critical=True)
+    return journal
+
+
+def _close_dag_journal(journal: Any, task_id: str, *, ok: bool | None,
+                       reason: str | None = None) -> None:
+    """Close the DAG journal. ``ok is None`` means the coordinator already
+    wrote the task terminal event; otherwise this writes the only one."""
+    if ok is not None:
+        journal.append("execution_failed",
+                       telemetry.with_correlation(
+                           {"scope": "task", "state": "ABORTED",
+                            "reason": reason}, task_id=task_id),
+                       critical=True)
+    journal.close()
+
+
 def _close_task_journal(journal: Any, *, ok: bool, task_id: str,
                         worker_id: str, execution_id: str,
                         evidence_id: str | None,
@@ -1423,7 +1450,8 @@ def _close_task_journal(journal: Any, *, ok: bool, task_id: str,
 
 
 def asha_run_spec(arguments: dict[str, Any], *,
-                  task_id_factory: Callable[[], str] | None = None
+                  task_id_factory: Callable[[], str] | None = None,
+                  execution_id_factory: Callable[[], str] | None = None
                   ) -> dict[str, Any]:
     """Tool handler: DRY-RUN only (Phase 5.5). `apply=true` is
     intentionally rejected -- enabling real writes needs its own review.
@@ -1495,14 +1523,26 @@ def asha_run_spec(arguments: dict[str, Any], *,
         # conflict gating, scope verification, checks and sealed
         # evidence are all the existing orchestrator's own.
         task_id = _new_task_id(task_id_factory)
+        root_path = Path(plan["root"])
         try:
-            report = run_workers_dag(Path(plan["root"]), workers,
-                                     task_id=task_id)
+            journal = _open_dag_journal(root_path, task_id, workers)
+        except OSError as exc:
+            # no journal -> no traceable task: fail closed, run nothing
+            return _tool_error(
+                f"journal unavailable (fail-closed, nothing "
+                f"executed): {type(exc).__name__}: {exc}")
+        try:
+            report = run_workers_dag(
+                root_path, workers, task_id=task_id, journal=journal,
+                execution_id_factory=execution_id_factory)
         except Exception as exc:
             # Refused to start or died catastrophically: report the real
             # state, never a fabricated success (partial = partial).
+            _close_dag_journal(journal, task_id, ok=False,
+                               reason=type(exc).__name__)
             return _tool_error(
                 f"orchestration aborted: {type(exc).__name__}: {exc}")
+        _close_dag_journal(journal, task_id, ok=None)
 
         states: dict[str, Any] = report.get("states") or {}
 

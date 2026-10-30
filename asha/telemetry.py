@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -133,6 +134,9 @@ class EventJournalWriter:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._handle = self.path.open('ab')
         self._closed = False
+        # concurrent workers append to one run journal: one record per
+        # locked write keeps the JSONL lines whole
+        self._lock = threading.Lock()
 
     def _new_event(self, event_type: str,
                    payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -154,10 +158,11 @@ class EventJournalWriter:
         if self._closed:
             raise ValueError('journal is closed')
         event = self._new_event(event_type, payload)
-        self._handle.write(serialize_event(event).encode('utf-8'))
-        self._handle.flush()
-        if critical or event_type in CRITICAL_EVENTS:
-            os.fsync(self._handle.fileno())
+        with self._lock:
+            self._handle.write(serialize_event(event).encode('utf-8'))
+            self._handle.flush()
+            if critical or event_type in CRITICAL_EVENTS:
+                os.fsync(self._handle.fileno())
         return event
 
     def close(self) -> None:
