@@ -140,8 +140,16 @@ def test_stub_emission_reduces_t1_context(graph_env) -> None:
     # target body only 5992). Bound raised to 80000 (a ~22% headroom
     # over the measured 65845) -- it still fails loudly if stubs ever
     # degrade toward full-body serialization.
+    # 82000: worker_execution now also depends on asha.validation
+    # (validation_status), which adds its signature stubs to the slice.
+    # 84000: Phase 1.1 added execution-identity and journal helpers to
+    # DAGCoordinator (journal param, _begin_execution/_end_execution/
+    # _journal/_finish_task), so that stub grew 2170 -> 3159 bytes while
+    # target (9523) and stub count (341) were unchanged: measured slice
+    # 83037. Bound kept tight (1.2% headroom) so stub degradation toward
+    # full bodies still fails loudly.
     emitted = len(sl.target_source) + sum(len(st.text) for st in sl.stubs)
-    assert emitted < 80000, emitted
+    assert emitted < 84000, emitted
 
 
 def test_reverse_forward_combined_keeps_required_t3_context(graph_env) -> None:

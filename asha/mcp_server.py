@@ -60,6 +60,7 @@ from . import (
     evidence,
     graph_state,
     scope_resolver,
+    telemetry,
     validation,
     worker_graph,
 )
@@ -71,18 +72,33 @@ from .conflict import ConflictManager, covered, scope_status
 from .context_slicer import slice_context
 from .contracts.validation import validate_workers
 from .governance.dag import run_workers_dag
-from .governance.worker_execution import run_worker_in_worktree
+from .governance.worker_execution import build_acceptance, run_worker_in_worktree
 from .router import RuntimeMode, route
+from .runner import _acceptance_env
 from .types import OrchestratorError
 from .worktree import _git
 
 SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18",
                                "2025-03-26", "2024-11-05"]
 DEFAULT_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]
-try:
-    _VERSION = version("asha")
-except PackageNotFoundError:  # running from a source tree with no install
-    _VERSION = "0.0.0+unknown"
+def _source_version() -> str:
+    """Installed metadata first, git identity second, never a fake 0.0.0."""
+    try:
+        return version("asha")
+    except PackageNotFoundError:
+        pass
+    try:
+        proc = subprocess.run(
+            ["git", "describe", "--tags", "--always", "--dirty"],
+            cwd=Path(__file__).resolve().parent, capture_output=True,
+            text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return "0.0.0+unknown"
+    tag = proc.stdout.strip()
+    return tag.lstrip("v") if proc.returncode == 0 and tag else "0.0.0+unknown"
+
+
+_VERSION = _source_version()
 SERVER_INFO = {"name": "asha-orchestrator", "version": _VERSION}
 CAPABILITIES: dict[str, Any] = {"tools": {}}
 
@@ -134,7 +150,7 @@ _META_KEYS = ("classification", "reason_code", "runtime_mode",
               "routing_reason", "fast_path_enabled", "target",
               "dependencies_count", "unresolved_count",
               "full_source_bytes", "context_source_bytes",
-              "reduction_ratio", "state", "task_id")
+              "reduction_ratio", "state", "task_id", "execution_id")
 
 
 def _safe_metadata(payload: Any) -> dict[str, Any]:
@@ -305,6 +321,14 @@ ASHA_VERIFY_TIP_SPEC: dict[str, Any] = {
                                           "deterministic check set "
                                           "in-place for the resolved "
                                           "scope (default: false)"},
+            "acceptance_command": {
+                "type": "string",
+                "description": "Explicit acceptance command for this tip "
+                               "(split once, never a shell). When supplied "
+                               "it IS the required check: its real exit "
+                               "code and pytest pass/skip counts decide "
+                               "PASS, so a multi-service repo can seal "
+                               "without the default per-service matrix."},
             "declared_scope": {"type": "array",
                                "items": {"type": "string"},
                                "description": "Repo-relative files this "
@@ -491,6 +515,53 @@ def _inspect_tip(root: Path, allow_dirty: bool = False
     return None, git_dir, head, tree
 
 
+def _run_acceptance(root: Path, command: str
+                    ) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run the declared acceptance command in place; describe what happened.
+
+    The record comes from the same governance helper the dispatch path uses
+    (``build_acceptance``), so "ran but collected nothing" stays
+    inconclusive and a command that never launched is never a pass.
+    """
+    argv = shlex.split(command)
+    started = monotonic()
+    ran = False
+    launched = True
+    exit_code: int | None = None
+    tail = ""
+    try:
+        proc = subprocess.run(
+            argv, cwd=root, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+            timeout=validation.VALIDATION_TIMEOUT_S,
+            env=_acceptance_env(argv))
+        ran = True
+        exit_code = proc.returncode
+        tail = ((proc.stdout or "") + (proc.stderr or ""))[-2000:]
+    except subprocess.TimeoutExpired as exc:
+        tail = str(exc)
+    except OSError as exc:
+        launched = False
+        tail = f"{type(exc).__name__}: {exc}"
+    record = build_acceptance(
+        {"verify_command": command},
+        {"verify_ran": ran, "verify_exit": exit_code,
+         "verify_output_tail": tail})
+    outcome = str(record.get("outcome"))
+    entry = {
+        "name": "acceptance",
+        "scope": "explicit",
+        "launched": launched,
+        "status": ("passed" if outcome == "passed"
+                   else "failed" if outcome == "failed" else "skipped"),
+        "exit_code": exit_code,
+        "note": record.get("detail"),
+        "output_tail": check_runner.redact_secrets(tail),
+        "duration_ms": int((monotonic() - started) * 1000),
+    }
+    return record, entry
+
+
 def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
     """asha_verify_tip: in-place, fail-closed verification of the
     CURRENT working-tree tip for stacked-PR / multi-branch rebase
@@ -503,7 +574,12 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
     dirty tree -> `git diff --check` defects -> in-flight git
     operation -> unknown base_ref -> missing declared_scope path.
     A clean tip is bound to `snapshot_id_of(root)` and sealed to
-    <state>/verify-tip/<head12>.evidence.json (digest-bound, atomic).
+    <state>/verify-tip/<head12>-<tree12>.evidence.json (shared across
+    linked worktrees, digest-bound, atomic). A sealed PASS is monotone: a
+    later weaker run never replaces it. The stability check covers tracked,
+    staged and untracked paths plus the manifest's declared ignored inputs;
+    other Git-ignored paths are outside it by design, so a check that writes
+    only ignored files can still seal PASS.
     """
     try:
         root = arguments.get("root", ".")
@@ -520,6 +596,17 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
         run_checks = arguments.get("run_checks", False)
         if not isinstance(run_checks, bool):
             return _tool_error("run_checks must be a boolean")
+        acceptance_command = arguments.get("acceptance_command")
+        if acceptance_command is not None and (
+                not isinstance(acceptance_command, str)
+                or not acceptance_command.strip()):
+            return _tool_error(
+                "acceptance_command must be a non-empty string")
+        if run_checks and acceptance_command:
+            # Two required checks would make the sealed policy a lie about
+            # which one decided PASS; refuse instead of picking one.
+            return _tool_error(
+                "give run_checks or acceptance_command, not both")
         declared_scope = arguments.get("declared_scope")
         if declared_scope is not None:
             if (not isinstance(declared_scope, list)
@@ -571,6 +658,7 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
                 f"snapshot failed: {type(exc).__name__}: {exc}")
         checks: list[dict[str, Any]] | None = None
         scope_level = "unresolved"
+        acceptance_record: dict[str, Any] | None = None
         if run_checks:
             try:
                 scope = scope_resolver.resolve(resolved_root, base_ref,
@@ -581,12 +669,41 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
                     f"{type(exc).__name__}: {exc}")
             scope_level = str(scope.get("scope"))
             checks = check_runner.run(resolved_root, scope)
+        elif acceptance_command:
+            # A declared acceptance command IS the required check for this
+            # tip: recorded with its real exit code, never inferred from the
+            # caller's word. Multi-service repos use this instead of the
+            # default matrix (what every service needs differs per service).
+            acceptance_record, entry = _run_acceptance(resolved_root,
+                                                       acceptance_command)
+            checks = [entry]
+            scope_level = "explicit"
         validation_state, validation_rule = validation.validation_status(
             checks or [])
-        validation_policy = (validation.VALIDATION_POLICY_SCOPE_MATRIX
+        validation_policy = (validation.VALIDATION_POLICY_EXPLICIT
+                             if acceptance_command
+                             else validation.VALIDATION_POLICY_SCOPE_MATRIX
                              if run_checks
                              else validation.VALIDATION_POLICY_NONE)
         checks_ok = validation_state == validation.VALIDATION_PASS
+        if checks is not None:
+            # A check that edits the tree (or commits) makes its own PASS a
+            # claim about a tip that no longer exists: fail closed, seal
+            # nothing. Re-inspection is total -- any error refuses.
+            try:
+                post_refusal, _post_git, post_head, post_tree = _inspect_tip(
+                    resolved_root)
+                post_snapshot = audit_snapshot.snapshot_id_of(resolved_root)
+            except Exception as exc:
+                return _tool_error(
+                    "TIP_REINSPECTION_FAILED: "
+                    f"{type(exc).__name__}: {exc}")
+            if (post_refusal is not None or post_head != head
+                    or post_tree != tree or post_snapshot != snapshot_id):
+                return _tool_error(
+                    "TIP_CHANGED_DURING_VALIDATION: the tip moved while "
+                    "validation ran, so no seal was written"
+                    + (f" ({post_refusal})" if post_refusal else ""))
         sealed = evidence.seal({
             "schema": evidence.SCHEMA_VALIDATED,
             "stage": "verify_tip",
@@ -609,6 +726,7 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
             "base_sha": base_sha,
             "declared_scope": declared_scope,
             "run_checks": run_checks,
+            "acceptance": acceptance_record,
             "ok": checks_ok,
             "ready_to_push": checks_ok,
             "reason": (None if checks_ok
@@ -616,13 +734,14 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
             # Phase 11.2: track deleted files in scope
             "deleted_in_scope": _auto_deleted if '_auto_deleted' in locals() else [],
         })
-        artifact = (common_paths.get_state_dir(resolved_root)
-                    / "verify-tip" / f"{head[:12]}.evidence.json")
+        artifact = (common_paths.get_verify_tip_dir(resolved_root)
+                    / f"{head[:12]}-{tree[:12]}.evidence.json")
         try:
-            evidence.write_to(artifact, sealed)
+            evidence_written = _write_tip_evidence(artifact, sealed,
+                                                  head, tree)
         except OSError as exc:
             return _tool_error(f"EVIDENCE_WRITE_FAILED: {exc}")
-        if run_checks and not checks_ok:
+        if (run_checks or acceptance_command) and not checks_ok:
             prefix = ("TIP_VALIDATION_FAILED"
                       if validation_state == validation.VALIDATION_FAIL
                       else "TIP_VALIDATION_BLOCKED")
@@ -633,7 +752,9 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
                 for entry in (checks or []))
             return _tool_error(
                 prefix + ": " + validation_rule + "; " + detail
-                + "; evidence sealed at " + str(artifact))
+                + "; " + ("evidence sealed at " + str(artifact)
+                           if evidence_written
+                           else "stronger existing verification seal kept"))
         if checks is None:
             check_summary = "checks not run"
         else:
@@ -648,6 +769,7 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
                    "base_sha": base_sha,
                    "declared_scope": declared_scope,
                    "run_checks": run_checks,
+                   "acceptance": acceptance_record,
                    "checks": checks,
                    "validation_status": validation_state,
                    "ok": checks_ok,
@@ -658,13 +780,15 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
                    "authorized_to_ship": False,
                    "evidence_sha256": sealed["evidence_sha256"],
                    "evidence_path": str(artifact),
+                   "evidence_written": evidence_written,
                    # Phase 11.2: include deleted files in scope
                    "deleted_in_scope": _auto_deleted if '_auto_deleted' in locals() else [],
                    "response": (
                        f"tip {head[:12]} verified in place: clean tree; "
                        f"snapshot {snapshot_id[:12]}; {check_summary}; "
-                       f"evidence {sealed['evidence_sha256'][:12]} "
-                       "sealed")}
+                       + (f"evidence {sealed['evidence_sha256'][:12]} "
+                          "sealed" if evidence_written
+                          else "stronger existing verification seal kept"))}
         return _tool_ok(payload)
     except Exception as exc:
         return _tool_error(f"{type(exc).__name__}: {exc}")
@@ -712,6 +836,13 @@ ASHA_VERIFY_STACK_SPEC: dict[str, Any] = {
 }
 
 
+def _execution_ran(state: dict, report: dict) -> bool:
+    """True only when a worker process really ran (measured exit)."""
+    execution = report.get("execution") if isinstance(report, dict) else None
+    if isinstance(execution, dict) and execution.get("termination") is not None:
+        return True
+    return state.get("exit_status") is not None
+
 def _artifact_evidence_state(sealed: object, head_sha: str,
                             tree_sha: str) -> str:
     """Classify one sealed artifact for stack consumption.
@@ -726,6 +857,10 @@ def _artifact_evidence_state(sealed: object, head_sha: str,
         return "tampered"
     if evidence.compute_digest(sealed) != sealed.get("evidence_sha256"):
         return "tampered"
+    if sealed.get("authorized_to_ship") is not False:
+        # digest integrity cannot authorize shipping; the contract is a
+        # false-valued field, so any other value is tampering
+        return "tampered"
     if sealed.get("schema") != evidence.SCHEMA_VALIDATED:
         return "legacy"
     if sealed.get("kind") != "verification":
@@ -736,20 +871,35 @@ def _artifact_evidence_state(sealed: object, head_sha: str,
         return "mismatch"
     if sealed.get("tree_hash") != tree_sha:
         return "mismatch"
+    # snapshot_id is the working-tree identity the seal was granted over. It
+    # cannot be recomputed here (a stack row need not be checked out), so its
+    # presence and shape are enforced and re-derivation stays the writer's
+    # job. base_ref/base_sha are advisory: they name the comparison base, not
+    # the state that was verified.
+    snapshot_id = sealed.get("snapshot_id")
+    if not isinstance(snapshot_id, str) or len(snapshot_id) != 64:
+        return "tampered"
     if sealed.get("ready_to_push") is not True:
         return "unready"
     return "verified"
 
 
-def _tip_evidence_state(state_dir: Path, head_sha: str,
-                        tree_sha: str) -> str:
+def _tip_evidence_state(state_dir: Path, head_sha: str, tree_sha: str, *,
+                        verify_tip_dir: Path) -> str:
     """Canonical verify-tip evidence that fully validates this exact commit.
 
-    Dispatch evidence is only consulted when the canonical tip artifact is
-    absent, and it must satisfy the same rules (so an execution attestation
-    can never be mistaken for validation).
+    The store is REQUIRED: a default would let a caller silently read one
+    checkout's local state as another's evidence (or miss the shared store
+    entirely). Dispatch evidence is only consulted when the canonical tip
+    artifact is absent, and it must satisfy the same rules (so an execution
+    attestation can never be mistaken for validation).
     """
-    canonical = state_dir / "verify-tip" / f"{head_sha[:12]}.evidence.json"
+    canonical = (verify_tip_dir
+                 / f"{head_sha[:12]}-{tree_sha[:12]}.evidence.json")
+    if not canonical.is_file():
+        # pre-tree-qualified seal; identity validation below still rejects a
+        # seal written for a different tree.
+        canonical = verify_tip_dir / f"{head_sha[:12]}.evidence.json"
     if canonical.is_file():
         try:
             return _artifact_evidence_state(
@@ -774,6 +924,34 @@ def _tip_evidence_state(state_dir: Path, head_sha: str,
         if candidate in states:
             return candidate
     return "missing"
+
+
+def _write_tip_evidence(path: Path, sealed: dict[str, Any],
+                        head_sha: str, tree_sha: str) -> bool:
+    """Write tip evidence unless a valid PASS seal already holds this identity.
+
+    Evidence is monotone per identity (commit+tree, encoded in the file name):
+    a weaker run -- no checks, a failed validation, an execution attestation --
+    must not erase an existing PASS. Anything short of a valid seal for THIS
+    tree (corrupt, foreign tree, legacy, unready) is not stronger and is
+    replaced. Atomic replace keeps a reader seeing a complete artifact; two
+    writers racing in the same instant can still let the weaker one land last,
+    which costs evidence, never truth (no seal can validate a different tree).
+    """
+    existing = "missing"
+    if path.is_file():
+        try:
+            existing = _artifact_evidence_state(
+                json.loads(path.read_text(encoding="utf-8")),
+                head_sha, tree_sha)
+        except (OSError, ValueError):
+            existing = "tampered"
+    if (existing == "verified"
+            and _artifact_evidence_state(sealed, head_sha, tree_sha)
+            != "verified"):
+        return False
+    evidence.write_to(path, sealed)
+    return True
 
 
 def asha_verify_stack(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -851,8 +1029,9 @@ def asha_verify_stack(arguments: dict[str, Any]) -> dict[str, Any]:
                           f"{merge_base} {branch}")
             head_tree = _git(resolved_root, "rev-parse",
                              head_sha + "^{tree}").strip()
-            evidence_state = _tip_evidence_state(state_dir, head_sha,
-                                                 head_tree)
+            evidence_state = _tip_evidence_state(
+                state_dir, head_sha, head_tree,
+                verify_tip_dir=common_paths.get_verify_tip_dir(resolved_root))
             if not is_linear:
                 status = "STACK_ANCESTRY_DRIFT"
             elif evidence_state == "missing":
@@ -1195,7 +1374,85 @@ def asha_plan_dag(arguments: dict[str, Any]) -> dict[str, Any]:
         return _tool_error(f"{type(exc).__name__}: {exc}")
 
 
-def asha_run_spec(arguments: dict[str, Any]) -> dict[str, Any]:
+def _new_task_id(factory: Callable[[], str] | None = None) -> str:
+    """Task identity for one MCP task: production default is ``mcp-`` +
+    12 hex. ``factory`` is a per-call test seam -- there is no module-level
+    mutable state, so concurrent tasks cannot share an injected id."""
+    return factory() if factory is not None else "mcp-" + os.urandom(6).hex()
+
+
+def _open_task_journal(root: Path, task_id: str, *, worker_id: str,
+                       execution_id: str, target_files: list[str],
+                       execution_mode: str) -> Any:
+    """Pipeline journal for one MCP task. ``run_id == task_id`` is the CLI
+    contract (cli.execute passes task_id=run_id); the terminal event is
+    appended by ``_close_task_journal``."""
+    journal = telemetry.EventJournalWriter(root, task_id)
+    journal.append("execution_started",
+                   telemetry.with_correlation(
+                       {"worker_id": worker_id,
+                        "target_files": list(target_files),
+                        "execution_mode": execution_mode},
+                       task_id=task_id, worker_id=worker_id,
+                       execution_id=execution_id), critical=True)
+    return journal
+
+
+def _open_dag_journal(root: Path, task_id: str,
+                      workers: list[dict[str, Any]]) -> Any:
+    """Journal for one multi-worker task: run_id == task_id, one start event
+    for the run. Per-worker events are appended by the DAG coordinator."""
+    journal = telemetry.EventJournalWriter(root, task_id)
+    journal.append("execution_started",
+                   telemetry.with_correlation(
+                       {"execution_mode": "dag",
+                        "worker_count": len(workers),
+                        "workers": [str(worker.get("id")) for worker in workers]},
+                       task_id=task_id), critical=True)
+    return journal
+
+
+def _close_dag_journal(journal: Any, task_id: str, *, ok: bool | None,
+                       reason: str | None = None) -> None:
+    """Close the DAG journal. ``ok is None`` means the coordinator already
+    wrote the task terminal event; otherwise this writes the only one."""
+    if ok is not None:
+        journal.append("execution_failed",
+                       telemetry.with_correlation(
+                           {"scope": "task", "state": "ABORTED",
+                            "reason": reason}, task_id=task_id),
+                       critical=True)
+    journal.close()
+
+
+def _close_task_journal(journal: Any, *, ok: bool, task_id: str,
+                        worker_id: str, execution_id: str,
+                        evidence_id: str | None,
+                        validation_result: Any,
+                        state: str | None = None) -> None:
+    """Exactly ONE terminal event: ``sealed`` on success,
+    ``execution_failed`` otherwise -- never both, never a fabricated
+    success."""
+    if ok:
+        journal.append("sealed",
+                       telemetry.with_correlation(
+                           {"evidence_id": evidence_id,
+                            "validation_result": validation_result},
+                           task_id=task_id, worker_id=worker_id,
+                           execution_id=execution_id), critical=True)
+    else:
+        journal.append("execution_failed",
+                       telemetry.with_correlation(
+                           {"state": state or "FAILED", "evidence": None},
+                           task_id=task_id, worker_id=worker_id,
+                           execution_id=execution_id), critical=True)
+    journal.close()
+
+
+def asha_run_spec(arguments: dict[str, Any], *,
+                  task_id_factory: Callable[[], str] | None = None,
+                  execution_id_factory: Callable[[], str] | None = None
+                  ) -> dict[str, Any]:
     """Tool handler: DRY-RUN only (Phase 5.5). `apply=true` is
     intentionally rejected -- enabling real writes needs its own review.
     Workers reuse the Phase-5.4 normalizer, the validate_workers gate,
@@ -1265,15 +1522,27 @@ def asha_run_spec(arguments: dict[str, Any]) -> dict[str, Any]:
         # This handler adds no execution logic of its own: worktrees,
         # conflict gating, scope verification, checks and sealed
         # evidence are all the existing orchestrator's own.
-        task_id = "mcp-" + os.urandom(6).hex()
+        task_id = _new_task_id(task_id_factory)
+        root_path = Path(plan["root"])
         try:
-            report = run_workers_dag(Path(plan["root"]), workers,
-                                     task_id=task_id)
+            journal = _open_dag_journal(root_path, task_id, workers)
+        except OSError as exc:
+            # no journal -> no traceable task: fail closed, run nothing
+            return _tool_error(
+                f"journal unavailable (fail-closed, nothing "
+                f"executed): {type(exc).__name__}: {exc}")
+        try:
+            report = run_workers_dag(
+                root_path, workers, task_id=task_id, journal=journal,
+                execution_id_factory=execution_id_factory)
         except Exception as exc:
             # Refused to start or died catastrophically: report the real
             # state, never a fabricated success (partial = partial).
+            _close_dag_journal(journal, task_id, ok=False,
+                               reason=type(exc).__name__)
             return _tool_error(
                 f"orchestration aborted: {type(exc).__name__}: {exc}")
+        _close_dag_journal(journal, task_id, ok=None)
 
         states: dict[str, Any] = report.get("states") or {}
 
@@ -2107,7 +2376,8 @@ def _restore_snapshot(root: Path, snap: dict[str, Any]) -> dict[str, Any]:
 
 
 def _run_in_place(root: Path, worker: dict[str, Any],
-                  task_id: str) -> dict[str, Any]:
+                  task_id: str,
+                  execution_id: str | None = None) -> dict[str, Any]:
     """Phase 10 `in_place_atomic` execution: run cmd on the CURRENT
     branch tip, verify every observed change stays strictly inside
     declared_scope, and roll back to `pre_head` on ANY failure (cmd
@@ -2166,7 +2436,7 @@ def _run_in_place(root: Path, worker: dict[str, Any],
         termination=termination,
         stdout=(proc.stdout or "") if proc is not None else "",
         stderr=(proc.stderr or "") if proc is not None else "",
-        known_policy_command=False)
+        known_policy_command=False, execution_id=execution_id)
     try:
         observed = _observed_paths(root)
     except Exception as exc:
@@ -2255,6 +2525,7 @@ def _run_in_place(root: Path, worker: dict[str, Any],
         "ok": ready_to_push,
         "task_id": task_id,
         "worker_id": worker.get("id"),
+        "execution_id": execution.get("execution_id"),
         "declared_scope": declared,
         "observed": observed,
         "snapshot_id": snapshot_id,
@@ -2276,8 +2547,9 @@ def _run_in_place(root: Path, worker: dict[str, Any],
         evidence.write_to(artifact, sealed)
         # Phase 11.2: canonical commit-bound tip evidence
         if not wip and head_after:
-            tip_artifact = (common_paths.get_state_dir(root)
-                            / "verify-tip" / f"{head_after[:12]}.evidence.json")
+            tip_artifact = (common_paths.get_verify_tip_dir(root)
+                            / f"{head_after[:12]}-{tree_after[:12]}"
+                              ".evidence.json")
             try:
                 tip_sealed = evidence.seal({
                     "schema": evidence.SCHEMA_VALIDATED,
@@ -2308,7 +2580,8 @@ def _run_in_place(root: Path, worker: dict[str, Any],
                                == validation.VALIDATION_PASS
                                else "VALIDATION_" + validation_state),
                 })
-                evidence.write_to(tip_artifact, tip_sealed)
+                _write_tip_evidence(tip_artifact, tip_sealed,
+                                    head_after, tree_after)
             except OSError:
                 pass
     except OSError as exc:
@@ -2340,7 +2613,9 @@ def _run_in_place(root: Path, worker: dict[str, Any],
             "authorized_to_ship": False}
 
 
-def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
+def asha_dispatch_task(arguments: dict[str, Any], *,
+                       task_id_factory: Callable[[], str] | None = None
+                       ) -> dict[str, Any]:
     """Validation -> classify -> route -> GovernedScheduler -> result.
 
     Fail-closed ladder: unknown input fields (including anything that
@@ -2496,22 +2771,37 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
         # single authorization point: the fast flag is the ROUTER's
         # own decision (env AND proven-disjoint-coherent), never raw input
         sched_fast = decision.mode is RuntimeMode.FAST_PATH
-        task_id = "mcp-" + os.urandom(6).hex()
+        task_id = _new_task_id(task_id_factory)
+        execution_id = validation.new_execution_id()
+        journal = _open_task_journal(
+            root, task_id, worker_id=wid, execution_id=execution_id,
+            target_files=list(declared), execution_mode=execution_mode)
         run_started = perf_counter_ns()
         try:
             if execution_mode == "in_place_atomic":
-                report = _run_in_place(root, worker, task_id)
+                report = _run_in_place(root, worker, task_id,
+                                       execution_id=execution_id)
             else:
                 report = run_worker_in_worktree(
                         root, worker, task_id=task_id, fast_path=sched_fast,
                         fast_path_classification=decision.classification
-                        or "UNKNOWN")
+                        or "UNKNOWN", execution_id=execution_id)
         except Exception as exc:
+            _close_task_journal(journal, ok=False, task_id=task_id,
+                                worker_id=wid,
+                                execution_id=execution_id,
+                                evidence_id=None, validation_result=None,
+                                state="ABORTED")
             return _tool_error(
                 f"orchestration aborted: {type(exc).__name__}: {exc}")
         if report.get("refusal"):
             # clean-tree precondition re-failed at execution time:
             # immediate refusal, nothing executed, nothing written
+            _close_task_journal(journal, ok=False, task_id=task_id,
+                                worker_id=wid,
+                                execution_id=execution_id,
+                                evidence_id=None, validation_result=None,
+                                state="REFUSED")
             return _tool_error(str(report["refusal"]))
         scheduler_ms = (perf_counter_ns() - run_started) / 1e6
         states: dict[str, Any] = report.get("states") or {}
@@ -2530,7 +2820,12 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
                              (report.get("reason_code")
                               or report.get("reason"))),
             "classification_reason": classification.reason_code,
-            "executed": bool(states) or report.get("state") is not None,
+            # a state record is not an execution: a classification or
+            # baseline refusal leaves a state behind with no process
+            "executed": _execution_ran(states.get(wid) or {}, report),
+            "verification_status": (states.get(wid) or {}).get(
+                "verification_status"),
+            "exit_status": (states.get(wid) or {}).get("exit_status"),
             "runtime_mode": decision.mode.value,
             "routing_reason": decision.reason_code,
             "fast_path_enabled": fast_env,
@@ -2565,7 +2860,10 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
             report.get("validation_result")
             or report.get("validation_status")
             or validation.VALIDATION_NOT_CONFIGURED)
+        worker_state = states.get(wid) or {}
         payload["ready_to_push"] = bool(report.get("ready_to_push"))
+        if isinstance(payload.get("timings"), dict)                 and worker_state.get("execution_ms") is not None:
+            payload["timings"]["execution_ms"] = worker_state["execution_ms"]
         if isinstance(report.get("execution"), dict):
             payload["execution"] = report["execution"]
         payload["validation_status"] = (
@@ -2588,6 +2886,18 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
             payload["rollback"] = report.get("rollback")
         if report.get("reason"):
             payload["reason"] = report.get("reason")
+        if isinstance(payload.get("execution"), dict):
+            payload["execution"].setdefault("execution_id",
+                                             execution_id)
+        _close_task_journal(
+            journal,
+            ok=payload.get("state") == "DONE",
+            task_id=task_id, worker_id=wid, execution_id=execution_id,
+            evidence_id=(report.get("evidence") or {}).get(
+                "evidence_sha256"),
+            validation_result=payload.get("validation_status"),
+            state=str(payload.get("state") or "UNKNOWN"))
+        payload["execution_id"] = execution_id
         return _tool_ok(payload)
     except ValueError as exc:
         return _tool_error(str(exc))

@@ -170,8 +170,9 @@ def test_verify_stack_tampered_evidence(tmp_path: Path) -> None:
     _git(repo, "checkout", "-q", "-b", "s1")
     _commit(repo, "pkg/one.py", "ONE = 1\n", "s1")
     head = _seal_tip_for_head(repo)
-    artifact = (common_paths.get_state_dir(repo) / "verify-tip"
-                / f"{head[:12]}.evidence.json")
+    tree = _git(repo, "rev-parse", f"{head}^{{tree}}").strip()
+    artifact = (common_paths.get_verify_tip_dir(repo)
+                / f"{head[:12]}-{tree[:12]}.evidence.json")
     payload = json.loads(artifact.read_text(encoding="utf-8"))
     payload["authorized_to_ship"] = True  # tamper: digest no longer matches
     artifact.write_text(json.dumps(payload), encoding="utf-8", newline="\n")

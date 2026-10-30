@@ -365,6 +365,20 @@ def _blocked_group(reason: str, names: list[str], label: str) -> list[dict]:
     } for name in names]
 
 
+def _tool_unavailable(name: str, output: str) -> str | None:
+    """Name the check tool that was never installed, or None.
+
+    Only the check's OWN tool counts: a test that imports a missing
+    module is a real failure and must stay one.
+    """
+    text = output or ''
+    for marker in (f"No module named '{name}'", f'No module named "{name}"',
+                   f'{name}: command not found',
+                   f'No module named {name}'):
+        if marker in text:
+            return name
+    return None
+
 def _run_group(root: Path, names: list[str], changed_py: list[str],
                label: str, timeout_s: int,
                deps_root: Path | None) -> list[dict]:
@@ -412,10 +426,19 @@ def _run_group(root: Path, names: list[str], changed_py: list[str],
             results.append(entry)
             continue
         entry['exit_code'] = proc.returncode
-        entry['status'] = 'passed' if proc.returncode == 0 else 'failed'
-        if name == 'pytest' and proc.returncode != 0:
-            entry['note'] = _pytest_exit_note(proc.returncode)
         combined = (proc.stdout or '') + (proc.stderr or '')
+        missing = _tool_unavailable(name, combined)
+        if missing:
+            # the tool was never installed: an environment gap, not a
+            # failure of the code under test, and never an unparseable
+            # baseline that blames the worker
+            entry['status'] = 'skipped'
+            entry['launched'] = False
+            entry['note'] = 'tool unavailable: ' + missing
+        else:
+            entry['status'] = 'passed' if proc.returncode == 0 else 'failed'
+            if name == 'pytest' and proc.returncode != 0:
+                entry['note'] = _pytest_exit_note(proc.returncode)
         entry['output_tail'] = redact_secrets(combined[-TAIL_CHARS:])
         entry['stdout_sha256'] = validation_digest(proc.stdout or '')
         entry['stderr_sha256'] = validation_digest(proc.stderr or '')

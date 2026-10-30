@@ -71,10 +71,14 @@ def _payload(result: dict) -> dict:
     return json.loads(result["content"][0]["text"])
 
 
+def _tip_artifact(repo: Path, head: str, tree: str | None = None) -> Path:
+    tree = tree or _git(repo, "rev-parse", "HEAD^{tree}").strip()
+    return (common_paths.get_verify_tip_dir(repo)
+            / f"{head[:12]}-{tree[:12]}.evidence.json")
+
+
 def _sealed(repo: Path, head: str) -> dict:
-    path = (common_paths.get_state_dir(repo) / "verify-tip"
-            / f"{head[:12]}.evidence.json")
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(_tip_artifact(repo, head).read_text(encoding="utf-8"))
 
 
 def _seal_artifact(repo: Path, head: str, **overrides: object) -> Path:
@@ -85,6 +89,7 @@ def _seal_artifact(repo: Path, head: str, **overrides: object) -> Path:
         "scope": "S2",
         "commit": head,
         "tree_hash": _git(repo, "rev-parse", "HEAD^{tree}").strip(),
+        "snapshot_id": "0" * 64,
         "observed_at": evidence.now_iso(),
         "execution": {"argv": ["true"], "exit_code": 0,
                       "termination": "exited", "duration_ms": 1,
@@ -104,8 +109,7 @@ def _seal_artifact(repo: Path, head: str, **overrides: object) -> Path:
     }
     payload.update(overrides)
     sealed = evidence.seal(payload)
-    path = (common_paths.get_state_dir(repo) / "verify-tip"
-            / f"{head[:12]}.evidence.json")
+    path = _tip_artifact(repo, head, str(payload["tree_hash"]))
     evidence.write_to(path, sealed)
     return path
 
@@ -413,3 +417,48 @@ def test_validation_timeout_is_blocked_not_passed(tmp_path: Path) -> None:
     assert entries[0]["launched"] is False
     assert validation.validation_status(entries)[0] == \
         validation.VALIDATION_BLOCKED
+
+
+def test_seal_without_snapshot_identity_is_tampered(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    tree = _git(repo, "rev-parse", "HEAD^{tree}").strip()
+    path = _seal_artifact(repo, head, snapshot_id=None)
+    sealed = json.loads(path.read_text(encoding="utf-8"))
+    assert server._artifact_evidence_state(sealed, head, tree) == "tampered"
+
+
+def test_seal_with_malformed_snapshot_identity_is_tampered(
+        tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    tree = _git(repo, "rev-parse", "HEAD^{tree}").strip()
+    path = _seal_artifact(repo, head, snapshot_id="short")
+    sealed = json.loads(path.read_text(encoding="utf-8"))
+    assert server._artifact_evidence_state(sealed, head, tree) == "tampered"
+def test_ship_authority_claim_is_tampering(tmp_path: Path) -> None:
+    """A recomputed digest cannot make a ship-authority claim trustworthy."""
+    repo = _repo(tmp_path)
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    tree = _git(repo, "rev-parse", "HEAD^{tree}").strip()
+    path = _seal_artifact(repo, head, authorized_to_ship=True)
+    sealed = json.loads(path.read_text(encoding="utf-8"))
+    # the digest is internally consistent; only the semantic check can catch it
+    assert sealed["evidence_sha256"] == evidence.compute_digest(sealed)
+    assert server._artifact_evidence_state(sealed, head, tree) == "tampered"
+
+
+def test_stack_rejects_ship_authority_claim(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _git(repo, "checkout", "-q", "-b", "b1")
+    _write(repo / "pkg/b1.py", "ONE = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "b1")
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    _seal_artifact(repo, head, authorized_to_ship=True)
+
+    payload = _payload(server.asha_verify_stack(
+        {"root": str(repo), "branches": ["b1"], "base_ref": "main"}))
+    assert payload["stack_healthy"] is False
+    assert payload["branches"][0]["evidence"] == "tampered"
+    assert payload["branches"][0]["status"] == "STACK_EVIDENCE_TAMPERED"

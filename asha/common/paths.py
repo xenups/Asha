@@ -51,9 +51,52 @@ def _repo_id(repo_root: Path) -> str:
     return f"{digest}-{Path(repo_root).name}"
 
 
+def _shared_root(repo_root: Path) -> Path:
+    """The MAIN worktree root for a linked worktree, else the path itself.
+
+    Evidence is keyed by repository identity (remote URL), and a stacked-PR
+    workflow checks each branch out in its own worktree. Without this, a seal
+    written in a worktree is invisible to ``--stack`` run from the main
+    checkout, so a fully verified stack still reads "0/N sealed".
+    """
+    root = Path(repo_root)
+    marker = root / '.git'
+    try:
+        if marker.is_file():
+            text = marker.read_text(encoding='utf-8', errors='replace').strip()
+            if text.startswith('gitdir:'):
+                gitdir = Path(text.split(':', 1)[1].strip())
+                if not gitdir.is_absolute():
+                    gitdir = (root / gitdir).resolve()
+                # <main>/.git/worktrees/<id> -> <main>; anything shallower is
+                # not a linked worktree (fail back to the caller's path).
+                if len(gitdir.parents) >= 3 and gitdir.parent.name == 'worktrees':
+                    return gitdir.parents[2]
+    except OSError:
+        return root
+    return root
+
+
 def get_state_dir(repo_root: Path) -> Path:
-    """Zone-2 root for a repository: <state-root>/<repo-id>/."""
-    return _state_root() / _repo_id(Path(repo_root))
+    """Zone-2 root for ONE checkout: <state-root>/<checkout-id>/.
+
+    Keyed by the resolved checkout PATH, not repository identity: two
+    checkouts of one remote that happen to share a basename (clones, or
+    worktrees added under same-named directories) would otherwise share
+    telemetry, locks, journals and orchestrator state.
+    """
+    root = Path(repo_root).resolve()
+    digest = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:16]
+    return _state_root() / f"{digest}-{root.name}"
+
+
+def get_verify_tip_dir(repo_root: Path) -> Path:
+    """Sealed verify-tip evidence: <state-root>/<main-repo-id>/verify-tip/.
+
+    The ONE store shared across linked worktrees: ``--stack`` reads every
+    branch's seal from the main checkout.
+    """
+    return _state_root() / _repo_id(_shared_root(repo_root)) / "verify-tip"
 
 
 def get_evidence_dir(repo_root: Path) -> Path:

@@ -27,11 +27,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+from collections.abc import Callable
 from contextlib import suppress as _suppress
 from pathlib import Path
 from typing import Any
 
-from asha import check_runner, evidence, scope_resolver, scoping
+from asha import check_runner, evidence, scope_resolver, scoping, validation
 from asha.common import paths as common_paths
 from asha.conflict import covered
 from asha.governance import delta
@@ -64,10 +66,13 @@ def execute_with_audit(worker: dict[str, Any], worktree: Path
     timeout = worker.get("timeout")
     if timeout is None:
         timeout = WORKER_TIMEOUT_S
+    started = time.monotonic()
     result = dispatch_runner(worker).execute(worker, worktree, timeout)
+    elapsed_ms = int((time.monotonic() - started) * 1000)
     combined = (result.stdout or "") + (result.stderr or "")
-    return (result.exit_code, combined[-TAIL_CHARS:],
-            dict(result.audit_metadata or {}))
+    audit = dict(result.audit_metadata or {})
+    audit.setdefault("duration_ms", elapsed_ms)
+    return result.exit_code, combined[-TAIL_CHARS:], audit
 
 
 def default_execute(worker: dict[str, Any], worktree: Path
@@ -719,6 +724,8 @@ def run_worker_in_worktree(
     fast_path: bool = False,
     fast_path_classification: str = "UNKNOWN",
     preserve_on_failure: bool = False,
+    execution_id: str | None = None,
+    execution_id_factory: Callable[[], str] | None = None,
 ) -> dict[str, Any]:
     """Execute ONE worker through the modular path (H.2.1-C/D).
 
@@ -744,6 +751,11 @@ def run_worker_in_worktree(
     base_commit = dispatcher.base_commit
     base_tree = dispatcher.base_tree
     wid = worker["id"]
+    # one identity per worker-command invocation: the caller may own it
+    # (MCP dispatch already minted one), otherwise it is minted here.
+    if execution_id is None:
+        execution_id = (execution_id_factory
+                        or validation.new_execution_id)()
     states: dict[str, Any] = {}
     evidence_paths: dict[str, str] = {}
     authoritative: dict[str, bytes] = {}
@@ -759,7 +771,9 @@ def run_worker_in_worktree(
                 result = execute_with_audit(worker, repo)
             except subprocess.TimeoutExpired:
                 outcome = {"state": "FAILED",
-                           "reason": "timeout_exceeded", "evidence": None}
+                           "reason": "timeout_exceeded",
+                           "evidence": None,
+                           "execution_id": execution_id}
                 states[wid] = outcome
                 return _report(task_id, states, evidence_paths,
                                authoritative, dispatcher)
@@ -777,7 +791,9 @@ def run_worker_in_worktree(
                 result = execute_with_audit(worker, path)
             except subprocess.TimeoutExpired:
                 outcome = {"state": "FAILED",
-                           "reason": "timeout_exceeded", "evidence": None}
+                           "reason": "timeout_exceeded",
+                           "evidence": None,
+                           "execution_id": execution_id}
                 states[wid] = outcome
                 return _report(task_id, states, evidence_paths,
                                authoritative, dispatcher, created_path,
@@ -786,7 +802,8 @@ def run_worker_in_worktree(
                 outcome = {"state": "FAILED",
                            "reason": f"execution_error:{type(exc).__name__}: "
                                      f"{exc}",
-                           "evidence": None}
+                           "evidence": None,
+                           "execution_id": execution_id}
                 states[wid] = outcome
                 return _report(task_id, states, evidence_paths,
                                authoritative, dispatcher, created_path,
@@ -800,6 +817,7 @@ def run_worker_in_worktree(
                 audit=audit,
                 baseline_deferred=True,
                 repo=repo)
+        outcome["execution_id"] = execution_id
         states[wid] = outcome
         if outcome.get("evidence"):
             evidence_paths[wid] = outcome["evidence"]
@@ -977,7 +995,8 @@ def collect_worker_evidence(
         reason = "acceptance_failed" if acceptance_failed(acceptance) \
             else f"worker_exit_{rc}"
         return {"state": "FAILED", "reason": reason,
-                "evidence": None, "acceptance": acceptance,
+                "evidence": None, "exit_status": rc,
+                "acceptance": acceptance,
                 "comparison": comparison}
     try:
         dirty = [line for line in
@@ -1031,6 +1050,8 @@ def collect_worker_evidence(
         checks = _run_checks(decision, path, resolved, deps_root=deps_root)
         failed = [entry["name"] for entry in checks
                   if entry["status"] == "failed"]
+        validation_state, _validation_rule = validation.validation_status(
+            checks)
         if checks and all(entry["status"] == "skipped"
                           for entry in checks):
             return {"state": "INVALID_EVIDENCE",
@@ -1066,10 +1087,13 @@ def collect_worker_evidence(
         if (baseline_deferred
                 and comparison["detail"] == "baseline_failures_unparsed"):
             return {
+                # not DONE: an unattributable baseline authorizes nothing
                 "state": "FAILED",
                 "reason": "comparison_inconclusive:" + str(
                     comparison["detail"] or comparison["reason"]),
                 "evidence": None,
+                "exit_status": rc,
+                "verification_status": "COMPARISON_INCONCLUSIVE",
                 "verdict": verdict,
                 "comparison": comparison,
                 "current_failures": [
@@ -1144,6 +1168,8 @@ def collect_worker_evidence(
             "writes_observed": writes_observed,
             "diff": diff,
             "exit_status": rc,
+            "execution_ms": (audit or {}).get("duration_ms"),
+            "validation_status": validation_state,
             "acceptance": acceptance,
             "comparison": comparison,
         }
@@ -1181,9 +1207,20 @@ def collect_worker_evidence(
         "state": "FAILED" if blocked else "DONE",
         "reason": ("verification_failed:" + ",".join(failed)) if blocked
         else None,
+        "exit_status": rc,
+        "verification_status": (
+            ("REGRESSION_DETECTED" if new_fails else
+             "BASELINE_FAILED" if base_fails else "VERIFICATION_FAILED")
+            if blocked else
+            ("VERIFIED_SUCCESS" if not comparison["performed"]
+             else "VERIFIED_NO_REGRESSION")),
         "evidence": str(evi_path),
         "observed": list(observed), "target_tree": target_tree,
         "applied": bool(observed), "writes_observed": writes_observed,
+        "execution_ms": (audit or {}).get("duration_ms"),
+        "validation_status": validation_state,
+        "ready_to_push": (validation_state == "PASS" and not blocked
+                          and bool(observed)),
         "acceptance": acceptance, "comparison": comparison}
     if delta_ran:
         done["verdict"] = verdict

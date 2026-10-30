@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -69,6 +70,33 @@ def serialize_event(event: dict[str, Any]) -> str:
     return json.dumps(body, sort_keys=True, separators=(',', ':')) + '\n'
 
 
+CORRELATION_FIELDS = ('request_id', 'task_id', 'worker_id',
+                      'execution_id')
+
+
+def with_correlation(payload: dict[str, Any],
+                     **correlation: Any) -> dict[str, Any]:
+    """Copy of ``payload`` carrying the correlation ids that REALLY exist.
+
+    An absent/None id is never fabricated. An existing payload key with a
+    DIFFERENT value fails closed: two tasks can never share one event.
+    """
+    unknown = set(correlation) - set(CORRELATION_FIELDS)
+    if unknown:
+        raise ValueError('unknown correlation field: '
+                         + ', '.join(sorted(unknown)))
+    merged = dict(payload)
+    for key in CORRELATION_FIELDS:
+        value = correlation.get(key)
+        if value is None:
+            continue
+        if key in merged and merged[key] != value:
+            raise ValueError(f'correlation collision on {key}: '
+                             f'{merged[key]!r} != {value!r}')
+        merged[key] = value
+    return merged
+
+
 def validate_event(event: dict[str, Any]) -> None:
     """Minimum structural contract; raises TypeError/ValueError when
     violated."""
@@ -106,6 +134,9 @@ class EventJournalWriter:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._handle = self.path.open('ab')
         self._closed = False
+        # concurrent workers append to one run journal: one record per
+        # locked write keeps the JSONL lines whole
+        self._lock = threading.Lock()
 
     def _new_event(self, event_type: str,
                    payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -127,10 +158,11 @@ class EventJournalWriter:
         if self._closed:
             raise ValueError('journal is closed')
         event = self._new_event(event_type, payload)
-        self._handle.write(serialize_event(event).encode('utf-8'))
-        self._handle.flush()
-        if critical or event_type in CRITICAL_EVENTS:
-            os.fsync(self._handle.fileno())
+        with self._lock:
+            self._handle.write(serialize_event(event).encode('utf-8'))
+            self._handle.flush()
+            if critical or event_type in CRITICAL_EVENTS:
+                os.fsync(self._handle.fileno())
         return event
 
     def close(self) -> None:

@@ -224,8 +224,9 @@ def _tip(repo: Path, **kwargs: Any) -> dict[str, Any]:
 
 
 def _artifact_path(repo: Path, head: str) -> Path:
-    return (common_paths.get_state_dir(repo) / "verify-tip"
-            / f"{head[:12]}.evidence.json")
+    tree = _git(repo, "rev-parse", f"{head}^{{tree}}").strip()
+    return (common_paths.get_verify_tip_dir(repo)
+            / f"{head[:12]}-{tree[:12]}.evidence.json")
 
 
 def test_verify_tip_clean_tip_seals_evidence(tmp_path: Path) -> None:

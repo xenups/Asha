@@ -30,8 +30,10 @@ them as legacy, never as verified.
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from .check_runner import redact_secrets
@@ -59,17 +61,24 @@ def digest_text(text: str) -> str:
     return hashlib.sha256((text or '').encode('utf-8', 'replace')).hexdigest()
 
 
+def new_execution_id() -> str:
+    """Identity of ONE executed command: a retry is a new execution."""
+    return 'exec-' + os.urandom(6).hex()
+
+
 def execution_record(argv: list[str], cwd_label: str, *,
                      started_at: str, duration_ms: int,
                      exit_code: int | None, termination: str,
                      stdout: str, stderr: str,
-                     known_policy_command: bool) -> dict[str, object]:
+                     known_policy_command: bool,
+                     execution_id: str | None = None) -> dict[str, object]:
     """One executed command, described by what actually happened.
 
     ``known_policy_command`` is False unless the caller declared this command
     as (part of) the validation policy; it never implies success by itself.
     """
     return {
+        'execution_id': execution_id or new_execution_id(),
         'argv': [redact_secrets(arg) for arg in argv],
         'cwd': cwd_label,
         'started_at': started_at,
@@ -136,17 +145,24 @@ def push_readiness(*, execution: dict[str, object], validation: str,
 
 
 def run_validation_commands(commands: list[list[str]], root: Path,
-                            timeout_s: int = VALIDATION_TIMEOUT_S
+                            timeout_s: int = VALIDATION_TIMEOUT_S, *,
+                            execution_id_factory: Callable[[], str]
+                            | None = None
                             ) -> list[dict]:
     """Execute each explicitly configured validation command.
 
     Every entry records what ran (argv, exit code, duration, output digests,
     bounded tail) and how it ended. A launch failure or a timeout is recorded
     as failed with ``launched`` False -- never a pass.
+
+    Each entry is ONE invocation: ``execution_id`` is minted per check and
+    attached only when a process actually started (success or timeout), so
+    an entry without an id is an attempt that never reached the OS.
     """
     results: list[dict] = []
     for index, argv in enumerate(commands):
         started = time.monotonic()
+        execution_id = (execution_id_factory or new_execution_id)()
         entry: dict = {
             'name': 'validation[' + str(index) + ']',
             'scope': 'explicit',
@@ -160,6 +176,8 @@ def run_validation_commands(commands: list[list[str]], root: Path,
             proc = subprocess.run(argv, cwd=root, capture_output=True,
                                   text=True, timeout=timeout_s)
         except subprocess.TimeoutExpired as exc:
+            # the process was started (and killed): the attempt has an id
+            entry['execution_id'] = execution_id
             entry['note'] = f'timed out after {timeout_s}s'
             entry['duration_ms'] = int((time.monotonic() - started) * 1000)
             partial = exc.stdout or ''
@@ -174,6 +192,7 @@ def run_validation_commands(commands: list[list[str]], root: Path,
             results.append(entry)
             continue
         entry['launched'] = True
+        entry['execution_id'] = execution_id
         entry['exit_code'] = proc.returncode
         entry['status'] = 'passed' if proc.returncode == 0 else 'failed'
         combined = redact_secrets((proc.stdout or '') + (proc.stderr or ''))

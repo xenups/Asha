@@ -118,7 +118,8 @@ asha-mcp asha_verify_tip /path/to/repo base_ref=origin/main run_checks=true
   `TIP_REBASE_IN_PROGRESS`, `TIP_BASE_UNKNOWN`, `TIP_SCOPE_MISSING`,
   `TIP_CHECKS_FAILED`;
 * pass -> `ok: true` with `snapshot_id`, `evidence_sha256`, and the
-  sealed artifact at `<state>/verify-tip/<head12>.evidence.json`
+  sealed artifact at `<state>/verify-tip/<head12>-<tree12>.evidence.json`
+  (shared by every linked worktree of the repository)
   (digest-bound, tamper-evident; `authorized_to_ship` stays `false` —
   this is verification evidence, never ship authority).
 

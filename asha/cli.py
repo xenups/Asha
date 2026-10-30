@@ -22,7 +22,9 @@ Stream contract
 Exit codes (documented classes)
 -------------------------------
     0    validation completed (SCOPED targeted or canonical COMPLETE),
-         or NO_CHANGES, or evaluation-only (--no-execute) success.
+         or NO_CHANGES.
+         With --no-execute the payload status is EVALUATION_ONLY and no
+         validation verdict exists; nothing was checked.
     1    validation failed (a check reported failed).
     2    operational/engine error (not a git repo, engine failure,
          canonical execution refused on an uncommitted target, or
@@ -73,6 +75,7 @@ SCHEMA_VERSION = 1
 EXIT_OK = 0
 EXIT_VALIDATION_FAILED = 1
 EXIT_ERROR = 2
+EXIT_UNVALIDATED = 3  # nothing was validated; 0 would read as success
 EXIT_INTERRUPTED = 130
 
 _SEP = '─' * 29
@@ -192,11 +195,18 @@ def _run_sealed(root: Path, affected: list[str], classification: Any,
     report = run_worker_in_worktree(
         root, worker, task_id=run_id,
         fast_path=routed.mode is RuntimeMode.FAST_PATH)
-    journal.append('execution_started',
-                   {'worker_id': wid, 'target_files': list(affected),
-                    'acceptance_command': acceptance or None},
-                   critical=True)
     state_report = report.get('states', {}).get(wid) or {}
+    # the worker command's own identity (D-1): the worktree runner
+    # mints it at launch, so every event below can carry the same one
+    execution_id = state_report.get('execution_id')
+    journal.append('execution_started',
+                   telemetry.with_correlation(
+                       {'worker_id': wid,
+                        'target_files': list(affected),
+                        'acceptance_command': acceptance or None},
+                       task_id=run_id, worker_id=wid,
+                       execution_id=execution_id),
+                   critical=True)
     state = state_report.get('state')
     ev_path = (report.get('evidence') or {}).get(wid)
     acceptance_record = state_report.get('acceptance')
@@ -207,9 +217,12 @@ def _run_sealed(root: Path, affected: list[str], classification: Any,
         # validation failure with the real exit code, never a PASS and
         # never a fabricated evidence id.
         journal.append('validation_failed',
-                       {'failed_checks': [],
-                        'acceptance': acceptance_record,
-                        'comparison': comparison_record}, critical=True)
+                       telemetry.with_correlation(
+                           {'failed_checks': [],
+                            'acceptance': acceptance_record,
+                            'comparison': comparison_record},
+                           task_id=run_id, worker_id=wid),
+                       critical=True)
         journal.close()
         return {'validation_result': 'FAIL', 'evidence_id': None,
                 'evidence_verification': None, 'replay_verification': None,
@@ -217,14 +230,21 @@ def _run_sealed(root: Path, affected: list[str], classification: Any,
                 'comparison': comparison_record, 'error': None}
     if not ev_path or state not in ('DONE', 'FAILED'):
         journal.append('execution_failed',
-                       {'state': state or 'UNKNOWN', 'evidence': None,
-                        'comparison': comparison_record},
+                       telemetry.with_correlation(
+                           {'state': state or 'UNKNOWN',
+                            'evidence': None,
+                            'comparison': comparison_record},
+                           task_id=run_id, worker_id=wid),
                        critical=True)
         journal.close()
         raise CliError('EXECUTION_FAILED',
                        f'validation run ended as {state or "UNKNOWN"}')
 
-    journal.append('validation_started', {'worker_id': wid}, critical=True)
+    journal.append('validation_started',
+                   telemetry.with_correlation({'worker_id': wid},
+                                             task_id=run_id,
+                                             worker_id=wid),
+                   critical=True)
     payload = json.loads(Path(ev_path).read_text(encoding='utf-8'))
     checks = list(payload.get('checks') or [])
     failed = [entry['name'] for entry in checks
@@ -241,11 +261,18 @@ def _run_sealed(root: Path, affected: list[str], classification: Any,
     validation = 'FAIL' if ((failed and not excused) or acceptance_bad) else 'PASS'
     if failed and not excused or acceptance_bad:
         journal.append('validation_failed',
-                       {'failed_checks': failed,
-                        'acceptance': acceptance_record,
-                        'comparison': comparison_record}, critical=True)
+                       telemetry.with_correlation(
+                           {'failed_checks': failed,
+                            'acceptance': acceptance_record,
+                            'comparison': comparison_record},
+                           task_id=run_id, worker_id=wid),
+                       critical=True)
 
-    journal.append('sealing_started', {'worker_id': wid}, critical=True)
+    journal.append('sealing_started',
+                   telemetry.with_correlation({'worker_id': wid},
+                                             task_id=run_id,
+                                             worker_id=wid),
+                   critical=True)
     seal_ok = bool(verify_worker_evidence(Path(ev_path)))
     evidence_id = payload.get('evidence_sha256')
     auth = (report.get('authoritative') or {}).get(wid, b'')
@@ -263,8 +290,13 @@ def _run_sealed(root: Path, affected: list[str], classification: Any,
         raise CliError('EVIDENCE_VERIFICATION_FAILED',
                        'sealed evidence failed verification')
     journal.append('sealed',
-                   {'evidence_id': evidence_id if seal_ok else None,
-                    'validation_result': validation}, critical=True)
+                   telemetry.with_correlation(
+                       {'evidence_id': evidence_id if seal_ok else None,
+                        'validation_result': validation},
+                       task_id=run_id, worker_id=wid,
+                       execution_id=(execution_id
+                                     or _execution_id_of(payload))),
+                   critical=True)
     journal.close()
     return {'validation_result': validation,
             'evidence_id': evidence_id if seal_ok else None,
@@ -274,6 +306,17 @@ def _run_sealed(root: Path, affected: list[str], classification: Any,
             'acceptance': acceptance_record,
             'comparison': comparison_record,
             'error': None}
+
+
+def _execution_id_of(evidence_payload: dict[str, Any]) -> str | None:
+    """The execution id recorded INSIDE wSealed evidence, when present --
+    read, never derived: an absent id stays None."""
+    execution = evidence_payload.get('execution')
+    if isinstance(execution, dict):
+        value = execution.get('execution_id')
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 def execute(root: Path, resolved: dict[str, Any],
@@ -446,7 +489,7 @@ _UNIFIED_FLAGS = ('--verify', '--stack', '--context', '--exec')
 # positional PATH binds `root` when it appears before a mode flag, and a
 # mode flag claims the tokens that follow it up to the next known flag.
 _UNIFIED_VALUED = {'--root': 'root', '--base': 'base_ref',
-                   '--ui-out': 'ui_out'}
+                   '--ui-out': 'ui_out', '--acceptance': 'acceptance'}
 _UNIFIED_SWITCHES = {'--json': 'as_json', '--no-color': 'no_color',
                      '--ui': 'ui'}
 _UNIFIED_KNOWN = (set(_UNIFIED_FLAGS) | set(_UNIFIED_VALUED)
@@ -478,7 +521,7 @@ def _parse_unified_argv(argv: list[str]
     two different mode flags is a usage error -- never a guess."""
     options: dict[str, Any] = {'as_json': False, 'no_color': False,
                                'ui': False, 'ui_out': None, 'root': None,
-                               'base_ref': None}
+                               'base_ref': None, 'acceptance': None}
     cut = argv.index('--') if '--' in argv else len(argv)
     head = argv[:cut]
     tail = argv[cut + 1:]
@@ -589,6 +632,13 @@ def _emit_unified(result: dict[str, Any], as_json: bool) -> int:
                  or payload.get('ok') is False
                  or payload.get('stack_healthy') is False)):
         exit_code = EXIT_VALIDATION_FAILED
+    if (exit_code == EXIT_OK and isinstance(payload, dict)
+            and 'unaccounted_paths' in payload
+            and payload.get('validation_result') is None
+            and not payload.get('evidence_id')):
+        # evaluation-only: no check ran, so exit 0 would tell a script
+        # the change was validated
+        exit_code = EXIT_UNVALIDATED
     return exit_code
 
 
@@ -643,9 +693,18 @@ def _unified_cli(argv: list[str]) -> int:
                 return _fail_usage('give the repository either as the positional '
                                   'path or via --root, not both')
             root = args[0]
-        result = asha_verify_tip({
-            'root': root, 'base_ref': base_ref,
-            'run_checks': True, 'declared_scope': [scope_token]})
+        acceptance = options['acceptance']
+        if acceptance:
+            # explicit acceptance replaces the default matrix; both cannot
+            # run, or "which check decided PASS" becomes ambiguous.
+            result = asha_verify_tip({
+                'root': root, 'base_ref': base_ref,
+                'acceptance_command': acceptance,
+                'declared_scope': [scope_token]})
+        else:
+            result = asha_verify_tip({
+                'root': root, 'base_ref': base_ref,
+                'run_checks': True, 'declared_scope': [scope_token]})
     elif mode == '--stack':
         if not args or not all(args):
             return _fail_usage('--stack requires branch names')
@@ -656,6 +715,10 @@ def _unified_cli(argv: list[str]) -> int:
             return _fail_usage('--context requires FILE:SYMBOL selector(s)')
         result = asha_asha({'root': root, 'target': args})
     else:   # --exec
+        if options['acceptance']:
+            return _fail_usage('--acceptance is only valid with --verify '
+                              '(an exec run attests execution, not '
+                              'validation)')
         if not args:
             return _fail_usage('--exec requires a command')
         cmd_argv = (shlex.split(args[0]) if len(args) == 1
@@ -789,11 +852,21 @@ def run_spec_cmd(argv: list[str]) -> int:
         workers = spec.get('workers')
         if not isinstance(workers, list):
             raise OrchestratorError('spec.workers must be a list')
-        report = run_workers_dag(
-            Path(args.root), workers, task_id=task_id,
-            keep_worktrees=args.keep_worktrees,
-            preserve_on_failure=(
-                args.preserve_on_failure or args.keep_worktrees))
+        journal = telemetry.EventJournalWriter(Path(args.root), task_id)
+        journal.append('execution_started',
+                       telemetry.with_correlation(
+                           {'execution_mode': 'dag',
+                            'worker_count': len(workers)},
+                           task_id=task_id), critical=True)
+        try:
+            report = run_workers_dag(
+                Path(args.root), workers, task_id=task_id,
+                keep_worktrees=args.keep_worktrees,
+                journal=journal,
+                preserve_on_failure=(
+                    args.preserve_on_failure or args.keep_worktrees))
+        finally:
+            journal.close()
         if args.apply:
             report['integration'] = _integration_summary(
                 Path(args.root), report).as_dict()
@@ -1015,6 +1088,10 @@ def main(argv: list[str] | None = None) -> int:
                               no_execute=bool(args.no_execute), run_id=run_id,
                               acceptance=args.acceptance)
             payload.update(outcome)
+            if args.no_execute and payload.get('validation_result') is None:
+                # documented evaluation-only mode: say so in the payload,
+                # never let a null verdict read as a pass
+                payload['status'] = 'EVALUATION_ONLY'
             if payload['validation_result'] == 'FAIL':
                 exit_code = EXIT_VALIDATION_FAILED
     except (CliError, git_context.GitContextError) as exc:
