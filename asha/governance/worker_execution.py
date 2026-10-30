@@ -33,15 +33,20 @@ from contextlib import suppress as _suppress
 from pathlib import Path
 from typing import Any
 
-from asha import check_runner, evidence, scope_resolver, scoping, validation
+from asha import check_runner, evidence, scope_resolver, scoping, timeouts, validation
 from asha.common import paths as common_paths
 from asha.conflict import covered
+from asha.execution import (
+    EXECUTION_DEADLINE_EXCEEDED,
+    ExecutionCollectFailed,
+    ExecutionOutcome,
+    ExecutionTimeout,
+)
 from asha.governance import delta
 from asha.runner import dispatch_runner
 from asha.types import (
     TAIL_CHARS,
     WORKER_EVIDENCE_FIELDS,
-    WORKER_TIMEOUT_S,
     OrchestratorError,
 )
 from asha.worktree import (
@@ -54,7 +59,8 @@ from asha.worktree import (
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 
 
-def execute_with_audit(worker: dict[str, Any], worktree: Path
+def execute_with_audit(worker: dict[str, Any], worktree: Path, *,
+                       deadline: timeouts.Deadline | None = None
                        ) -> tuple[int, str, dict[str, Any]]:
     """`default_execute` plus the runner's audit record (verify_* facts).
 
@@ -63,11 +69,13 @@ def execute_with_audit(worker: dict[str, Any], worktree: Path
     evidence needs to record whether a supplied acceptance command
     actually ran and how it exited. No second execution path.
     """
-    timeout = worker.get("timeout")
-    if timeout is None:
-        timeout = WORKER_TIMEOUT_S
+    # One authoritative budget: an explicit worker override (validated, so a
+    # zero, negative, boolean or non-numeric value is refused here instead of
+    # silently meaning "never kill") or the centralized policy.
+    timeout = timeouts.resolve("worker", worker.get("timeout"))
     started = time.monotonic()
-    result = dispatch_runner(worker).execute(worker, worktree, timeout)
+    result = dispatch_runner(worker).execute(worker, worktree, timeout,
+                                             deadline=deadline)
     elapsed_ms = int((time.monotonic() - started) * 1000)
     combined = (result.stdout or "") + (result.stderr or "")
     audit = dict(result.audit_metadata or {})
@@ -75,7 +83,36 @@ def execute_with_audit(worker: dict[str, Any], worktree: Path
     return result.exit_code, combined[-TAIL_CHARS:], audit
 
 
-def default_execute(worker: dict[str, Any], worktree: Path
+def execution_facts(outcome: ExecutionOutcome) -> dict[str, Any]:
+    """The facts a caller may report about one execution outcome.
+
+    Additive by design: every field describes something that was observed, so
+    a report never claims more than the run produced.
+    """
+    return {
+        "execution_outcome": outcome.outcome,
+        "launched": outcome.launched,
+        "exit_code": outcome.exit_code,
+        "timeout_s": outcome.timeout_s,
+        "elapsed_ms": outcome.duration_ms,
+        "process_termination": outcome.process_termination,
+    }
+
+
+def _deadline_stopped(*collections: Any) -> bool:
+    """True when a task Deadline, not a check failure, stopped mandatory work.
+
+    Only the structured execution outcome counts: an operation timeout
+    (``timed_out``) or a genuine failure (``exited``) must never be
+    relabelled as task Deadline exhaustion.
+    """
+    return any(entry.get('termination') == EXECUTION_DEADLINE_EXCEEDED
+               for entries in collections if entries
+               for entry in entries)
+
+
+def default_execute(worker: dict[str, Any], worktree: Path, *,
+                    deadline: timeouts.Deadline | None = None
                     ) -> tuple[int, str]:
     """Production execution: run the worker's primary action in its
     worktree under the worker's `timeout` (WORKER_TIMEOUT_S when
@@ -85,7 +122,8 @@ def default_execute(worker: dict[str, Any], worktree: Path
     runner._spawn (shared by every AgentRunner) -- this hook keeps its
     (rc, tail-of-combined-output) contract byte-for-byte. (Extracted
     verbatim from scheduler.py.)"""
-    code, tail, _audit = execute_with_audit(worker, worktree)
+    code, tail, _audit = execute_with_audit(worker, worktree,
+                                            deadline=deadline)
     return code, tail
 
 
@@ -395,6 +433,8 @@ def baseline_checks(
     base_tree: str,
     repo: Path,
     task_id: str,
+    *,
+    deadline: timeouts.Deadline | None = None,
 ) -> dict:
     """Run verification on the CLEAN worktree (== base tree) BEFORE the
     worker executes. Captures pre-existing failures with the same
@@ -414,7 +454,7 @@ def baseline_checks(
     checks = _run_checks(
         decision, path, resolved,
         timeout_s=check_runner.BASELINE_TIMEOUT_S,
-        deps_root=_deps_root(path, repo))
+        deps_root=_deps_root(path, repo), deadline=deadline)
     return {
         "checks": checks,
         "resolved": resolved,
@@ -605,6 +645,8 @@ def deferred_baseline_checks(
     resolved: dict[str, Any],
     decision: Any,
     deps_root: Path | None = None,
+    *,
+    deadline: timeouts.Deadline | None = None,
 ) -> dict[str, Any] | None:
     """Baseline pass that reuses the CANDIDATE's authoritative decision.
 
@@ -656,7 +698,8 @@ def deferred_baseline_checks(
                 mypy_targets=tuple(base_mypy))
         checks = _run_checks(
             base_decision, wt, base_resolved,
-            timeout_s=check_runner.BASELINE_TIMEOUT_S, deps_root=deps_root)
+            timeout_s=check_runner.BASELINE_TIMEOUT_S, deps_root=deps_root,
+            deadline=deadline)
         journal = {
             "checks": checks,
             "resolved": resolved,
@@ -696,8 +739,9 @@ def _deps_root(path: Path, repo: Path) -> Path | None:
 
 
 def _run_checks(decision, path: Path, resolved: dict,
-                timeout_s: int = check_runner.CHECK_TIMEOUT_S,
-                deps_root: Path | None = None) -> list[dict]:
+                timeout_s: float = check_runner.CHECK_TIMEOUT_S,
+                deps_root: Path | None = None,
+                deadline: timeouts.Deadline | None = None) -> list[dict]:
     """Run the check matrix for a resolved scope (shared by baseline and
     current passes; identical machinery, identical environment)."""
     # Only add the kwarg when it is actually set: unbound runs keep the
@@ -705,14 +749,19 @@ def _run_checks(decision, path: Path, resolved: dict,
     extra: dict[str, Any] = (
         {'deps_root': deps_root} if deps_root is not None else {})
     if decision.eligible:
+        # the baseline pass must keep ITS budget on this path too: dropping
+        # ``timeout`` here silently substituted the 900s check budget
         return check_runner.run_scoped(
             path,
             changed_files=list(resolved["affected_files"]),
             targeted_tests=list(decision.targeted_tests),
             mypy_targets=list(decision.mypy_targets),
+            timeout=timeout_s,
+            deadline=deadline,
             **extra,
         )
-    return check_runner.run(path, resolved, timeout_s=timeout_s, **extra)
+    return check_runner.run(path, resolved, timeout_s=timeout_s,
+                            deadline=deadline, **extra)
 
 
 def run_worker_in_worktree(
@@ -769,6 +818,26 @@ def run_worker_in_worktree(
             base_tree = _git(repo, "rev-parse", "HEAD^{tree}").strip()
             try:
                 result = execute_with_audit(worker, repo)
+            except ExecutionTimeout as exc:
+                # before the generic handler: the typed timeout carries the
+                # facts (which budget, how the child ended)
+                outcome = {"state": "FAILED",
+                           "reason": exc.reason,
+                           "evidence": None,
+                           "execution_id": execution_id,
+                           **execution_facts(exc.execution)}
+                states[wid] = outcome
+                return _report(task_id, states, evidence_paths,
+                               authoritative, dispatcher)
+            except ExecutionCollectFailed as exc:
+                outcome = {"state": "FAILED",
+                           "reason": "output_collection_failed",
+                           "evidence": None,
+                           "execution_id": execution_id,
+                           **execution_facts(exc.execution)}
+                states[wid] = outcome
+                return _report(task_id, states, evidence_paths,
+                               authoritative, dispatcher)
             except subprocess.TimeoutExpired:
                 outcome = {"state": "FAILED",
                            "reason": "timeout_exceeded",
@@ -789,6 +858,26 @@ def run_worker_in_worktree(
             created_path = path
             try:
                 result = execute_with_audit(worker, path)
+            except ExecutionTimeout as exc:
+                outcome = {"state": "FAILED",
+                           "reason": exc.reason,
+                           "evidence": None,
+                           "execution_id": execution_id,
+                           **execution_facts(exc.execution)}
+                states[wid] = outcome
+                return _report(task_id, states, evidence_paths,
+                               authoritative, dispatcher, created_path,
+                               fast_path_classification=fast_path_classification)
+            except ExecutionCollectFailed as exc:
+                outcome = {"state": "FAILED",
+                           "reason": "output_collection_failed",
+                           "evidence": None,
+                           "execution_id": execution_id,
+                           **execution_facts(exc.execution)}
+                states[wid] = outcome
+                return _report(task_id, states, evidence_paths,
+                               authoritative, dispatcher, created_path,
+                               fast_path_classification=fast_path_classification)
             except subprocess.TimeoutExpired:
                 outcome = {"state": "FAILED",
                            "reason": "timeout_exceeded",
@@ -972,6 +1061,7 @@ def collect_worker_evidence(
                             repo: Path | None = None,
                             deps_root: Path | None = None,
                             audit: dict[str, Any] | None = None,
+                            deadline: timeouts.Deadline | None = None,
                             ) -> dict[str, Any]:
     """Extracted GovernedScheduler._collect. `evidence_dir` is the
     scheduler-owned orchestrator dir (external Zone-2), NOT the ship
@@ -1043,11 +1133,19 @@ def collect_worker_evidence(
             # way the two check inventories are genuinely comparable.
             baseline_journal = deferred_baseline_checks(
                 worker, path, effective_base, effective_base_tree,
-                Path(repo), task_id, resolved, decision, deps_root=deps_root)
+                Path(repo), task_id, resolved, decision, deps_root=deps_root,
+                deadline=deadline)
             baseline_checks = (baseline_journal or {}).get("checks")
             baseline_scope = (
                 (baseline_journal or {}).get("resolved") or {}).get("scope")
-        checks = _run_checks(decision, path, resolved, deps_root=deps_root)
+        checks = _run_checks(decision, path, resolved, deps_root=deps_root,
+                             deadline=deadline)
+        # A task Deadline that stopped a mandatory check is the cause; a
+        # parser/comparison complaint further down is only its symptom.
+        if _deadline_stopped(checks, baseline_checks):
+            return {"state": "FAILED", "reason": "deadline_exceeded",
+                    "evidence": None, "exit_status": rc,
+                    "verification_status": "DEADLINE_EXCEEDED"}
         failed = [entry["name"] for entry in checks
                   if entry["status"] == "failed"]
         validation_state, _validation_rule = validation.validation_status(

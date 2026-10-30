@@ -18,14 +18,24 @@ from __future__ import annotations
 
 import os
 import shlex
-import subprocess
 import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from .execution import (
+    EXECUTION_DEADLINE_EXCEEDED,
+    EXECUTION_EXITED,
+    EXECUTION_FAILED_TO_COLLECT,
+    EXECUTION_LAUNCH_FAILED,
+    DeadlineExhausted,
+    ExecutionCollectFailed,
+    ExecutionLaunchFailed,
+    ExecutionTimeout,
+    spawn_capture,
+)
+from .timeouts import Deadline
 from .types import OrchestratorError, RunnerResult
-from .worktree import kill_process_tree
 
 #: Worker values that select a non-default runner (spec field contract).
 KNOWN_RUNNERS = frozenset({'command', 'antigravity'})
@@ -51,26 +61,31 @@ def runner_kind(worker: Mapping[str, Any]) -> str:
 
 def _spawn(argv: list[str], cwd: Path,
            timeout: float,
-           env: dict[str, str] | None = None) -> tuple[int, str, str]:
-    """ONE process primitive for all runners -- same contract
-    default_execute had: spawn failure -> (-1, msg); timeout ->
-    kill_process_tree, then TimeoutExpired propagates for _run_one to
-    map to FAILED/timeout_exceeded."""
-    try:
-        proc = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True,
-                                env=env,
-                                start_new_session=(os.name != 'nt'))
-    except (OSError, subprocess.SubprocessError) as exc:
-        return -1, '', f'{type(exc).__name__}: {exc}'
-    try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        kill_process_tree(proc)
-        raise
-    except (OSError, subprocess.SubprocessError) as exc:
-        return -1, '', f'{type(exc).__name__}: {exc}'
-    return proc.returncode, out or '', err or ''
+           env: dict[str, str] | None = None,
+           deadline: Deadline | None = None) -> tuple[int, str, str]:
+    """ONE process primitive for all runners, now ``execution.spawn_capture``.
+
+    Nothing is fabricated: a child that could not be created raises
+    ``ExecutionLaunchFailed`` (never a synthetic ``-1`` exit code), an
+    exhausted budget raises ``ExecutionTimeout`` carrying the verified
+    outcome, and a proven zero is a real zero.
+    """
+    result = spawn_capture(argv, cwd, timeout_s=timeout, env=env,
+                           deadline=deadline)
+    if result.outcome == EXECUTION_LAUNCH_FAILED:
+        raise ExecutionLaunchFailed(result)
+    if result.outcome == EXECUTION_DEADLINE_EXCEEDED and not result.launched:
+        raise DeadlineExhausted(result)
+    if result.outcome == EXECUTION_FAILED_TO_COLLECT:
+        raise ExecutionCollectFailed(result)
+    if result.outcome == EXECUTION_EXITED:
+        if result.exit_code is None:
+            # an exited child always carries a return code; a missing one is
+            # a broken invariant, never a success
+            raise OrchestratorError(
+                'execution_exited_without_exit_code')
+        return result.exit_code, result.stdout, result.stderr
+    raise ExecutionTimeout(result)
 
 
 def _acceptance_env(argv: list[str]) -> dict[str, str]:
@@ -121,10 +136,12 @@ class BaseAgentRunner:
         raise NotImplementedError
 
     def execute(self, worker_spec: Mapping[str, Any],
-                worktree_path: Path, timeout: float) -> RunnerResult:
+                worktree_path: Path, timeout: float, *,
+                deadline: Deadline | None = None) -> RunnerResult:
         started = time.monotonic()
         argv = self.primary_argv(worker_spec, worktree_path)
-        code, out, err = _spawn(argv, worktree_path, timeout)
+        code, out, err = _spawn(argv, worktree_path, timeout,
+                                deadline=deadline)
         verify = worker_spec.get('verify_command')
         verify_ran = False
         verify_exit: int | None = None
@@ -133,7 +150,8 @@ class BaseAgentRunner:
             verify_ran = True
             vargv = _split_verify(verify)
             verify_exit, vout, verr = _spawn(
-                vargv, worktree_path, timeout, env=_acceptance_env(vargv))
+                vargv, worktree_path, timeout, env=_acceptance_env(vargv),
+                deadline=deadline)
             out, err = out + vout, err + verr
             verify_tail = (vout + verr)[-2000:]
             code = verify_exit

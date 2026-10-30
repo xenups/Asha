@@ -24,10 +24,11 @@ import pytest
 
 from asha import check_runner, evidence, replay, scoping
 from asha.common import paths as common_paths
+from asha.execution import EXECUTION_TIMED_OUT, ExecutionOutcome
 from asha.governance.delta import extract_failures, verdict_for
 from asha.governance.worker_execution import _failed_check_details
 from asha.scheduler import GovernedScheduler, _safe_id, verify_worker_evidence
-from asha.types import OrchestratorError
+from asha.types import TERMINATION_CONFIRMED, OrchestratorError
 
 PY = sys.executable
 GITIGNORE = '.jspace/\n__pycache__/\n*.pyc\n.pytest_cache/\n'
@@ -796,6 +797,16 @@ def test_worker_metadata_keys_are_additive_only(
 # explicit timeout evidence on BOTH execution paths
 # ---------------------------------------------------------------------------
 
+def _timed_out(stdout: str = '', *, timeout_s: float = 900.0) -> ExecutionOutcome:
+    """The outcome of a check killed at its budget: partial output, no code."""
+    return ExecutionOutcome(
+        argv=('pytest',), cwd='.', outcome=EXECUTION_TIMED_OUT,
+        exit_code=None, stdout=stdout, stderr='', duration_ms=900,
+        timeout_s=timeout_s, launched=True,
+        process_termination=TERMINATION_CONFIRMED,
+        termination_detail='direct child reaped; descendants not verified')
+
+
 def test_run_scoped_ruff_requests_concise_and_identity_parses(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The engine must explicitly request ruff's concise output and the
@@ -803,13 +814,13 @@ def test_run_scoped_ruff_requests_concise_and_identity_parses(
     path:line:col identity -- the rehearsal-v2 failure mode."""
     repo = _repo(tmp_path, {'probe.py': 'import os\n'})
     seen: list[list[str]] = []
-    real_run = subprocess.run
+    real_spawn = check_runner.spawn_capture
 
-    def spy(cmd, **kwargs):
-        seen.append(list(cmd))
-        return real_run(cmd, **kwargs)
+    def spy(argv, cwd, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(list(argv))
+        return real_spawn(argv, cwd, **kwargs)
 
-    monkeypatch.setattr(check_runner.subprocess, 'run', spy)
+    monkeypatch.setattr(check_runner, 'spawn_capture', spy)
     entries = check_runner.run_scoped(
         repo,
         changed_files=['probe.py'],
@@ -827,26 +838,20 @@ def test_run_scoped_ruff_requests_concise_and_identity_parses(
 
 def test_run_timeout_is_explicit_with_retained_tail(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Unscoped path: a pytest timeout must yield FAILED with an
-    explicit timeout note, exit_code -1, and a tail retaining the
-    partial output -- never an empty unexplained diagnostic set."""
+    """Unscoped path: a pytest timeout must yield FAILED with an explicit
+    timeout note, NO exit code (a killed process has none -- -1 was a
+    synthetic sentinel), and a tail retaining the partial output."""
     repo = _repo(tmp_path)
-    real_run = subprocess.run
-
-    def spy(cmd, **kwargs):
-        if 'pytest' in list(cmd):
-            raise subprocess.TimeoutExpired(
-                cmd=cmd, timeout=900, output='partial-progress')
-        return real_run(cmd, **kwargs)
-
-    monkeypatch.setattr(check_runner.subprocess, 'run', spy)
+    monkeypatch.setattr(check_runner, 'spawn_capture',
+                        lambda *a, **kw: _timed_out('partial-progress'))
     entries = check_runner.run(
         repo, {'checks': ['pytest'], 'affected_files': []})
     assert len(entries) == 1
     entry = entries[0]
     assert entry['name'] == 'pytest'
     assert entry['status'] == 'failed'
-    assert entry['exit_code'] == -1
+    assert entry['exit_code'] is None
+    assert entry['launched'] is True
     assert entry['note'].startswith('timed out after')
     assert 'partial-progress' in entry['output_tail']
     assert 'timed out' in entry['output_tail']
@@ -859,15 +864,8 @@ def test_run_scoped_timeout_is_explicit_with_retained_tail(
     repo = _repo(tmp_path, {
         'tests/test_leaf_consumer.py': 'def test_ok():\n    assert True\n',
     })
-    real_run = subprocess.run
-
-    def spy(cmd, **kwargs):
-        if 'pytest' in list(cmd):
-            raise subprocess.TimeoutExpired(
-                cmd=cmd, timeout=900, output='scoped-progress')
-        return real_run(cmd, **kwargs)
-
-    monkeypatch.setattr(check_runner.subprocess, 'run', spy)
+    monkeypatch.setattr(check_runner, 'spawn_capture',
+                        lambda *a, **kw: _timed_out('scoped-progress'))
     entries = check_runner.run_scoped(
         repo,
         changed_files=[],
@@ -900,16 +898,10 @@ def test_timeout_tail_redacts_synthetic_secret_on_both_paths(
     partial_output = (
         f"collecting...\nrequest header: Authorization: Bearer {synthetic_secret}\n")
     assert synthetic_secret in partial_output
-    real_run = subprocess.run
-
-    def spy(cmd, **kwargs):
-        if 'pytest' in list(cmd):
-            raise subprocess.TimeoutExpired(
-                cmd=cmd, timeout=check_runner.CHECK_TIMEOUT_S,
-                output=partial_output)
-        return real_run(cmd, **kwargs)
-
-    monkeypatch.setattr(check_runner.subprocess, 'run', spy)
+    monkeypatch.setattr(
+        check_runner, 'spawn_capture',
+        lambda *a, **kw: _timed_out(partial_output,
+                                    timeout_s=check_runner.CHECK_TIMEOUT_S))
     repo = _repo(tmp_path, {
         'tests/test_secret_timeout.py':
             'def test_ok():\n    assert True\n',

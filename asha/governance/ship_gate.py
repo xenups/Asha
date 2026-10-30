@@ -38,6 +38,7 @@ from pathlib import Path
 
 from asha import audit_snapshot, check_runner, evidence, gate_states, scope_resolver
 from asha.governance import live_reviewer, semantic_review
+from asha.timeouts import DEFAULT_TIMEOUTS
 
 # Policy/rule-set version the sealed decision is bound to. Bumped whenever
 # the authorization rules below change, so an old artifact can never be
@@ -48,7 +49,8 @@ POLICY_VERSION = 'phase2'
 
 # Budget handed to the injected semantic reviewer; a reviewer that blows
 # it raises TimeoutError -> failed check entry -> EXECUTION_FAILED.
-REVIEW_TIMEOUT_S = 900
+#: Compatibility alias: the budget itself lives in asha.timeouts.
+REVIEW_TIMEOUT_S = DEFAULT_TIMEOUTS.review
 
 # Injected executor contract: reviewer(root, snapshot_id, timeout_s)
 # returns the semantic-review/v1 artifact (or raises / returns garbage,
@@ -89,20 +91,22 @@ def _run_reviewer(reviewer: ReviewerFn | None, root: Path,
         }
 
     try:
-        artifact = reviewer(root, snapshot_id, REVIEW_TIMEOUT_S)
+        # the review budget is a whole-second transport limit (Phase 4
+        # owns it); the policy value is float, the reviewer contract is int
+        artifact = reviewer(root, snapshot_id, int(REVIEW_TIMEOUT_S))
     except (TimeoutError, subprocess.TimeoutExpired):
         checks.append({'name': 'semantic-review', 'status': 'failed',
-                       'exit_code': -1,
-                       'note': f'timed out after {REVIEW_TIMEOUT_S}s'})
+                       'exit_code': None,
+                       'note': f'timed out after {int(REVIEW_TIMEOUT_S)}s'})
         return _placeholder('timeout', 'reviewer timed out')
     except Exception as exc:  # any executor crash fails closed
         checks.append({'name': 'semantic-review', 'status': 'failed',
-                       'exit_code': -1,
+                       'exit_code': None,
                        'note': f'crashed: {type(exc).__name__}'})
         return _placeholder('crashed', type(exc).__name__)
     if not isinstance(artifact, dict):
         checks.append({'name': 'semantic-review', 'status': 'failed',
-                       'exit_code': -1,
+                       'exit_code': None,
                        'note': 'malformed reviewer output (non-object)'})
         return _placeholder('malformed', type(artifact).__name__)
     # A completed review is a POLICY check entry too (success path:

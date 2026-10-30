@@ -48,7 +48,15 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import git_context, scope_resolver, scoping, telemetry, ui, watcher
+from . import (
+    git_context,
+    scope_resolver,
+    scoping,
+    telemetry,
+    timeouts,
+    ui,
+    watcher,
+)
 from .classifier import classify_task, governance_profile
 from .governance.dag import run_workers_dag
 from .governance.worker_execution import (
@@ -840,6 +848,13 @@ def run_spec_cmd(argv: list[str]) -> int:
                        help='atomically apply verified worker results onto '
                             'the target branch after the integration gate '
                             '(default: audit-only, target untouched)')
+    run_p.add_argument('--deadline-seconds', type=float, default=None,
+                       metavar='SECONDS',
+                       help='optional budget for the WHOLE run: every '
+                            'command (worker, check, baseline, validation) '
+                            'is capped by what is left of it and nothing new '
+                            'starts once it is spent (default: no task '
+                            'deadline)')
     args = parser.parse_args(argv)
     try:
         spec_path = Path(args.spec)
@@ -852,17 +867,22 @@ def run_spec_cmd(argv: list[str]) -> int:
         workers = spec.get('workers')
         if not isinstance(workers, list):
             raise OrchestratorError('spec.workers must be a list')
+        deadline = (timeouts.Deadline(args.deadline_seconds)
+                    if args.deadline_seconds is not None else None)
         journal = telemetry.EventJournalWriter(Path(args.root), task_id)
         journal.append('execution_started',
                        telemetry.with_correlation(
                            {'execution_mode': 'dag',
-                            'worker_count': len(workers)},
+                            'worker_count': len(workers),
+                            'deadline_s': (deadline.seconds if deadline
+                                           else None)},
                            task_id=task_id), critical=True)
         try:
             report = run_workers_dag(
                 Path(args.root), workers, task_id=task_id,
                 keep_worktrees=args.keep_worktrees,
                 journal=journal,
+                deadline=deadline,
                 preserve_on_failure=(
                     args.preserve_on_failure or args.keep_worktrees))
         finally:

@@ -13,15 +13,22 @@ import os
 import re
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
+from asha.execution import (
+    EXECUTION_DEADLINE_EXCEEDED,
+    EXECUTION_FAILED_TO_COLLECT,
+    EXECUTION_LAUNCH_FAILED,
+    ExecutionOutcome,
+    spawn_capture,
+)
 from asha.governance.env_resolver import (
     EnvironmentResolver,
     ServiceEnvironment,
     resolve_env_for_file,
 )
+from asha.timeouts import DEFAULT_TIMEOUTS, Deadline
 
 TAIL_CHARS = 2000
 
@@ -36,7 +43,7 @@ def validation_digest(text: str) -> str:
 # full-scope worker with an unattributable UNKNOWN delta verdict.
 # 900s = measured runtime + ~20% headroom. Timeout itself stays
 # FAILED + verdict UNKNOWN -- never a pass, never PRE_EXISTING_ONLY.
-CHECK_TIMEOUT_S = 900
+CHECK_TIMEOUT_S = DEFAULT_TIMEOUTS.check
 # Baseline passes run concurrently (one per worker thread, ThreadPoolExecutor)
 # and each is a full-suite run: measured 874-895s solo, >900s under pair
 # contention (rehearsal-v4 baseline artifacts: exit -1, zero identities).
@@ -44,7 +51,7 @@ CHECK_TIMEOUT_S = 900
 # ponytail: if a concurrent pair still exceeds this, compute ONE shared
 # baseline (requires proof of validity across worker worktrees) or serialize
 # the baseline passes.
-BASELINE_TIMEOUT_S = 1800
+BASELINE_TIMEOUT_S = DEFAULT_TIMEOUTS.baseline
 
 # How each check's `scope` field is reported in evidence.json.
 CHECK_SCOPE = {
@@ -311,18 +318,31 @@ def verify_source_binding(env: ServiceEnvironment | None, root: Path,
     return origins
 
 
-def _timeout_tail(exc: subprocess.TimeoutExpired, timeout: int) -> str:
-    """Retained diagnostics for a timed-out check command: the partial
-    output produced before the kill plus the exception text (which
-    carries the exact command and the budget), trimmed to TAIL_CHARS
-    and passed through the secret redactor (this tail is retained in
-    the FAILED worker outcome and reaches the run report).
-    Without this a timeout surfaces as an empty diagnostic set and the
-    delta verdict degrades to an unexplained UNKNOWN."""
-    partial = exc.stdout or ""
-    if isinstance(partial, bytes):
-        partial = partial.decode("utf-8", "replace")
-    joined = (str(partial) + ("\n" if partial else "") + str(exc))
+def _budget_note(result: ExecutionOutcome) -> str:
+    """One line naming which budget ran out -- and how long the child ran.
+
+    The operation budget alone would misdescribe a deadline-capped check
+    ("deadline exceeded after 900s" for a child killed at 2s)."""
+    if result.outcome == EXECUTION_DEADLINE_EXCEEDED:
+        return (f'deadline exceeded after {result.duration_ms / 1000:.1f}s '
+                f'(task budget; operation budget {result.timeout_s:g}s)')
+    return f'timed out after {result.timeout_s:g}s'
+
+
+def _outcome_tail(result: ExecutionOutcome) -> str:
+    """Retained diagnostics for a check that did not exit on its own: the
+    partial output produced before the kill plus one explicit line naming
+    the outcome, the budget and what was verified about termination. Trimmed
+    to TAIL_CHARS and passed through the secret redactor (this tail is
+    retained in the FAILED worker outcome and reaches the run report).
+    Without it a timeout surfaces as an empty diagnostic set and the delta
+    verdict degrades to an unexplained UNKNOWN."""
+    partial = result.stdout or ""
+    reason = _budget_note(result)
+    joined = (partial + ("\n" if partial else "")
+              + reason
+              + f"; process_termination={result.process_termination}"
+              + f"; {result.termination_detail}")
     return _redact_env(joined[-TAIL_CHARS:])
 
 
@@ -380,8 +400,9 @@ def _tool_unavailable(name: str, output: str) -> str | None:
     return None
 
 def _run_group(root: Path, names: list[str], changed_py: list[str],
-               label: str, timeout_s: int,
-               deps_root: Path | None) -> list[dict]:
+               label: str, timeout_s: float,
+               deps_root: Path | None,
+               deadline: Deadline | None = None) -> list[dict]:
     """Run the matrix for one service group in that service's environment."""
     try:
         env = _service_env(root, changed_py, deps_root)
@@ -407,49 +428,58 @@ def _run_group(root: Path, names: list[str], changed_py: list[str],
             results.append(entry)
             continue
         argv = _env_argv(env, name, argv)
-        started = time.monotonic()
-        try:
-            proc = subprocess.run(argv, cwd=cwd, capture_output=True,
-                                  text=True, timeout=timeout_s,
-                                  env=proc_env)
-        except (OSError, subprocess.TimeoutExpired) as exc:
+        result = spawn_capture(argv, cwd=cwd, timeout_s=timeout_s,
+                               env=proc_env, deadline=deadline)
+        entry['launched'] = result.launched
+        entry['exit_code'] = result.exit_code
+        entry['termination'] = result.outcome
+        entry['process_termination'] = result.process_termination
+        entry['timeout_s'] = result.timeout_s
+        entry['duration_ms'] = result.duration_ms
+        if result.outcome == EXECUTION_LAUNCH_FAILED:
             entry['status'] = 'failed'
-            entry['exit_code'] = -1
-            if isinstance(exc, subprocess.TimeoutExpired):
-                entry['note'] = f'timed out after {timeout_s}s'
-                entry['output_tail'] = _timeout_tail(exc, timeout_s)
-            else:
-                entry['launched'] = False
-                entry['note'] = f'launch failed: {type(exc).__name__}: {exc}'
-                entry['output_tail'] = str(exc)
-            entry['duration_ms'] = int((time.monotonic() - started) * 1000)
+            entry['note'] = 'launch failed: ' + result.termination_detail
+            entry['output_tail'] = redact_secrets(result.stderr[-TAIL_CHARS:])
             results.append(entry)
             continue
-        entry['exit_code'] = proc.returncode
-        combined = (proc.stdout or '') + (proc.stderr or '')
+        if result.outcome == EXECUTION_FAILED_TO_COLLECT:
+            entry['status'] = 'failed'
+            entry['note'] = ('output collection failed: '
+                             + result.termination_detail)
+            entry['output_tail'] = redact_secrets(result.stderr[-TAIL_CHARS:])
+            results.append(entry)
+            continue
+        if result.timed_out:
+            entry['status'] = 'failed'
+            entry['note'] = _budget_note(result)
+            entry['output_tail'] = _outcome_tail(result)
+            results.append(entry)
+            continue
+        combined = (result.stdout or '') + (result.stderr or '')
         missing = _tool_unavailable(name, combined)
         if missing:
             # the tool was never installed: an environment gap, not a
             # failure of the code under test, and never an unparseable
-            # baseline that blames the worker
+            # baseline that blames the worker. The command DID run, so
+            # `launched` stays True: "skipped" is the verdict, not
+            # "no process existed".
             entry['status'] = 'skipped'
-            entry['launched'] = False
             entry['note'] = 'tool unavailable: ' + missing
         else:
-            entry['status'] = 'passed' if proc.returncode == 0 else 'failed'
-            if name == 'pytest' and proc.returncode != 0:
-                entry['note'] = _pytest_exit_note(proc.returncode)
+            entry['status'] = 'passed' if result.exit_code == 0 else 'failed'
+            if name == 'pytest' and result.exit_code != 0:
+                entry['note'] = _pytest_exit_note(int(result.exit_code or 0))
         entry['output_tail'] = redact_secrets(combined[-TAIL_CHARS:])
-        entry['stdout_sha256'] = validation_digest(proc.stdout or '')
-        entry['stderr_sha256'] = validation_digest(proc.stderr or '')
-        entry['duration_ms'] = int((time.monotonic() - started) * 1000)
+        entry['stdout_sha256'] = validation_digest(result.stdout or '')
+        entry['stderr_sha256'] = validation_digest(result.stderr or '')
         results.append(entry)
     return results
 
 
 def run(root: Path | str, resolved: dict,
-        timeout_s: int = CHECK_TIMEOUT_S,
-        *, deps_root: Path | None = None) -> list[dict]:
+        timeout_s: float = CHECK_TIMEOUT_S,
+        *, deps_root: Path | None = None,
+        deadline: Deadline | None = None) -> list[dict]:
     """Execute the mandatory checks for a resolved scope.
 
     One group per service root: each runs the full matrix for its own files
@@ -468,7 +498,7 @@ def run(root: Path | str, resolved: dict,
     results: list[dict] = []
     for label, paths in _service_groups(root, changed_py):
         results.extend(_run_group(root, names, paths, label, timeout_s,
-                                  deps_root))
+                                  deps_root, deadline))
     return results
 
 
@@ -505,8 +535,9 @@ def run_scoped(
     changed_files: list[str],
     targeted_tests: list[str],
     mypy_targets: list[str],
-    timeout: int = CHECK_TIMEOUT_S,
+    timeout: float = CHECK_TIMEOUT_S,
     deps_root: Path | None = None,
+    deadline: Deadline | None = None,
 ) -> list[dict[str, Any]]:
     """Dumb executor of an affirmative eligibility decision (spec 1.1).
 
@@ -558,21 +589,34 @@ def run_scoped(
                 entry['note'] = 'no applicable target'
             results.append(entry)
             continue
-        started = time.monotonic()
-        try:
-            proc = subprocess.run(
-                command, cwd=cwd, capture_output=True, text=True,
-                encoding='utf-8', errors='replace', timeout=timeout, env=proc_env,
-            )
-        except subprocess.TimeoutExpired as exc:
+        result = spawn_capture(command, cwd=cwd, timeout_s=timeout,
+                               env=proc_env, deadline=deadline)
+        entry['exit_code'] = result.exit_code
+        entry['termination'] = result.outcome
+        entry['process_termination'] = result.process_termination
+        entry['timeout_s'] = result.timeout_s
+        entry['launched'] = result.launched
+        entry['duration_ms'] = result.duration_ms
+        if result.outcome == EXECUTION_LAUNCH_FAILED:
             entry['status'] = 'failed'
-            entry['note'] = f'timed out after {timeout}s'
-            entry['output_tail'] = _timeout_tail(exc, timeout)
-            entry['duration_ms'] = int((time.monotonic() - started) * 1000)
+            entry['note'] = 'launch failed: ' + result.termination_detail
+            entry['output_tail'] = _redact_env(result.stderr[-TAIL_CHARS:])
             results.append(entry)
             continue
-        entry['exit_code'] = proc.returncode
-        if name == 'pytest' and proc.returncode == 5:
+        if result.outcome == EXECUTION_FAILED_TO_COLLECT:
+            entry['status'] = 'failed'
+            entry['note'] = ('output collection failed: '
+                             + result.termination_detail)
+            entry['output_tail'] = _redact_env(result.stderr[-TAIL_CHARS:])
+            results.append(entry)
+            continue
+        if result.timed_out:
+            entry['status'] = 'failed'
+            entry['note'] = _budget_note(result)
+            entry['output_tail'] = _outcome_tail(result)
+            results.append(entry)
+            continue
+        if name == 'pytest' and result.exit_code == 5:
             # pytest's documented exit code 5 = no tests collected. The
             # authorized target set contained nothing runnable (e.g. a
             # non-test module under tests/): record it as an explicit
@@ -582,9 +626,8 @@ def run_scoped(
             entry['status'] = 'skipped'
             entry['note'] = 'no_tests_collected'
         else:
-            entry['status'] = 'passed' if proc.returncode == 0 else 'failed'
-        combined = _redact_env((proc.stdout or '') + (proc.stderr or ''))
+            entry['status'] = 'passed' if result.exit_code == 0 else 'failed'
+        combined = _redact_env((result.stdout or '') + (result.stderr or ''))
         entry['output_tail'] = combined[-TAIL_CHARS:]
-        entry['duration_ms'] = int((time.monotonic() - started) * 1000)
         results.append(entry)
     return results

@@ -30,10 +30,19 @@ import threading
 from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import suppress as _suppress
+from functools import partial
 from graphlib import CycleError, TopologicalSorter
 from typing import Any
 
-from asha import dep_index, graph_state, telemetry, validation, worker_graph
+from asha import (
+    dep_index,
+    execution,
+    graph_state,
+    telemetry,
+    timeouts,
+    validation,
+    worker_graph,
+)
 from asha.classifier import classify_task, governance_profile
 from asha.common import paths as common_paths
 from asha.conflict import ConflictManager, covered, scope_status
@@ -68,6 +77,7 @@ class DAGCoordinator:
         classification_context: tuple[Any, ...] = (),
         execution_id_factory: Callable[[], str] | None = None,
         journal: Any = None,
+        deadline: timeouts.Deadline | None = None,
     ) -> None:
         self.repo = repo
         self.workers = list(workers)
@@ -96,6 +106,9 @@ class DAGCoordinator:
         self.execution_ids: dict[str, str] = {}
         # optional run journal: the caller owns opening and closing it
         self.journal = journal
+        # optional task budget: ONE deadline for the whole task, never reset
+        # and never extended by a later stage (None = existing behaviour)
+        self.deadline = deadline
         self.routes: dict[str, dict[str, Any]] = {}
         self.reconcile_log: list[dict[str, Any]] = []
         self.stale_intents_dropped = 0
@@ -105,7 +118,10 @@ class DAGCoordinator:
         self.evidence_dir = (common_paths.get_orchestrator_dir(self.repo)
                              / _safe_id(task_id))
         self._fast_lock = threading.Lock()
-        self.execute = worker_execution.default_execute
+        # the execution hook is bound to the task deadline so every dispatch
+        # (worktree path, fast path, DAG worker) sees the same budget
+        self.execute = partial(worker_execution.default_execute,
+                               deadline=deadline)
 
     # -- small state helpers ------------------------------------------------
 
@@ -139,12 +155,22 @@ class DAGCoordinator:
             return None
         outcome["execution_id"] = execution_id
         state = str(outcome.get("state") or "UNKNOWN")
+        payload: dict[str, Any] = {
+            "worker_id": worker_id, "state": state,
+            "reason": outcome.get("reason"),
+            "evidence": outcome.get("evidence"),
+        }
+        # Timeout facts travel with the existing terminal event (no new event
+        # type): only what the run actually observed, so a reader can
+        # reconstruct which budget ran out and what was verified about the
+        # kill. A launch failure reports no exit code -- and no invented one.
+        for key in ("execution_outcome", "launched", "exit_code", "timeout_s",
+                    "elapsed_ms", "process_termination", "detail"):
+            if key in outcome:
+                payload[key] = outcome[key]
         # one terminal event per worker: sealed only on DONE
         self._journal("sealed" if state == "DONE"
-                      else "execution_failed",
-                      {"worker_id": worker_id, "state": state,
-                       "reason": outcome.get("reason"),
-                       "evidence": outcome.get("evidence")},
+                      else "execution_failed", payload,
                       worker_id=worker_id,
                       execution_id=execution_id)
         return execution_id
@@ -268,7 +294,13 @@ class DAGCoordinator:
         for extra in ("verdict", "baseline_failures",
                       "current_failures", "delta_failures",
                       "comparison", "details",
-                      "applied", "writes_observed"):
+                      "applied", "writes_observed",
+                      # execution facts: what the run observed about the
+                      # process, so a timeout survives into the report
+                      "verification_status",
+                      "execution_outcome", "launched", "exit_code",
+                      "timeout_s", "elapsed_ms", "process_termination",
+                      "detail"):
             if outcome.get(extra) is not None:
                 target[extra] = outcome[extra]
 
@@ -282,6 +314,31 @@ class DAGCoordinator:
         # match the scoped candidate inventory.
         try:
             result = self.execute(worker, path)
+        except execution.ExecutionTimeout as exc:
+            # a typed timeout carries the verified facts: which budget ran
+            # out and what happened to the process afterwards
+            facts = worker_execution.execution_facts(exc.execution)
+            return {"state": "FAILED", "reason": exc.reason,
+                    "evidence": None, **facts,
+                    "detail": exc.execution.termination_detail}
+        except execution.DeadlineExhausted as exc:
+            # the task budget was gone before the child existed: nothing ran
+            return {"state": "BLOCKED", "reason": "deadline_exceeded",
+                    "evidence": None,
+                    **worker_execution.execution_facts(exc.execution)}
+        except execution.ExecutionCollectFailed as exc:
+            # the child ran; only its output was lost -- never "launch failed"
+            return {"state": "FAILED",
+                    "reason": "output_collection_failed",
+                    "evidence": None,
+                    **worker_execution.execution_facts(exc.execution),
+                    "detail": exc.execution.termination_detail}
+        except execution.ExecutionLaunchFailed as exc:
+            return {"state": "FAILED",
+                    "reason": "launch_failed",
+                    "evidence": None,
+                    **worker_execution.execution_facts(exc.execution),
+                    "detail": exc.execution.termination_detail}
         except subprocess.TimeoutExpired:
             return {"state": "FAILED", "reason": "timeout_exceeded",
                     "evidence": None}
@@ -298,6 +355,7 @@ class DAGCoordinator:
             base_tree = self.dispatcher.base_tree
         return worker_execution.collect_worker_evidence(
             worker, path, rc, tail, self.task_id, self.evidence_dir,
+            deadline=self.deadline,
             base=base, base_tree=base_tree,
             deps_root=worker_execution._deps_root(path, self.repo),
             uncertain=set(self.worker_graph["uncertain"]),
@@ -473,6 +531,11 @@ class DAGCoordinator:
                         if state not in ("PENDING", "DEFERRED"):
                             continue
                         worker = self.by_id[wid]
+                        if self.deadline is not None and self.deadline.expired():
+                            # the task budget is spent: no new work starts and
+                            # nothing is reported as executed
+                            self._set(wid, "BLOCKED", "deadline_exceeded")
+                            continue
                         decided_against = self.graph.generation
                         decision, reason = self._decide(worker)
                         if decision == "block":
@@ -594,6 +657,12 @@ class DAGCoordinator:
         for wid, entry in self.states.items():
             if entry["state"] not in ("PENDING", "DEFERRED"):
                 continue
+            if self.deadline is not None and self.deadline.expired():
+                # A spent task budget is the reason this worker never ran --
+                # it outranks "dependency not finished", which would blame a
+                # predecessor instead of the budget.
+                entry.update(state="BLOCKED", reason="deadline_exceeded")
+                continue
             deps = self.worker_graph["edges"].get(wid) or []
             unfinished = [dep for dep in deps
                           if self.states[dep]["state"] != "DONE"]
@@ -649,6 +718,7 @@ def run_workers_dag(
     preserve_on_failure: bool = False,
     execution_id_factory: Callable[[], str] | None = None,
     journal: Any = None,
+    deadline: timeouts.Deadline | None = None,
 ) -> dict[str, Any]:
     """Facade: minimal DAG coordinator for multi-worker governed runs.
 
@@ -661,7 +731,15 @@ def run_workers_dag(
         classification_context=classification_context,
         preserve_on_failure=preserve_on_failure,
         execution_id_factory=execution_id_factory,
-        journal=journal)
+        journal=journal,
+        deadline=deadline)
     if execute_hook is not None:
+        if deadline is not None:
+            # a callback cannot be made to honour a monotonic budget: refuse
+            # the combination instead of pretending the deadline holds
+            raise OrchestratorError(
+                "a task deadline cannot be enforced through an injected "
+                "execute_hook: supply --deadline-seconds only with the "
+                "default executor")
         coordinator.execute = execute_hook  # type: ignore[attr-defined]
     return coordinator.run()

@@ -17,10 +17,12 @@ Invariants encoded (and pinned by tests/test_evidence_truth.py):
 * validation success cannot be inferred from sealing, cleanliness, or hashes.
 
 Individual check entries keep the runner's established vocabulary
-(passed / failed / skipped) plus a ``launched`` flag: a ``failed`` entry with
-``launched`` False never started, which the aggregate reports as BLOCKED
-rather than as a test failure. That keeps `gate_states` (which already accepts
-failed + no exit code) unchanged and fail-closed.
+(passed / failed / skipped) plus a ``launched`` flag, which answers exactly
+one question: was a process created? A ``failed`` entry with ``launched``
+False never started, and the aggregate reports that as BLOCKED. A ``failed``
+entry with ``launched`` True DID run -- including one killed at its budget --
+and the aggregate reports it as FAIL: "the check ran and did not pass" is not
+the same claim as "the check could not be executed".
 
 Phase 12 (schema 2) adds these fields to sealed evidence. Schema 1 artifacts
 carry none of them and are therefore NOT validation evidence: consumers treat
@@ -31,16 +33,18 @@ from __future__ import annotations
 
 import hashlib
 import os
-import subprocess
-import time
 from collections.abc import Callable
 from pathlib import Path
 
 from .check_runner import redact_secrets
-
-EXECUTION_EXITED = 'exited'
-EXECUTION_TIMED_OUT = 'timed_out'
-EXECUTION_LAUNCH_FAILED = 'launch_failed'
+from .execution import (
+    EXECUTION_DEADLINE_EXCEEDED,
+    EXECUTION_EXITED,
+    EXECUTION_FAILED_TO_COLLECT,
+    EXECUTION_LAUNCH_FAILED,
+    spawn_capture,
+)
+from .timeouts import DEFAULT_TIMEOUTS, Deadline
 
 VALIDATION_PASS = 'PASS'
 VALIDATION_FAIL = 'FAIL'
@@ -52,7 +56,13 @@ VALIDATION_POLICY_EXPLICIT = 'explicit'
 VALIDATION_POLICY_SCOPE_MATRIX = 'scope_matrix'
 
 TAIL_CHARS = 2000
-VALIDATION_TIMEOUT_S = 900
+#: Compatibility alias: the budget itself lives in asha.timeouts.
+VALIDATION_TIMEOUT_S = DEFAULT_TIMEOUTS.validation
+
+
+def _seconds(budget: float) -> str:
+    """Budget as a short label: 900 -> '900', 0.5 -> '0.5'."""
+    return f'{budget:g}'
 
 
 def digest_text(text: str) -> str:
@@ -71,7 +81,9 @@ def execution_record(argv: list[str], cwd_label: str, *,
                      exit_code: int | None, termination: str,
                      stdout: str, stderr: str,
                      known_policy_command: bool,
-                     execution_id: str | None = None) -> dict[str, object]:
+                     execution_id: str | None = None,
+                     process_termination: str = 'not_required',
+                     timeout_s: float | None = None) -> dict[str, object]:
     """One executed command, described by what actually happened.
 
     ``known_policy_command`` is False unless the caller declared this command
@@ -85,6 +97,8 @@ def execution_record(argv: list[str], cwd_label: str, *,
         'duration_ms': int(duration_ms),
         'exit_code': exit_code,
         'termination': termination,
+        'process_termination': process_termination,
+        'timeout_s': timeout_s,
         'stdout_sha256': digest_text(stdout),
         'stderr_sha256': digest_text(stderr),
         'stdout_tail': redact_secrets(stdout[-TAIL_CHARS:]),
@@ -145,60 +159,67 @@ def push_readiness(*, execution: dict[str, object], validation: str,
 
 
 def run_validation_commands(commands: list[list[str]], root: Path,
-                            timeout_s: int = VALIDATION_TIMEOUT_S, *,
+                            timeout_s: float = VALIDATION_TIMEOUT_S, *,
                             execution_id_factory: Callable[[], str]
-                            | None = None
+                            | None = None,
+                            deadline: Deadline | None = None
                             ) -> list[dict]:
     """Execute each explicitly configured validation command.
 
     Every entry records what ran (argv, exit code, duration, output digests,
-    bounded tail) and how it ended. A launch failure or a timeout is recorded
-    as failed with ``launched`` False -- never a pass.
+    bounded tail) and how it ended: ``termination`` is the execution outcome
+    (exited / timed_out / deadline_exceeded / launch_failed /
+    failed_to_collect) and
+    ``process_termination`` says what could be verified about ending the
+    child. A launch failure or a timeout is failed -- never a pass -- and a
+    timed-out check keeps ``launched`` True because a process did exist.
 
     Each entry is ONE invocation: ``execution_id`` is minted per check and
-    attached only when a process actually started (success or timeout), so
-    an entry without an id is an attempt that never reached the OS.
+    attached only when a process actually started (success, non-zero exit or
+    timeout), so an entry without an id is an attempt that never reached the
+    OS.
     """
     results: list[dict] = []
     for index, argv in enumerate(commands):
-        started = time.monotonic()
         execution_id = (execution_id_factory or new_execution_id)()
+        result = spawn_capture(argv, cwd=root, timeout_s=timeout_s,
+                               deadline=deadline)
         entry: dict = {
             'name': 'validation[' + str(index) + ']',
             'scope': 'explicit',
             'status': 'failed',
-            'launched': False,
-            'exit_code': None,
-            'duration_ms': 0,
+            'launched': result.launched,
+            'exit_code': result.exit_code,
+            'termination': result.outcome,
+            'process_termination': result.process_termination,
+            'timeout_s': result.timeout_s,
+            'duration_ms': result.duration_ms,
             'argv': [redact_secrets(arg) for arg in argv],
         }
-        try:
-            proc = subprocess.run(argv, cwd=root, capture_output=True,
-                                  text=True, timeout=timeout_s)
-        except subprocess.TimeoutExpired as exc:
-            # the process was started (and killed): the attempt has an id
+        if result.launched:
+            # the process existed: this attempt has an execution identity
             entry['execution_id'] = execution_id
-            entry['note'] = f'timed out after {timeout_s}s'
-            entry['duration_ms'] = int((time.monotonic() - started) * 1000)
-            partial = exc.stdout or ''
-            if isinstance(partial, bytes):
-                partial = partial.decode('utf-8', 'replace')
-            entry['output_tail'] = redact_secrets(str(partial)[-TAIL_CHARS:])
-            results.append(entry)
-            continue
-        except OSError as exc:
-            entry['note'] = f'launch failed: {type(exc).__name__}: {exc}'
-            entry['duration_ms'] = int((time.monotonic() - started) * 1000)
-            results.append(entry)
-            continue
-        entry['launched'] = True
-        entry['execution_id'] = execution_id
-        entry['exit_code'] = proc.returncode
-        entry['status'] = 'passed' if proc.returncode == 0 else 'failed'
-        combined = redact_secrets((proc.stdout or '') + (proc.stderr or ''))
-        entry['output_tail'] = combined[-TAIL_CHARS:]
-        entry['stdout_sha256'] = digest_text(proc.stdout or '')
-        entry['stderr_sha256'] = digest_text(proc.stderr or '')
-        entry['duration_ms'] = int((time.monotonic() - started) * 1000)
+        if result.outcome == EXECUTION_LAUNCH_FAILED:
+            entry['note'] = f'launch failed: {result.termination_detail}'
+            entry['output_tail'] = redact_secrets(result.stderr[-TAIL_CHARS:])
+        elif result.outcome == EXECUTION_FAILED_TO_COLLECT:
+            entry['note'] = ('output collection failed: '
+                             f'{result.termination_detail}')
+            entry['output_tail'] = redact_secrets(result.stderr[-TAIL_CHARS:])
+        elif result.timed_out:
+            entry['note'] = (
+                'deadline exceeded after '
+                f'{result.duration_ms / 1000:.1f}s (task budget; operation '
+                f'budget {_seconds(timeout_s)}s)'
+                if result.outcome == EXECUTION_DEADLINE_EXCEEDED
+                else f'timed out after {_seconds(timeout_s)}s')
+            entry['output_tail'] = redact_secrets(
+                (result.stdout + result.stderr)[-TAIL_CHARS:])
+        else:
+            entry['status'] = 'passed' if result.exit_code == 0 else 'failed'
+            combined = redact_secrets(result.stdout + result.stderr)
+            entry['output_tail'] = combined[-TAIL_CHARS:]
+            entry['stdout_sha256'] = digest_text(result.stdout)
+            entry['stderr_sha256'] = digest_text(result.stderr)
         results.append(entry)
     return results

@@ -204,9 +204,16 @@ def test_watch_stepper_current_vs_last_sealed(tmp_path: Path) -> None:
 def test_governance_trio_frozen(tmp_path: Path) -> None:
     import subprocess as sp
     cwd = Path(__file__).resolve().parents[1]
-    # Frozen anchor: b3e7b7c (v0.5.0 + Phase 12 evidence contract: the trio
-    # gained per-service check groups and derived validation status; reviewed
-    # as one intentional change).
+    # Anchor v0.6.0 + Phase 2 (feat/centralized-timeout-handling): the trio
+    # changed intentionally in Phase 2 -- check_runner.py now spawns through
+    # asha.execution.spawn_capture (one outcome vocabulary, no synthetic -1,
+    # timeout_s/process_termination in every entry) and scheduler.py maps the
+    # typed ExecutionTimeout / DeadlineExhausted exceptions into FAILED /
+    # BLOCKED with the observed facts. asha/scoping.py is untouched.
+    #
+    # Previous frozen anchor: b3e7b7c (v0.5.0 + Phase 12 evidence contract: the
+    # trio gained per-service check groups and derived validation status;
+    # reviewed as one intentional change).
     # Previous anchor: d51fc11 (pytest-discovery fix in check_runner.py,
     # committed with its own tests); before that 4215bdd (Phase 1 +
     # Phase 2 approved governance state): covers the user-approved Phase 1
@@ -223,7 +230,14 @@ def test_governance_trio_frozen(tmp_path: Path) -> None:
     # Anchor 376c0d2: a check whose own tool is missing is skipped
     # (BLOCKED) instead of failed, so an unparseable baseline no longer
     # blames the worker -- an intentional governance change.
-    out = sp.run(['git', 'diff', '376c0d2..HEAD', '--',
+    # Anchor db5bcfe (PR #8): the approved Phase 2 remediation threaded one
+    # absolute task Deadline through run/run_scoped into spawn_capture, so
+    # check_runner.py gained the deadline parameter, the failed_to_collect
+    # outcome and the budget note naming which budget ran out; independently
+    # reviewed and approved. asha/scoping.py and asha/scheduler.py are still
+    # untouched by it. The baseline advances only for this reviewed change;
+    # any later edit to the trio still fails here until separately approved.
+    out = sp.run(['git', 'diff', 'db5bcfe..HEAD', '--',
                   'asha/scoping.py', 'asha/check_runner.py',
                   'asha/scheduler.py'],
                  cwd=cwd, capture_output=True, text=True, check=True)
