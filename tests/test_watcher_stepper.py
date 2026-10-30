@@ -230,7 +230,14 @@ def test_governance_trio_frozen(tmp_path: Path) -> None:
     # Anchor 376c0d2: a check whose own tool is missing is skipped
     # (BLOCKED) instead of failed, so an unparseable baseline no longer
     # blames the worker -- an intentional governance change.
-    out = sp.run(['git', 'diff', 'f90032d..HEAD', '--',
+    # Anchor db5bcfe (PR #8): the approved Phase 2 remediation threaded one
+    # absolute task Deadline through run/run_scoped into spawn_capture, so
+    # check_runner.py gained the deadline parameter, the failed_to_collect
+    # outcome and the budget note naming which budget ran out; independently
+    # reviewed and approved. asha/scoping.py and asha/scheduler.py are still
+    # untouched by it. The baseline advances only for this reviewed change;
+    # any later edit to the trio still fails here until separately approved.
+    out = sp.run(['git', 'diff', 'db5bcfe..HEAD', '--',
                   'asha/scoping.py', 'asha/check_runner.py',
                   'asha/scheduler.py'],
                  cwd=cwd, capture_output=True, text=True, check=True)
