@@ -5,6 +5,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -40,7 +41,7 @@ def _repo(tmp_path: Path, name: str = "repo",
 
 def _worker(cmd: str = "printf ok > out.txt", wid: str = "w1",
             **extra: object) -> dict:
-    worker = {"id": wid, "deps": [], "declared_scope": ["out.txt"],
+    worker: dict[str, Any] = {"id": wid, "deps": [], "declared_scope": ["out.txt"],
               "reads": [], "writes": ["out.txt"], "cmd": ["sh", "-c", cmd]}
     worker.update(extra)
     return worker
