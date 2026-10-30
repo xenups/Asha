@@ -22,6 +22,7 @@ from asha.governance.env_resolver import (
     ServiceEnvironment,
     resolve_env_for_file,
 )
+from asha.timeouts import DEFAULT_TIMEOUTS
 
 TAIL_CHARS = 2000
 
@@ -36,7 +37,7 @@ def validation_digest(text: str) -> str:
 # full-scope worker with an unattributable UNKNOWN delta verdict.
 # 900s = measured runtime + ~20% headroom. Timeout itself stays
 # FAILED + verdict UNKNOWN -- never a pass, never PRE_EXISTING_ONLY.
-CHECK_TIMEOUT_S = 900
+CHECK_TIMEOUT_S = DEFAULT_TIMEOUTS.check
 # Baseline passes run concurrently (one per worker thread, ThreadPoolExecutor)
 # and each is a full-suite run: measured 874-895s solo, >900s under pair
 # contention (rehearsal-v4 baseline artifacts: exit -1, zero identities).
@@ -44,7 +45,7 @@ CHECK_TIMEOUT_S = 900
 # ponytail: if a concurrent pair still exceeds this, compute ONE shared
 # baseline (requires proof of validity across worker worktrees) or serialize
 # the baseline passes.
-BASELINE_TIMEOUT_S = 1800
+BASELINE_TIMEOUT_S = DEFAULT_TIMEOUTS.baseline
 
 # How each check's `scope` field is reported in evidence.json.
 CHECK_SCOPE = {
@@ -311,7 +312,7 @@ def verify_source_binding(env: ServiceEnvironment | None, root: Path,
     return origins
 
 
-def _timeout_tail(exc: subprocess.TimeoutExpired, timeout: int) -> str:
+def _timeout_tail(exc: subprocess.TimeoutExpired, timeout: float) -> str:
     """Retained diagnostics for a timed-out check command: the partial
     output produced before the kill plus the exception text (which
     carries the exact command and the budget), trimmed to TAIL_CHARS
@@ -380,7 +381,7 @@ def _tool_unavailable(name: str, output: str) -> str | None:
     return None
 
 def _run_group(root: Path, names: list[str], changed_py: list[str],
-               label: str, timeout_s: int,
+               label: str, timeout_s: float,
                deps_root: Path | None) -> list[dict]:
     """Run the matrix for one service group in that service's environment."""
     try:
@@ -448,7 +449,7 @@ def _run_group(root: Path, names: list[str], changed_py: list[str],
 
 
 def run(root: Path | str, resolved: dict,
-        timeout_s: int = CHECK_TIMEOUT_S,
+        timeout_s: float = CHECK_TIMEOUT_S,
         *, deps_root: Path | None = None) -> list[dict]:
     """Execute the mandatory checks for a resolved scope.
 
@@ -505,7 +506,7 @@ def run_scoped(
     changed_files: list[str],
     targeted_tests: list[str],
     mypy_targets: list[str],
-    timeout: int = CHECK_TIMEOUT_S,
+    timeout: float = CHECK_TIMEOUT_S,
     deps_root: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Dumb executor of an affirmative eligibility decision (spec 1.1).

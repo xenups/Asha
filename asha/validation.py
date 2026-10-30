@@ -37,6 +37,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .check_runner import redact_secrets
+from .timeouts import DEFAULT_TIMEOUTS
 
 EXECUTION_EXITED = 'exited'
 EXECUTION_TIMED_OUT = 'timed_out'
@@ -52,7 +53,8 @@ VALIDATION_POLICY_EXPLICIT = 'explicit'
 VALIDATION_POLICY_SCOPE_MATRIX = 'scope_matrix'
 
 TAIL_CHARS = 2000
-VALIDATION_TIMEOUT_S = 900
+#: Compatibility alias: the budget itself lives in asha.timeouts.
+VALIDATION_TIMEOUT_S = DEFAULT_TIMEOUTS.validation
 
 
 def digest_text(text: str) -> str:
@@ -145,7 +147,7 @@ def push_readiness(*, execution: dict[str, object], validation: str,
 
 
 def run_validation_commands(commands: list[list[str]], root: Path,
-                            timeout_s: int = VALIDATION_TIMEOUT_S, *,
+                            timeout_s: float = VALIDATION_TIMEOUT_S, *,
                             execution_id_factory: Callable[[], str]
                             | None = None
                             ) -> list[dict]:

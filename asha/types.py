@@ -8,9 +8,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .timeouts import DEFAULT_TIMEOUTS
+
 STATES = ('PENDING', 'DEFERRED', 'RUNNING', 'DONE', 'FAILED', 'BLOCKED',
           'INVALID_EVIDENCE')
-WORKER_TIMEOUT_S = 600
+#: Compatibility alias: the budget itself lives in asha.timeouts.
+WORKER_TIMEOUT_S = DEFAULT_TIMEOUTS.worker
 TAIL_CHARS = 2000
 # Worker-evidence identity fields required by the Phase-1 evidence model.
 WORKER_EVIDENCE_FIELDS = (

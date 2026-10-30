@@ -696,7 +696,7 @@ def _deps_root(path: Path, repo: Path) -> Path | None:
 
 
 def _run_checks(decision, path: Path, resolved: dict,
-                timeout_s: int = check_runner.CHECK_TIMEOUT_S,
+                timeout_s: float = check_runner.CHECK_TIMEOUT_S,
                 deps_root: Path | None = None) -> list[dict]:
     """Run the check matrix for a resolved scope (shared by baseline and
     current passes; identical machinery, identical environment)."""

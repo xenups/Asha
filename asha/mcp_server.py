@@ -61,6 +61,7 @@ from . import (
     graph_state,
     scope_resolver,
     telemetry,
+    timeouts,
     validation,
     worker_graph,
 )
@@ -2176,7 +2177,7 @@ def _str_list(arguments: dict[str, Any], key: str, *,
 # ponytail: dispatch schema carries no per-task timeout input, so in-place
 # cmd runs are bounded by this fixed ceiling; add a `timeout` schema field
 # when callers genuinely need per-task limits.
-_IN_PLACE_TIMEOUT_S = 600
+_IN_PLACE_TIMEOUT_S = timeouts.DEFAULT_TIMEOUTS.in_place
 
 
 def _observed_paths(root: Path) -> list[str]:
