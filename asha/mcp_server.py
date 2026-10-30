@@ -80,10 +80,24 @@ from .worktree import _git
 SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18",
                                "2025-03-26", "2024-11-05"]
 DEFAULT_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]
-try:
-    _VERSION = version("asha")
-except PackageNotFoundError:  # running from a source tree with no install
-    _VERSION = "0.0.0+unknown"
+def _source_version() -> str:
+    """Installed metadata first, git identity second, never a fake 0.0.0."""
+    try:
+        return version("asha")
+    except PackageNotFoundError:
+        pass
+    try:
+        proc = subprocess.run(
+            ["git", "describe", "--tags", "--always", "--dirty"],
+            cwd=Path(__file__).resolve().parent, capture_output=True,
+            text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return "0.0.0+unknown"
+    tag = proc.stdout.strip()
+    return tag.lstrip("v") if proc.returncode == 0 and tag else "0.0.0+unknown"
+
+
+_VERSION = _source_version()
 SERVER_INFO = {"name": "asha-orchestrator", "version": _VERSION}
 CAPABILITIES: dict[str, Any] = {"tools": {}}
 
@@ -737,7 +751,9 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
                 for entry in (checks or []))
             return _tool_error(
                 prefix + ": " + validation_rule + "; " + detail
-                + "; evidence sealed at " + str(artifact))
+                + "; " + ("evidence sealed at " + str(artifact)
+                           if evidence_written
+                           else "stronger existing verification seal kept"))
         if checks is None:
             check_summary = "checks not run"
         else:
@@ -818,6 +834,13 @@ ASHA_VERIFY_STACK_SPEC: dict[str, Any] = {
     },
 }
 
+
+def _execution_ran(state: dict, report: dict) -> bool:
+    """True only when a worker process really ran (measured exit)."""
+    execution = report.get("execution") if isinstance(report, dict) else None
+    if isinstance(execution, dict) and execution.get("termination") is not None:
+        return True
+    return state.get("exit_status") is not None
 
 def _artifact_evidence_state(sealed: object, head_sha: str,
                             tree_sha: str) -> str:
@@ -2687,7 +2710,12 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
                              (report.get("reason_code")
                               or report.get("reason"))),
             "classification_reason": classification.reason_code,
-            "executed": bool(states) or report.get("state") is not None,
+            # a state record is not an execution: a classification or
+            # baseline refusal leaves a state behind with no process
+            "executed": _execution_ran(states.get(wid) or {}, report),
+            "verification_status": (states.get(wid) or {}).get(
+                "verification_status"),
+            "exit_status": (states.get(wid) or {}).get("exit_status"),
             "runtime_mode": decision.mode.value,
             "routing_reason": decision.reason_code,
             "fast_path_enabled": fast_env,
@@ -2722,7 +2750,10 @@ def asha_dispatch_task(arguments: dict[str, Any]) -> dict[str, Any]:
             report.get("validation_result")
             or report.get("validation_status")
             or validation.VALIDATION_NOT_CONFIGURED)
+        worker_state = states.get(wid) or {}
         payload["ready_to_push"] = bool(report.get("ready_to_push"))
+        if isinstance(payload.get("timings"), dict)                 and worker_state.get("execution_ms") is not None:
+            payload["timings"]["execution_ms"] = worker_state["execution_ms"]
         if isinstance(report.get("execution"), dict):
             payload["execution"] = report["execution"]
         payload["validation_status"] = (
