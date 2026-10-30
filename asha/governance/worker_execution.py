@@ -54,7 +54,8 @@ from asha.worktree import (
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 
 
-def execute_with_audit(worker: dict[str, Any], worktree: Path
+def execute_with_audit(worker: dict[str, Any], worktree: Path, *,
+                       deadline: timeouts.Deadline | None = None
                        ) -> tuple[int, str, dict[str, Any]]:
     """`default_execute` plus the runner's audit record (verify_* facts).
 
@@ -68,7 +69,8 @@ def execute_with_audit(worker: dict[str, Any], worktree: Path
     # silently meaning "never kill") or the centralized policy.
     timeout = timeouts.resolve("worker", worker.get("timeout"))
     started = time.monotonic()
-    result = dispatch_runner(worker).execute(worker, worktree, timeout)
+    result = dispatch_runner(worker).execute(worker, worktree, timeout,
+                                             deadline=deadline)
     elapsed_ms = int((time.monotonic() - started) * 1000)
     combined = (result.stdout or "") + (result.stderr or "")
     audit = dict(result.audit_metadata or {})
@@ -92,7 +94,8 @@ def execution_facts(outcome: ExecutionOutcome) -> dict[str, Any]:
     }
 
 
-def default_execute(worker: dict[str, Any], worktree: Path
+def default_execute(worker: dict[str, Any], worktree: Path, *,
+                    deadline: timeouts.Deadline | None = None
                     ) -> tuple[int, str]:
     """Production execution: run the worker's primary action in its
     worktree under the worker's `timeout` (WORKER_TIMEOUT_S when
@@ -102,7 +105,8 @@ def default_execute(worker: dict[str, Any], worktree: Path
     runner._spawn (shared by every AgentRunner) -- this hook keeps its
     (rc, tail-of-combined-output) contract byte-for-byte. (Extracted
     verbatim from scheduler.py.)"""
-    code, tail, _audit = execute_with_audit(worker, worktree)
+    code, tail, _audit = execute_with_audit(worker, worktree,
+                                            deadline=deadline)
     return code, tail
 
 

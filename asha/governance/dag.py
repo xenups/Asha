@@ -30,6 +30,7 @@ import threading
 from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import suppress as _suppress
+from functools import partial
 from graphlib import CycleError, TopologicalSorter
 from typing import Any
 
@@ -38,6 +39,7 @@ from asha import (
     execution,
     graph_state,
     telemetry,
+    timeouts,
     validation,
     worker_graph,
 )
@@ -75,6 +77,7 @@ class DAGCoordinator:
         classification_context: tuple[Any, ...] = (),
         execution_id_factory: Callable[[], str] | None = None,
         journal: Any = None,
+        deadline: timeouts.Deadline | None = None,
     ) -> None:
         self.repo = repo
         self.workers = list(workers)
@@ -103,6 +106,9 @@ class DAGCoordinator:
         self.execution_ids: dict[str, str] = {}
         # optional run journal: the caller owns opening and closing it
         self.journal = journal
+        # optional task budget: ONE deadline for the whole task, never reset
+        # and never extended by a later stage (None = existing behaviour)
+        self.deadline = deadline
         self.routes: dict[str, dict[str, Any]] = {}
         self.reconcile_log: list[dict[str, Any]] = []
         self.stale_intents_dropped = 0
@@ -112,7 +118,10 @@ class DAGCoordinator:
         self.evidence_dir = (common_paths.get_orchestrator_dir(self.repo)
                              / _safe_id(task_id))
         self._fast_lock = threading.Lock()
-        self.execute = worker_execution.default_execute
+        # the execution hook is bound to the task deadline so every dispatch
+        # (worktree path, fast path, DAG worker) sees the same budget
+        self.execute = partial(worker_execution.default_execute,
+                               deadline=deadline)
 
     # -- small state helpers ------------------------------------------------
 
@@ -498,6 +507,11 @@ class DAGCoordinator:
                         if state not in ("PENDING", "DEFERRED"):
                             continue
                         worker = self.by_id[wid]
+                        if self.deadline is not None and self.deadline.expired():
+                            # the task budget is spent: no new work starts and
+                            # nothing is reported as executed
+                            self._set(wid, "BLOCKED", "deadline_exceeded")
+                            continue
                         decided_against = self.graph.generation
                         decision, reason = self._decide(worker)
                         if decision == "block":
@@ -674,6 +688,7 @@ def run_workers_dag(
     preserve_on_failure: bool = False,
     execution_id_factory: Callable[[], str] | None = None,
     journal: Any = None,
+    deadline: timeouts.Deadline | None = None,
 ) -> dict[str, Any]:
     """Facade: minimal DAG coordinator for multi-worker governed runs.
 
@@ -686,7 +701,8 @@ def run_workers_dag(
         classification_context=classification_context,
         preserve_on_failure=preserve_on_failure,
         execution_id_factory=execution_id_factory,
-        journal=journal)
+        journal=journal,
+        deadline=deadline)
     if execute_hook is not None:
         coordinator.execute = execute_hook  # type: ignore[attr-defined]
     return coordinator.run()

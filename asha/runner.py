@@ -32,6 +32,7 @@ from .execution import (
     ExecutionTimeout,
     spawn_capture,
 )
+from .timeouts import Deadline
 from .types import OrchestratorError, RunnerResult
 
 #: Worker values that select a non-default runner (spec field contract).
@@ -58,7 +59,8 @@ def runner_kind(worker: Mapping[str, Any]) -> str:
 
 def _spawn(argv: list[str], cwd: Path,
            timeout: float,
-           env: dict[str, str] | None = None) -> tuple[int, str, str]:
+           env: dict[str, str] | None = None,
+           deadline: Deadline | None = None) -> tuple[int, str, str]:
     """ONE process primitive for all runners, now ``execution.spawn_capture``.
 
     Nothing is fabricated: a child that could not be created raises
@@ -66,7 +68,8 @@ def _spawn(argv: list[str], cwd: Path,
     exhausted budget raises ``ExecutionTimeout`` carrying the verified
     outcome, and a proven zero is a real zero.
     """
-    result = spawn_capture(argv, cwd, timeout_s=timeout, env=env)
+    result = spawn_capture(argv, cwd, timeout_s=timeout, env=env,
+                           deadline=deadline)
     if result.outcome == EXECUTION_LAUNCH_FAILED:
         raise ExecutionLaunchFailed(result)
     if result.outcome == EXECUTION_DEADLINE_EXCEEDED and not result.launched:
@@ -125,10 +128,12 @@ class BaseAgentRunner:
         raise NotImplementedError
 
     def execute(self, worker_spec: Mapping[str, Any],
-                worktree_path: Path, timeout: float) -> RunnerResult:
+                worktree_path: Path, timeout: float, *,
+                deadline: Deadline | None = None) -> RunnerResult:
         started = time.monotonic()
         argv = self.primary_argv(worker_spec, worktree_path)
-        code, out, err = _spawn(argv, worktree_path, timeout)
+        code, out, err = _spawn(argv, worktree_path, timeout,
+                                deadline=deadline)
         verify = worker_spec.get('verify_command')
         verify_ran = False
         verify_exit: int | None = None
@@ -137,7 +142,8 @@ class BaseAgentRunner:
             verify_ran = True
             vargv = _split_verify(verify)
             verify_exit, vout, verr = _spawn(
-                vargv, worktree_path, timeout, env=_acceptance_env(vargv))
+                vargv, worktree_path, timeout, env=_acceptance_env(vargv),
+                deadline=deadline)
             out, err = out + vout, err + verr
             verify_tail = (vout + verr)[-2000:]
             code = verify_exit
