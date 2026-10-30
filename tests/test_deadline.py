@@ -39,15 +39,20 @@ def _repo(tmp_path: Path) -> Path:
     _git(repo, 'init', '-q', '-b', 'main')
     _git(repo, 'config', 'user.email', 'a@example.invalid')
     _git(repo, 'config', 'user.name', 'A')
-    (repo / 'base.txt').write_text('base\n', encoding='utf-8')
+    (repo / 'probe.py').write_text('x = 1\n', encoding='utf-8')
+    (repo / 'tests').mkdir()
+    (repo / 'tests' / 'test_leaf.py').write_text(
+        'def test_leaf():\n    assert True\n', encoding='utf-8')
     _git(repo, 'add', '-A')
     _git(repo, 'commit', '-qm', 'base')
     return repo
 
 
-def _worker(wid: str, cmd: str = 'printf ok > out.txt') -> dict:
-    return {'id': wid, 'deps': [], 'declared_scope': ['out.txt'],
-            'reads': [], 'writes': ['out.txt'], 'cmd': ['sh', '-c', cmd]}
+def _worker(wid: str, cmd: str = 'printf "y = 2\\n" > probe.py',
+            deps: list[str] | None = None) -> dict:
+    return {'id': wid, 'deps': list(deps or []),
+            'declared_scope': ['probe.py'], 'reads': [],
+            'writes': ['probe.py'], 'cmd': ['sh', '-c', cmd]}
 
 
 # --------------------------------------------------------------------------
@@ -149,6 +154,26 @@ def test_expired_deadline_blocks_dispatch_without_executing(
     assert entry['state'] == 'BLOCKED'
     assert entry['reason'] == 'deadline_exceeded'
     assert 'execution_id' not in entry       # no execution to identify
+
+
+def test_a_spent_budget_outranks_a_dependency_reason(tmp_path: Path) -> None:
+    """A dependent worker that never started blames the budget, not its peer.
+
+    End-to-end scenario 11 found this: once w1 hit the task deadline, w2 was
+    reported BLOCKED / dependency_not_finished -- true about the dependency
+    and misleading about the cause.
+    """
+    repo = _repo(tmp_path)
+    report = dag.run_workers_dag(
+        repo, [_worker('w1', 'sleep 4; printf "y = 2\\n" > probe.py'),
+               _worker('w2', deps=['w1'])],
+        task_id='task-between', deadline=Deadline(3))
+    w1, w2 = report['states']['w1'], report['states']['w2']
+    assert w1['state'] == 'FAILED'
+    assert w1['reason'] == 'deadline_exceeded'
+    assert w2['state'] == 'BLOCKED'
+    assert w2['reason'] == 'deadline_exceeded'
+    assert 'execution_id' not in w2
 
 
 def test_without_a_deadline_work_still_runs(tmp_path: Path) -> None:
