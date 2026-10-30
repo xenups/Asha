@@ -409,10 +409,28 @@ def test_cross_service_blocked_group_never_passes(tmp_path: Path) -> None:
     assert status in (validation.VALIDATION_FAIL, validation.VALIDATION_BLOCKED)
 
 
-def test_validation_timeout_is_blocked_not_passed(tmp_path: Path) -> None:
+def test_validation_timeout_after_launch_is_fail_not_blocked(
+        tmp_path: Path) -> None:
+    """A check that STARTED and was killed at its budget is a failure.
+
+    BLOCKED is reserved for a process that never existed: reporting a killed
+    check as "never ran" hid a real failure behind an infrastructure excuse
+    (the matrix path already called it FAILED, so the two disagreed)."""
     repo = _repo(tmp_path)
     entries = validation.run_validation_commands(
         [[PY, "-c", "import time; time.sleep(5)"]], repo, timeout_s=1)
+    assert entries[0]["status"] == "failed"
+    assert entries[0]["launched"] is True
+    assert entries[0]["exit_code"] is None
+    assert validation.validation_status(entries)[0] == \
+        validation.VALIDATION_FAIL
+
+
+def test_validation_that_never_launched_is_blocked(tmp_path: Path) -> None:
+    """The blocked verdict keeps its original meaning."""
+    repo = _repo(tmp_path)
+    entries = validation.run_validation_commands(
+        [["asha-no-such-binary"]], repo, timeout_s=5)
     assert entries[0]["status"] == "failed"
     assert entries[0]["launched"] is False
     assert validation.validation_status(entries)[0] == \

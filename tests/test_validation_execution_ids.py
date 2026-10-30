@@ -78,9 +78,19 @@ def test_factory_is_used_once_per_check(tmp_path: Path) -> None:
         "exec-000000000001", "exec-000000000002"]
 
 
-def test_entry_shape_is_unchanged_apart_from_the_id(tmp_path: Path) -> None:
+#: Fields added by the timeout unification. Each answers one question the
+#: old shape answered with a single field: what happened (termination), what
+#: was verified about the process (process_termination), and the budget the
+#: command was given (timeout_s).
+TIMEOUT_KEYS = {"termination", "process_termination", "timeout_s"}
+
+
+def test_entry_shape_is_unchanged_apart_from_the_documented_additions(
+        tmp_path: Path) -> None:
     entries = validation.run_validation_commands([[PY, "-c", "pass"]], tmp_path)
     keys = set(entries[0]) - {"execution_id"}
     assert BASE_KEYS <= keys
     assert keys - BASE_KEYS == {"output_tail", "stdout_sha256",
-                                "stderr_sha256"}
+                                "stderr_sha256"} | TIMEOUT_KEYS
+    # the additions describe the execution; none of them is an identifier
+    assert not any("id" in key for key in TIMEOUT_KEYS)

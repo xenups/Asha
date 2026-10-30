@@ -33,15 +33,15 @@ from contextlib import suppress as _suppress
 from pathlib import Path
 from typing import Any
 
-from asha import check_runner, evidence, scope_resolver, scoping, validation
+from asha import check_runner, evidence, scope_resolver, scoping, timeouts, validation
 from asha.common import paths as common_paths
 from asha.conflict import covered
+from asha.execution import ExecutionOutcome
 from asha.governance import delta
 from asha.runner import dispatch_runner
 from asha.types import (
     TAIL_CHARS,
     WORKER_EVIDENCE_FIELDS,
-    WORKER_TIMEOUT_S,
     OrchestratorError,
 )
 from asha.worktree import (
@@ -63,9 +63,10 @@ def execute_with_audit(worker: dict[str, Any], worktree: Path
     evidence needs to record whether a supplied acceptance command
     actually ran and how it exited. No second execution path.
     """
-    timeout = worker.get("timeout")
-    if timeout is None:
-        timeout = WORKER_TIMEOUT_S
+    # One authoritative budget: an explicit worker override (validated, so a
+    # zero, negative, boolean or non-numeric value is refused here instead of
+    # silently meaning "never kill") or the centralized policy.
+    timeout = timeouts.resolve("worker", worker.get("timeout"))
     started = time.monotonic()
     result = dispatch_runner(worker).execute(worker, worktree, timeout)
     elapsed_ms = int((time.monotonic() - started) * 1000)
@@ -73,6 +74,22 @@ def execute_with_audit(worker: dict[str, Any], worktree: Path
     audit = dict(result.audit_metadata or {})
     audit.setdefault("duration_ms", elapsed_ms)
     return result.exit_code, combined[-TAIL_CHARS:], audit
+
+
+def execution_facts(outcome: ExecutionOutcome) -> dict[str, Any]:
+    """The facts a caller may report about one execution outcome.
+
+    Additive by design: every field describes something that was observed, so
+    a report never claims more than the run produced.
+    """
+    return {
+        "execution_outcome": outcome.outcome,
+        "launched": outcome.launched,
+        "exit_code": outcome.exit_code,
+        "timeout_s": outcome.timeout_s,
+        "elapsed_ms": outcome.duration_ms,
+        "process_termination": outcome.process_termination,
+    }
 
 
 def default_execute(worker: dict[str, Any], worktree: Path

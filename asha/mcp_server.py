@@ -72,6 +72,11 @@ from .common import paths as common_paths
 from .conflict import ConflictManager, covered, scope_status
 from .context_slicer import slice_context
 from .contracts.validation import validate_workers
+from .execution import (
+    EXECUTION_EXITED,
+    EXECUTION_LAUNCH_FAILED,
+    spawn_capture,
+)
 from .governance.dag import run_workers_dag
 from .governance.worker_execution import build_acceptance, run_worker_in_worktree
 from .router import RuntimeMode, route
@@ -525,25 +530,20 @@ def _run_acceptance(root: Path, command: str
     inconclusive and a command that never launched is never a pass.
     """
     argv = shlex.split(command)
-    started = monotonic()
-    ran = False
-    launched = True
-    exit_code: int | None = None
-    tail = ""
-    try:
-        proc = subprocess.run(
-            argv, cwd=root, capture_output=True, text=True,
-            encoding="utf-8", errors="replace",
-            timeout=validation.VALIDATION_TIMEOUT_S,
-            env=_acceptance_env(argv))
-        ran = True
-        exit_code = proc.returncode
-        tail = ((proc.stdout or "") + (proc.stderr or ""))[-2000:]
-    except subprocess.TimeoutExpired as exc:
-        tail = str(exc)
-    except OSError as exc:
-        launched = False
-        tail = f"{type(exc).__name__}: {exc}"
+    result = spawn_capture(
+        argv, cwd=root, timeout_s=validation.VALIDATION_TIMEOUT_S,
+        env=_acceptance_env(argv))
+    # `ran` is the acceptance contract's own word for "the command produced an
+    # exit status"; a timed-out command did run but has no exit status, so it
+    # stays not_executed/inconclusive -- never a pass.
+    ran = result.outcome == EXECUTION_EXITED
+    exit_code = result.exit_code if ran else None
+    tail = (result.stdout + result.stderr)[-2000:]
+    if not ran:
+        tail = (tail + "\n" + result.outcome
+                + f' after {result.timeout_s:g}s'
+                + f'; process_termination={result.process_termination}'
+                + f'; {result.termination_detail}').strip()
     record = build_acceptance(
         {"verify_command": command},
         {"verify_ran": ran, "verify_exit": exit_code,
@@ -552,13 +552,16 @@ def _run_acceptance(root: Path, command: str
     entry = {
         "name": "acceptance",
         "scope": "explicit",
-        "launched": launched,
+        "launched": result.launched,
         "status": ("passed" if outcome == "passed"
                    else "failed" if outcome == "failed" else "skipped"),
         "exit_code": exit_code,
+        "termination": result.outcome,
+        "process_termination": result.process_termination,
+        "timeout_s": result.timeout_s,
         "note": record.get("detail"),
         "output_tail": check_runner.redact_secrets(tail),
-        "duration_ms": int((monotonic() - started) * 1000),
+        "duration_ms": result.duration_ms,
     }
     return record, entry
 
@@ -2174,9 +2177,9 @@ def _str_list(arguments: dict[str, Any], key: str, *,
 
 
 # Phase 10 -- atomic in-place execution ------------------------------------
-# ponytail: dispatch schema carries no per-task timeout input, so in-place
-# cmd runs are bounded by this fixed ceiling; add a `timeout` schema field
-# when callers genuinely need per-task limits.
+# ponytail: the dispatch schema carries no per-task timeout input, so in-place
+# cmd runs are bounded by the centralized `in_place` budget; add a `timeout`
+# schema field when callers genuinely need per-task limits.
 _IN_PLACE_TIMEOUT_S = timeouts.DEFAULT_TIMEOUTS.in_place
 
 
@@ -2411,33 +2414,27 @@ def _run_in_place(root: Path, worker: dict[str, Any],
     declared_validation = [list(entry)
                            for entry in (worker.get("validation") or [])]
     exec_started_at = evidence.now_iso()
-    exec_started = monotonic()
-    proc: subprocess.CompletedProcess[str] | None = None
+    result = spawn_capture(cmd, cwd=root, timeout_s=_IN_PLACE_TIMEOUT_S)
     cmd_failure: str | None = None
-    exit_code: int | None = None
-    termination = validation.EXECUTION_EXITED
-    try:
-        proc = subprocess.run(cmd, cwd=root, capture_output=True,
-                              text=True, timeout=_IN_PLACE_TIMEOUT_S)
-        exit_code = proc.returncode
-    except subprocess.TimeoutExpired:
-        termination = validation.EXECUTION_TIMED_OUT
-        cmd_failure = (f"CMD_TIMEOUT: exceeded "
-                       f"{_IN_PLACE_TIMEOUT_S}s")
-    except OSError as exc:
-        termination = validation.EXECUTION_LAUNCH_FAILED
-        cmd_failure = f"CMD_FAILED: {type(exc).__name__}: {exc}"
+    exit_code: int | None = result.exit_code
+    if result.outcome == EXECUTION_LAUNCH_FAILED:
+        cmd_failure = f"CMD_FAILED: {result.termination_detail}"
+    elif result.timed_out:
+        cmd_failure = (f"CMD_TIMEOUT: exceeded {result.timeout_s:g}s"
+                       f" (process_termination={result.process_termination})")
     # Bound evidence to what the process actually did. A zero exit here is
     # evidence about the command only -- never about validation.
     execution = validation.execution_record(
         cmd, ".",
         started_at=exec_started_at,
-        duration_ms=int((monotonic() - exec_started) * 1000),
+        duration_ms=result.duration_ms,
         exit_code=exit_code,
-        termination=termination,
-        stdout=(proc.stdout or "") if proc is not None else "",
-        stderr=(proc.stderr or "") if proc is not None else "",
-        known_policy_command=False, execution_id=execution_id)
+        termination=result.outcome,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        known_policy_command=False, execution_id=execution_id,
+        process_termination=result.process_termination,
+        timeout_s=result.timeout_s)
     try:
         observed = _observed_paths(root)
     except Exception as exc:
@@ -2453,8 +2450,7 @@ def _run_in_place(root: Path, worker: dict[str, Any],
         detail = cmd_failure
     elif exit_code != 0:
         reason = "CMD_FAILED"
-        stderr_tail = (proc.stderr.strip()[-300:]
-                       if proc is not None and proc.stderr else "")
+        stderr_tail = result.stderr.strip()[-300:] if result.stderr else ""
         detail = (f"cmd exited {exit_code}"
                   + (f": {stderr_tail}" if stderr_tail else ""))
     else:

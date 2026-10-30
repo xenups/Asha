@@ -18,14 +18,21 @@ from __future__ import annotations
 
 import os
 import shlex
-import subprocess
 import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from .execution import (
+    EXECUTION_DEADLINE_EXCEEDED,
+    EXECUTION_EXITED,
+    EXECUTION_LAUNCH_FAILED,
+    DeadlineExhausted,
+    ExecutionLaunchFailed,
+    ExecutionTimeout,
+    spawn_capture,
+)
 from .types import OrchestratorError, RunnerResult
-from .worktree import kill_process_tree
 
 #: Worker values that select a non-default runner (spec field contract).
 KNOWN_RUNNERS = frozenset({'command', 'antigravity'})
@@ -52,25 +59,22 @@ def runner_kind(worker: Mapping[str, Any]) -> str:
 def _spawn(argv: list[str], cwd: Path,
            timeout: float,
            env: dict[str, str] | None = None) -> tuple[int, str, str]:
-    """ONE process primitive for all runners -- same contract
-    default_execute had: spawn failure -> (-1, msg); timeout ->
-    kill_process_tree, then TimeoutExpired propagates for _run_one to
-    map to FAILED/timeout_exceeded."""
-    try:
-        proc = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True,
-                                env=env,
-                                start_new_session=(os.name != 'nt'))
-    except (OSError, subprocess.SubprocessError) as exc:
-        return -1, '', f'{type(exc).__name__}: {exc}'
-    try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        kill_process_tree(proc)
-        raise
-    except (OSError, subprocess.SubprocessError) as exc:
-        return -1, '', f'{type(exc).__name__}: {exc}'
-    return proc.returncode, out or '', err or ''
+    """ONE process primitive for all runners, now ``execution.spawn_capture``.
+
+    Nothing is fabricated: a child that could not be created raises
+    ``ExecutionLaunchFailed`` (never a synthetic ``-1`` exit code), an
+    exhausted budget raises ``ExecutionTimeout`` carrying the verified
+    outcome, and a proven zero is a real zero.
+    """
+    result = spawn_capture(argv, cwd, timeout_s=timeout, env=env)
+    if result.outcome == EXECUTION_LAUNCH_FAILED:
+        raise ExecutionLaunchFailed(result)
+    if result.outcome == EXECUTION_DEADLINE_EXCEEDED and not result.launched:
+        raise DeadlineExhausted(result)
+    if result.outcome == EXECUTION_EXITED:
+        return (result.exit_code if result.exit_code is not None else 0,
+                result.stdout, result.stderr)
+    raise ExecutionTimeout(result)
 
 
 def _acceptance_env(argv: list[str]) -> dict[str, str]:

@@ -88,6 +88,11 @@ class TimeoutPolicy:
                          f'(known: {", ".join(STEPS)})')
 
 
+def check_budget(label: str, value: object) -> float:
+    """Validate one already-supplied budget (public form of ``_budget``)."""
+    return _budget(label, value)
+
+
 DEFAULT_TIMEOUTS = TimeoutPolicy()
 
 

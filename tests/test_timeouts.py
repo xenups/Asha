@@ -121,6 +121,18 @@ def test_deadline_expires_without_resetting() -> None:
     assert deadline.cap(30.0) == 0.0          # never extends itself
 
 
+def test_check_budget_guards_a_caller_supplied_value() -> None:
+    """A budget that arrives at runtime is validated once, where it is used."""
+    assert timeouts.check_budget('check', 30) == 30.0
+    assert isinstance(timeouts.check_budget('check', 30), float)
+    with pytest.raises(ValueError):
+        timeouts.check_budget('check', 0)
+    with pytest.raises(ValueError):
+        timeouts.check_budget('check', float('inf'))
+    with pytest.raises(ValueError):
+        timeouts.check_budget('no-such-step', 30)
+
+
 def test_no_deadline_means_no_cap() -> None:
     """Absent a deadline nothing is capped: the operation budget alone rules."""
     assert resolve('worker') == HISTORICAL['worker']

@@ -33,7 +33,14 @@ from contextlib import suppress as _suppress
 from graphlib import CycleError, TopologicalSorter
 from typing import Any
 
-from asha import dep_index, graph_state, telemetry, validation, worker_graph
+from asha import (
+    dep_index,
+    execution,
+    graph_state,
+    telemetry,
+    validation,
+    worker_graph,
+)
 from asha.classifier import classify_task, governance_profile
 from asha.common import paths as common_paths
 from asha.conflict import ConflictManager, covered, scope_status
@@ -282,6 +289,24 @@ class DAGCoordinator:
         # match the scoped candidate inventory.
         try:
             result = self.execute(worker, path)
+        except execution.ExecutionTimeout as exc:
+            # a typed timeout carries the verified facts: which budget ran
+            # out and what happened to the process afterwards
+            facts = worker_execution.execution_facts(exc.execution)
+            return {"state": "FAILED", "reason": exc.reason,
+                    "evidence": None, **facts,
+                    "detail": exc.execution.termination_detail}
+        except execution.DeadlineExhausted as exc:
+            # the task budget was gone before the child existed: nothing ran
+            return {"state": "BLOCKED", "reason": "deadline_exceeded",
+                    "evidence": None,
+                    **worker_execution.execution_facts(exc.execution)}
+        except execution.ExecutionLaunchFailed as exc:
+            return {"state": "FAILED",
+                    "reason": "launch_failed",
+                    "evidence": None,
+                    **worker_execution.execution_facts(exc.execution),
+                    "detail": exc.execution.termination_detail}
         except subprocess.TimeoutExpired:
             return {"state": "FAILED", "reason": "timeout_exceeded",
                     "evidence": None}

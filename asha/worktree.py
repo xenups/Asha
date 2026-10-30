@@ -3,13 +3,18 @@ from __future__ import annotations
 
 import os
 import re
+import signal
 import subprocess
 import uuid
-from contextlib import suppress
 from pathlib import Path
 
 from .common import paths as common_paths
-from .types import OrchestratorError
+from .types import (
+    TERMINATION_CONFIRMED,
+    TERMINATION_UNCONFIRMED,
+    OrchestratorError,
+    ProcessTermination,
+)
 
 # ---------------------------------------------------------------------------
 # 6.3 WorktreeDispatcher -- git worktree lifecycle for worker isolation.
@@ -101,22 +106,50 @@ class WorktreeDispatcher:
             self.prune()
 
 
-def kill_process_tree(proc: subprocess.Popen[str]) -> None:
-    """Fail-closed teardown for a timed-out worker: kill the whole child
-    tree (Windows `taskkill /T /F`; POSIX SIGKILL to the session group
-    the worker was started in), then reap the direct child. Every error
-    is swallowed -- this runs during timeout teardown and must never
-    mask the timeout that triggered it."""
+def kill_process_tree(proc: subprocess.Popen[str]) -> ProcessTermination:
+    """Hard-kill the child's process tree and report what was VERIFIED.
+
+    Windows: ``taskkill /T /F``; POSIX: SIGKILL to the session group the child
+    was started in. The direct child is then reaped by this function, so
+    ``confirmed`` means "observed to exit" -- not "a signal was accepted".
+
+    Descendants are not enumerable portably (no process-tree walk for a
+    reparented grandchild), so tree-wide termination is never claimed; the
+    detail string says so. Errors are captured, not swallowed: a failed kill
+    must not look like a successful one. The timeout that triggered the kill
+    is reported by the caller regardless of what happens here.
+    """
+    errors: list[str] = []
     if os.name == 'nt':
-        with suppress(OSError, subprocess.SubprocessError):
+        try:
             subprocess.run(['taskkill', '/T', '/F', '/PID', str(proc.pid)],
                            capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError) as exc:
+            errors.append(f'taskkill: {type(exc).__name__}: {exc}')
     else:
-        with suppress(OSError):
-            # 9 = SIGKILL; killpg exists only on POSIX and is absent
-            # from the win32 typeshed -- this branch never runs on nt.
-            os.killpg(proc.pid, 9)  # type: ignore[attr-defined]
-    with suppress(OSError):
+        try:
+            # killpg exists only on POSIX and is absent from the win32
+            # typeshed -- this branch never runs on nt.
+            os.killpg(proc.pid, signal.SIGKILL)  # type: ignore[attr-defined]
+        except (OSError, AttributeError) as exc:
+            errors.append(f'killpg: {type(exc).__name__}: {exc}')
+    try:
         proc.kill()
-    with suppress(OSError, subprocess.SubprocessError):
+    except OSError as exc:
+        errors.append(f'kill: {type(exc).__name__}: {exc}')
+    reaped = False
+    try:
         proc.wait(timeout=30)
+        reaped = proc.returncode is not None
+    except (OSError, subprocess.SubprocessError) as exc:
+        errors.append(f'wait: {type(exc).__name__}: {exc}')
+    suffix = '' if not errors else '; errors: ' + '; '.join(errors)
+    if reaped:
+        return ProcessTermination(
+            TERMINATION_CONFIRMED,
+            f'direct child reaped (rc={proc.returncode}); '
+            f'descendants not verified{suffix}')
+    return ProcessTermination(
+        TERMINATION_UNCONFIRMED,
+        'termination requested, direct child not observed to exit'
+        f'{suffix}')

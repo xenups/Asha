@@ -21,6 +21,7 @@ from . import (
     check_runner,
     dep_index,
     evidence,
+    execution,
     graph_state,
     scope_resolver,
     scoping,
@@ -30,6 +31,7 @@ from .classifier import classify_task, governance_profile
 from .common import paths as common_paths
 from .conflict import ConflictManager, covered, scope_status
 from .contracts.validation import validate_workers  # extracted (H.2.1)
+from .governance import worker_execution
 from .governance.worker_execution import (
     default_execute,  # extracted (H.2.1)
     verify_worker_evidence,  # extracted (H.2.1)
@@ -499,9 +501,24 @@ class GovernedScheduler:
                  base_tree: str | None = None) -> dict[str, Any]:
         try:
             result = self.execute(worker, path)
+        except execution.ExecutionTimeout as exc:
+            # G3: budget exhausted; the primitive already killed and reaped
+            # the child. Fail closed with an explicit reason and the facts.
+            return {'state': 'FAILED', 'reason': exc.reason,
+                    'evidence': None,
+                    **worker_execution.execution_facts(exc.execution),
+                    'detail': exc.execution.termination_detail}
+        except execution.DeadlineExhausted as exc:
+            return {'state': 'BLOCKED', 'reason': 'deadline_exceeded',
+                    'evidence': None,
+                    **worker_execution.execution_facts(exc.execution)}
+        except execution.ExecutionLaunchFailed as exc:
+            return {'state': 'FAILED', 'reason': 'launch_failed',
+                    'evidence': None,
+                    **worker_execution.execution_facts(exc.execution),
+                    'detail': exc.execution.termination_detail}
         except subprocess.TimeoutExpired:
-            # G3: budget exhausted; default_execute already killed the
-            # worker's process tree. Fail closed with an explicit reason.
+            # a hook that raises the plain stdlib timeout (no verified facts)
             return {'state': 'FAILED', 'reason': 'timeout_exceeded',
                     'evidence': None}
         except Exception as exc:  # worker hook must not kill the scheduler

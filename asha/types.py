@@ -12,6 +12,35 @@ from .timeouts import DEFAULT_TIMEOUTS
 
 STATES = ('PENDING', 'DEFERRED', 'RUNNING', 'DONE', 'FAILED', 'BLOCKED',
           'INVALID_EVIDENCE')
+
+# What Asha can PROVE about ending the process it created. A kill request is
+# not proof of termination; a reaped direct child is not proof about its
+# descendants.
+TERMINATION_NOT_REQUIRED = 'not_required'
+TERMINATION_CONFIRMED = 'confirmed'
+TERMINATION_UNCONFIRMED = 'unconfirmed'
+TERMINATION_NOT_APPLICABLE = 'not_applicable'
+TERMINATION_STATES = (TERMINATION_NOT_REQUIRED, TERMINATION_CONFIRMED,
+                      TERMINATION_UNCONFIRMED, TERMINATION_NOT_APPLICABLE)
+
+
+@dataclass(frozen=True)
+class ProcessTermination:
+    """Result of one termination attempt, as observed (not as requested)."""
+
+    process_termination: str
+    detail: str
+
+    def __post_init__(self) -> None:
+        if self.process_termination not in TERMINATION_STATES:
+            raise ValueError('unknown process_termination '
+                             f'{self.process_termination!r}')
+
+
+NOT_APPLICABLE = ProcessTermination(TERMINATION_NOT_APPLICABLE,
+                                   'no process was created')
+NOT_REQUIRED = ProcessTermination(TERMINATION_NOT_REQUIRED,
+                                 'process completed on its own')
 #: Compatibility alias: the budget itself lives in asha.timeouts.
 WORKER_TIMEOUT_S = DEFAULT_TIMEOUTS.worker
 TAIL_CHARS = 2000
