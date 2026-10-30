@@ -22,7 +22,9 @@ Stream contract
 Exit codes (documented classes)
 -------------------------------
     0    validation completed (SCOPED targeted or canonical COMPLETE),
-         or NO_CHANGES, or evaluation-only (--no-execute) success.
+         or NO_CHANGES.
+         With --no-execute the payload status is EVALUATION_ONLY and no
+         validation verdict exists; nothing was checked.
     1    validation failed (a check reported failed).
     2    operational/engine error (not a git repo, engine failure,
          canonical execution refused on an uncommitted target, or
@@ -591,7 +593,7 @@ def _emit_unified(result: dict[str, Any], as_json: bool) -> int:
                  or payload.get('stack_healthy') is False)):
         exit_code = EXIT_VALIDATION_FAILED
     if (exit_code == EXIT_OK and isinstance(payload, dict)
-            and 'change_set' in payload
+            and 'unaccounted_paths' in payload
             and payload.get('validation_result') is None
             and not payload.get('evidence_id')):
         # evaluation-only: no check ran, so exit 0 would tell a script
@@ -1036,6 +1038,10 @@ def main(argv: list[str] | None = None) -> int:
                               no_execute=bool(args.no_execute), run_id=run_id,
                               acceptance=args.acceptance)
             payload.update(outcome)
+            if args.no_execute and payload.get('validation_result') is None:
+                # documented evaluation-only mode: say so in the payload,
+                # never let a null verdict read as a pass
+                payload['status'] = 'EVALUATION_ONLY'
             if payload['validation_result'] == 'FAIL':
                 exit_code = EXIT_VALIDATION_FAILED
     except (CliError, git_context.GitContextError) as exc:

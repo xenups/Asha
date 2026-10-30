@@ -82,8 +82,9 @@ def test_executed_reflects_a_real_process() -> None:
 
 
 def test_evaluation_only_run_does_not_exit_zero() -> None:
-    payload = {"decision": "COMPLETE", "change_set": {"base": "HEAD~1"},
-               "validation_result": None, "evidence_id": None}
+    payload: dict[str, object] = {
+        "decision": "COMPLETE", "unaccounted_paths": [],
+        "validation_result": None, "evidence_id": None}
     result = {"content": [{"text": json.dumps(payload)}]}
     assert cli._emit_unified(result, as_json=True) == cli.EXIT_UNVALIDATED
     # a real status payload keeps its normal exit code
