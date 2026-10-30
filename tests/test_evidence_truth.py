@@ -436,3 +436,29 @@ def test_seal_with_malformed_snapshot_identity_is_tampered(
     path = _seal_artifact(repo, head, snapshot_id="short")
     sealed = json.loads(path.read_text(encoding="utf-8"))
     assert server._artifact_evidence_state(sealed, head, tree) == "tampered"
+def test_ship_authority_claim_is_tampering(tmp_path: Path) -> None:
+    """A recomputed digest cannot make a ship-authority claim trustworthy."""
+    repo = _repo(tmp_path)
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    tree = _git(repo, "rev-parse", "HEAD^{tree}").strip()
+    path = _seal_artifact(repo, head, authorized_to_ship=True)
+    sealed = json.loads(path.read_text(encoding="utf-8"))
+    # the digest is internally consistent; only the semantic check can catch it
+    assert sealed["evidence_sha256"] == evidence.compute_digest(sealed)
+    assert server._artifact_evidence_state(sealed, head, tree) == "tampered"
+
+
+def test_stack_rejects_ship_authority_claim(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _git(repo, "checkout", "-q", "-b", "b1")
+    _write(repo / "pkg/b1.py", "ONE = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "b1")
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    _seal_artifact(repo, head, authorized_to_ship=True)
+
+    payload = _payload(server.asha_verify_stack(
+        {"root": str(repo), "branches": ["b1"], "base_ref": "main"}))
+    assert payload["stack_healthy"] is False
+    assert payload["branches"][0]["evidence"] == "tampered"
+    assert payload["branches"][0]["status"] == "STACK_EVIDENCE_TAMPERED"

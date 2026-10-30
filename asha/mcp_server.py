@@ -833,6 +833,10 @@ def _artifact_evidence_state(sealed: object, head_sha: str,
         return "tampered"
     if evidence.compute_digest(sealed) != sealed.get("evidence_sha256"):
         return "tampered"
+    if sealed.get("authorized_to_ship") is not False:
+        # digest integrity cannot authorize shipping; the contract is a
+        # false-valued field, so any other value is tampering
+        return "tampered"
     if sealed.get("schema") != evidence.SCHEMA_VALIDATED:
         return "legacy"
     if sealed.get("kind") != "verification":
