@@ -18,9 +18,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from asha import mcp_server as server  # noqa: E402
-from asha import telemetry, validation  # noqa: E402
-from asha.common import paths as common_paths  # noqa: E402
+from asha import mcp_server as server
+from asha import telemetry, validation
+from asha.common import paths as common_paths
 
 PY = sys.executable
 TASK_ID_RE = re.compile(r"^mcp-[0-9a-f]{12}$")
