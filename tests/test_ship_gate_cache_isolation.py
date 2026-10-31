@@ -13,10 +13,10 @@ manual cleanup -- and the user had made no change at all. These tests drive the
 real gate (no monkeypatched ``check_runner``) and inspect the filesystem, since
 an *ignored* cache directory is still physically inside the target worktree.
 
-The redirect itself lives in ``ship_gate._isolated_tool_caches``; what is
-asserted here is the behaviour a repository owner cares about: caches land
-outside, the worktree stays clean, repeat runs are allowed, and genuine source
-changes still refuse.
+The redirect itself lives in ``asha.verification_env`` and is handed to the
+check run as a per-invocation environment; what is asserted here is the
+behaviour a repository owner cares about: caches land outside, the worktree
+stays clean, repeat runs are allowed, and genuine source changes still refuse.
 """
 
 from __future__ import annotations
@@ -149,6 +149,26 @@ def test_new_untracked_source_file_still_refuses(tmp_path: Path) -> None:
 
     with pytest.raises(evidence.EvidenceError, match="working tree is dirty"):
         ship_gate.gate_ship(repo, reviewer=_reviewer)
+
+
+def test_a_source_file_named_like_a_cache_is_still_a_change(
+        tmp_path: Path) -> None:
+    """The redirect moves caches out; it never teaches the gate to ignore names.
+
+    A file the user created that merely looks like a cache artifact is an
+    untracked change and must keep refusing, otherwise the isolation would be
+    hiding real work.
+    """
+    repo = _make_repo(tmp_path)
+    (repo / ".pytest_cache").write_text("# deliberate user note\n",
+                                        encoding="utf-8")
+
+    with pytest.raises(evidence.EvidenceError, match="working tree is dirty"):
+        ship_gate.gate_ship(repo, reviewer=_reviewer)
+
+    (repo / ".pytest_cache").unlink()
+    sealed = ship_gate.gate_ship(repo, reviewer=_reviewer)
+    assert sealed["gate_state"] == "COMPLETED_CLEAN"
 
 
 def test_deleted_tracked_file_still_refuses(tmp_path: Path) -> None:

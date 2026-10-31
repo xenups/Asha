@@ -33,7 +33,15 @@ from contextlib import suppress as _suppress
 from pathlib import Path
 from typing import Any
 
-from asha import check_runner, evidence, scope_resolver, scoping, timeouts, validation
+from asha import (
+    check_runner,
+    evidence,
+    scope_resolver,
+    scoping,
+    timeouts,
+    validation,
+    verification_env,
+)
 from asha.common import paths as common_paths
 from asha.conflict import covered
 from asha.execution import (
@@ -758,10 +766,13 @@ def _run_checks(decision, path: Path, resolved: dict,
             mypy_targets=list(decision.mypy_targets),
             timeout=timeout_s,
             deadline=deadline,
+            env_overrides=verification_env.env_overrides(path),
             **extra,
         )
     return check_runner.run(path, resolved, timeout_s=timeout_s,
-                            deadline=deadline, **extra)
+                            deadline=deadline,
+                            env_overrides=verification_env.env_overrides(path),
+                            **extra)
 
 
 def run_worker_in_worktree(

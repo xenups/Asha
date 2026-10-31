@@ -397,7 +397,8 @@ def test_9b_gate_denies_on_execution_failure_end_to_end(
     sealed unauthorized and raises, with the state recorded in evidence."""
     repo = _make_repo(tmp_path)
 
-    def fake_run(root: Path, resolved: dict) -> list[dict]:
+    def fake_run(root: Path, resolved: dict,
+             **_: object) -> list[dict]:
         return [
             {"name": "ruff", "status": "failed", "exit_code": 1,
              "note": "", "output_tail": "simulated crash"},
@@ -487,7 +488,8 @@ def test_11_post_audit_modification_is_stale_review(tmp_path: Path,
     repo = _make_repo(tmp_path)
     real_run = ship_gate.check_runner.run
 
-    def mutating_run(root: Path, resolved: dict) -> list[dict]:
+    def mutating_run(root: Path, resolved: dict,
+                    **_: object) -> list[dict]:
         results = real_run(root, resolved)
         _write(root, "README.md", "# mutated while checks ran\n")
         return results
@@ -530,7 +532,8 @@ def test_12_checks_that_mutate_the_target_are_detected(tmp_path: Path,
     audited = audit_snapshot.snapshot_id_of(repo)
     real_run = ship_gate.check_runner.run
 
-    def mutating_run(root: Path, resolved: dict) -> list[dict]:
+    def mutating_run(root: Path, resolved: dict,
+                    **_: object) -> list[dict]:
         results = real_run(root, resolved)
         _write(root, "pkg/leaf.py", "VALUE = 99\n")
         return results
@@ -772,7 +775,8 @@ def test_13c_gate_state_is_derived_not_accepted(tmp_path: Path,
     it -- the gate recomputes the state from the checks it ran."""
     repo = _make_repo(tmp_path)
 
-    def padded_run(root: Path, resolved: dict) -> list[dict]:
+    def padded_run(root: Path, resolved: dict,
+                  **_: object) -> list[dict]:
         return [
             {"name": name, "status": "passed", "exit_code": 0, "note": ""}
             for name in resolved["checks"]

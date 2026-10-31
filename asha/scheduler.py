@@ -25,6 +25,7 @@ from . import (
     graph_state,
     scope_resolver,
     scoping,
+    verification_env,
     worker_graph,
 )
 from .classifier import classify_task, governance_profile
@@ -395,9 +396,12 @@ class GovernedScheduler:
                     changed_files=list(resolved['affected_files']),
                     targeted_tests=list(decision.targeted_tests),
                     mypy_targets=list(decision.mypy_targets),
+                    env_overrides=verification_env.env_overrides(path),
                 )
             else:
-                checks = check_runner.run(path, resolved)
+                checks = check_runner.run(
+                    path, resolved,
+                    env_overrides=verification_env.env_overrides(path))
             failed = [entry['name'] for entry in checks
                       if entry['status'] == 'failed']
             if failed:
