@@ -307,6 +307,11 @@ def test_a_gate_refusal_cannot_become_an_approval(
     assert final['decision'] == 'BLOCKED'
     assert final['gate']['authorized_to_ship'] is False
     assert final['gate']['gate_state'] == 'ERROR'
+    # The gate ran and refused, so its stage is a recorded result -- not a
+    # stage that was never executed (that label is meant for a skipped gate).
+    gate_stage = final['stages'][-1]
+    assert (gate_stage['stage'], gate_stage['status']) == (
+        'SHIP_GATE', 'VALIDATED')
 
 
 def test_a_blocking_finding_requests_changes(tmp_path: Path,
