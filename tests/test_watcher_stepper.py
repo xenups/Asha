@@ -201,6 +201,11 @@ def test_watch_stepper_current_vs_last_sealed(tmp_path: Path) -> None:
     assert 'node done' not in html
 
 
+# The commit the frozen trio is measured against: every edit made after it
+# must be approved and the anchor advanced in the same review.
+_GOVERNANCE_ANCHOR = '2e4009957a9536ed584a1f95f304861fd580295d'
+
+
 def test_governance_trio_frozen(tmp_path: Path) -> None:
     import subprocess as sp
     cwd = Path(__file__).resolve().parents[1]
@@ -237,11 +242,34 @@ def test_governance_trio_frozen(tmp_path: Path) -> None:
     # reviewed and approved. asha/scoping.py and asha/scheduler.py are still
     # untouched by it. The baseline advances only for this reviewed change;
     # any later edit to the trio still fails here until separately approved.
-    out = sp.run(['git', 'diff', 'db5bcfe..HEAD', '--',
+    # Anchor 2e40099 (Phase 4): the approved verification-environment change
+    # added env_overrides to check_runner.run/run_scoped (+ _run_group,
+    # _env_cwd_env) and the two scheduler call sites, so tool caches land
+    # outside the reviewed worktree without mutating os.environ.
+    # asha/scoping.py is untouched. The anchor advanced only for that change;
+    # anything after it fails here again.
+    out = sp.run(['git', 'diff', f'{_GOVERNANCE_ANCHOR}..HEAD', '--',
                   'asha/scoping.py', 'asha/check_runner.py',
                   'asha/scheduler.py'],
                  cwd=cwd, capture_output=True, text=True, check=True)
     assert out.stdout == ''
+
+
+def test_governance_anchor_names_a_commit_that_touched_the_trio() -> None:
+    """The anchor may only advance to a commit that really changed the trio.
+
+    ``test_governance_trio_frozen`` passes as soon as the anchor equals HEAD or
+    any later commit, so without this an exception could hide an unreviewed
+    edit by moving the anchor somewhere unrelated. Requiring the anchor commit
+    to carry the trio change keeps the guard meaningful.
+    """
+    cwd = Path(__file__).resolve().parents[1]
+    shown = subprocess.run(['git', 'show', '--name-only', '--format=',
+                            _GOVERNANCE_ANCHOR],
+                           cwd=cwd, capture_output=True, text=True, check=True)
+    touched = set(shown.stdout.split())
+    assert touched & {'asha/scoping.py', 'asha/check_runner.py',
+                      'asha/scheduler.py'}
 
 
 # ------------------------------------------------------------ watcher helpers

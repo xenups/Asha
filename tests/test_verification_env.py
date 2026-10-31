@@ -14,7 +14,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -22,7 +22,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from asha import check_runner, execution, verification_env
-from asha.common import paths as common_paths
 from asha.governance import worker_execution
 
 CACHE_DIRS = ("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache")
@@ -238,8 +237,8 @@ class _Decision:
     """The only shape _run_checks reads: an ineligible scoping decision."""
 
     eligible = False
-    targeted_tests: list[str] = []
-    mypy_targets: list[str] = []
+    targeted_tests: ClassVar[list[str]] = []
+    mypy_targets: ClassVar[list[str]] = []
 
 
 def test_worker_verification_path_isolates_its_caches(tmp_path: Path) -> None:
