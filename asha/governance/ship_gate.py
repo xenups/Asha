@@ -155,6 +155,32 @@ def _gate_evidence(snapshot_id: str, resolved: dict,
     })
 
 
+class GateRefused(evidence.EvidenceError):
+    """A gate that did not authorize; ``gate`` is what actually happened.
+
+    Subclasses ``EvidenceError`` so existing callers keep refusing, but carries
+    the outcome record itself. Reading the outcome back from disk was the
+    Phase 3 defect: after a precondition refusal no new artifact is sealed, so
+    the read returned the PREVIOUS run's state (typically a clean
+    ``COMPLETED_CLEAN``) for a run that never executed.
+    """
+
+    def __init__(self, message: str, gate: dict) -> None:
+        super().__init__(message)
+        self.gate = gate
+
+
+def _refused(state: gate_states.GateState, reason: object) -> dict:
+    """The outcome record for a gate that refused before producing a result."""
+    return {
+        'gate_state': state.value,
+        'authorized_to_ship': False,
+        'reasons': [str(reason)],
+        'blocking_findings': [],
+        'policy_version': POLICY_VERSION,
+    }
+
+
 def gate_ship(root: Path, *, no_execute: bool = False,
               reviewer: ReviewerFn | None = None) -> dict:
     """Run the ship gate; returns the sealed evidence payload.
@@ -173,8 +199,16 @@ def gate_ship(root: Path, *, no_execute: bool = False,
     """
     root = Path(root).resolve()
     # tamper check on any prior artifact BEFORE anything else
-    evidence.verify(root)
-    evidence.require_clean_tree(root)
+    try:
+        evidence.verify(root)
+    except evidence.EvidenceError as exc:
+        raise GateRefused(
+            str(exc), _refused(gate_states.GateState.INVALID_EVIDENCE, exc)) from exc
+    try:
+        evidence.require_clean_tree(root)
+    except evidence.EvidenceError as exc:
+        raise GateRefused(
+            str(exc), _refused(gate_states.GateState.REFUSED, exc)) from exc
     resolved = scope_resolver.resolve(root)
     # Pre-D restoration (D.1): unresolved base + empty diff -> full S2
     if resolved["base"] is None and not resolved["affected_files"]:
@@ -232,9 +266,16 @@ def gate_ship(root: Path, *, no_execute: bool = False,
     evidence.write(root, sealed)  # persist BEFORE refusal, as control.py did
     evidence.verify(root)  # roundtrip self-check
     if not ok:
-        raise evidence.EvidenceError(
+        raise GateRefused(
             "SHIP GATE REFUSED: " + decision.state.value
-            + ("; " + "; ".join(decision.reasons) if decision.reasons else ""))
+            + ("; " + "; ".join(decision.reasons) if decision.reasons else ""),
+            {
+                **_refused(decision.state, decision.reasons[0]
+                           if decision.reasons else decision.state.value),
+                'reasons': list(decision.reasons),
+                'blocking_findings': list(decision.blocking_findings),
+                'snapshot_id': audited_id,
+            })
     from asha.common import paths as common_paths
     ev_file = common_paths.get_evidence_dir(root) / "evidence.json"
     return json.loads(ev_file.read_text(encoding="utf-8"))
