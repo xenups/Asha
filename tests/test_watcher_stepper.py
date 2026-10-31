@@ -203,7 +203,7 @@ def test_watch_stepper_current_vs_last_sealed(tmp_path: Path) -> None:
 
 # The commit the frozen trio is measured against: every edit made after it
 # must be approved and the anchor advanced in the same review.
-_GOVERNANCE_ANCHOR = '2e4009957a9536ed584a1f95f304861fd580295d'
+_GOVERNANCE_ANCHOR = 'e2bb977'
 
 
 def test_governance_trio_frozen(tmp_path: Path) -> None:
@@ -248,6 +248,12 @@ def test_governance_trio_frozen(tmp_path: Path) -> None:
     # outside the reviewed worktree without mutating os.environ.
     # asha/scoping.py is untouched. The anchor advanced only for that change;
     # anything after it fails here again.
+    # Anchor e2bb977 (Phase 6): the approved flakiness fix in scheduler.py
+    # replaced the 0.5s wall-clock coalescing window with a recorded fact
+    # (_command_finished, set when a worker's command returns) so overlapping
+    # completions always publish ONE generation and a running sibling still
+    # never blocks a publication. scoping.py and check_runner.py untouched;
+    # the trio guard and the anchor-names-a-trio-commit test stay in force.
     out = sp.run(['git', 'diff', f'{_GOVERNANCE_ANCHOR}..HEAD', '--',
                   'asha/scoping.py', 'asha/check_runner.py',
                   'asha/scheduler.py'],
