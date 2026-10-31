@@ -649,9 +649,12 @@ def finalize(root: Path, run_id: str) -> ReviewRun:
                 + '; '.join(str(item) for item in (gate.get('reasons') or [])),
             )
 
+    # A gate that ran and refused produced a recorded result; only a gate
+    # that never ran (missing stage, stale target) is NOT_EXECUTED.
+    gate_ran = str(gate.get('gate_state') or '') not in ('', 'NOT_EXECUTED')
     gate_stage = StageResult(
         stage=StageType.SHIP_GATE,
-        status=(StageStatus.VALIDATED if gate.get('authorized_to_ship')
+        status=(StageStatus.VALIDATED if gate_ran
                 else StageStatus.NOT_EXECUTED),
         stage_id=stage_id_for(run_id, StageType.SHIP_GATE),
         verdict=(Verdict.APPROVE if gate.get('authorized_to_ship')
