@@ -591,8 +591,9 @@ def finalize(root: Path, run_id: str) -> ReviewRun:
     if run.state is RunState.FINALIZED:
         return run
     if run.state in _TERMINAL:
-        raise SubmissionError(
-            f'run {run_id} is {run.state.value}: {"; ".join(run.reasons)}')
+        # A decided run is immutable: finalizing it again reads the recorded
+        # decision. It is neither a new attempt nor an approval.
+        return run
 
     missing = [stage.value for stage in STAGE_ORDER
                if not _validated(run, stage)]

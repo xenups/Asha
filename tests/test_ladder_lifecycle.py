@@ -392,3 +392,16 @@ def test_a_review_tool_never_accepts_a_command(tmp_path: Path) -> None:
                          shell='rm -rf /')
 
     assert 'unknown argument(s): shell' in message
+
+def test_repeated_finalize_reads_the_recorded_decision(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    started = start_review_via_mcp(repo)
+    run_id = started['run']['run_id']
+    submit_via_mcp(repo, run_id, started['packet'])
+
+    first = finalize(repo, run_id)
+    second = finalize(repo, run_id)
+
+    assert first['decision'] == second['decision'] == 'BLOCKED'
+    assert second['reasons'] == first['reasons']
+    assert second['gate'] == first['gate']
