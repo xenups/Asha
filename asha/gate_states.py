@@ -36,6 +36,10 @@ Vocabulary (no defaults, no implicit success):
                              complete.
     STALE_REVIEW             the authorization target no longer matches the
                              audited snapshot (TOCTOU).
+    REFUSED                  execution never started: a precondition (clean
+                             worktree, intact prior artifact) refused it
+                             before any check ran. Recorded so a refusal can
+                             never be reported as COMPLETED_CLEAN.
 
 `authorized_to_ship` is DERIVED from this state -- never accepted as an
 input. STATE_ALLOWS_SHIP names the only state that grants authorization.
@@ -55,6 +59,10 @@ class GateState(Enum):
     INVALID_EVIDENCE = 'INVALID_EVIDENCE'
     EXECUTION_FAILED = 'EXECUTION_FAILED'
     STALE_REVIEW = 'STALE_REVIEW'
+    # Execution never started: a precondition (clean worktree, intact prior
+    # evidence) refused it. Distinct from COMPLETED_CLEAN (checks ran, clean)
+    # and from INVALID_EVIDENCE (evidence was produced but unusable).
+    REFUSED = 'REFUSED'
 
 
 # The ONLY state that grants authorization UNCONDITIONALLY (under every
