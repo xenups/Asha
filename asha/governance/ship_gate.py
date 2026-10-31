@@ -32,8 +32,10 @@ manifest_version are ADDITIVE keys covered by the canonical digest.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from asha import audit_snapshot, check_runner, evidence, gate_states, scope_resolver
@@ -148,6 +150,53 @@ def _gate_evidence(snapshot_id: str, resolved: dict,
     })
 
 
+# Tools the gate runs write their caches into the working directory they are
+# started in -- which is the reviewed worktree. A dirty-by-cache tree then
+# refuses the NEXT finalize ("working tree is dirty: ?? __pycache__/"), so a
+# repository could be reviewed once and never again without a manual cleanup.
+# check_runner spawns its children with a copy of this process's environment
+# and takes no env argument, so the redirect has to be in place around the
+# call. Values are restored afterwards; nothing else in the process inherits
+# them.
+_CACHE_ENV_REDIRECT = (
+    # python writes .pyc next to the imported module unless told otherwise
+    "PYTHONDONTWRITEBYTECODE",
+    # pytest's own cache; disabling is smaller than relocating it
+    "PYTEST_ADDOPTS",
+    "MYPY_CACHE_DIR",
+    "RUFF_CACHE_DIR",
+)
+
+
+@contextmanager
+def _isolated_tool_caches(root: Path) -> Iterator[None]:
+    """Run the checks with their caches parked outside the reviewed tree.
+
+    shortcut: mutates os.environ for the duration of one check run; if the
+    gate ever runs concurrently inside one process, pass an explicit env
+    through check_runner instead.
+    """
+    from asha.common import paths as common_paths
+
+    cache_dir = common_paths.get_cache_dir(root) / "check-tools"
+    saved = {name: os.environ.get(name) for name in _CACHE_ENV_REDIRECT}
+    addopts = saved["PYTEST_ADDOPTS"] or ""
+    os.environ.update({
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTEST_ADDOPTS": (addopts + " -p no:cacheprovider").strip(),
+        "MYPY_CACHE_DIR": str(cache_dir / "mypy"),
+        "RUFF_CACHE_DIR": str(cache_dir / "ruff"),
+    })
+    try:
+        yield
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
 def gate_ship(root: Path, *, no_execute: bool = False,
               reviewer: ReviewerFn | None = None) -> dict:
     """Run the ship gate; returns the sealed evidence payload.
@@ -185,7 +234,8 @@ def gate_ship(root: Path, *, no_execute: bool = False,
         checks: list[dict] = []
         reviewer_artifact: dict | None = None
     else:
-        checks = check_runner.run(root, resolved)
+        with _isolated_tool_caches(root):
+            checks = check_runner.run(root, resolved)
         # The reviewer runs inside the audited window: before the
         # re-derivation below, so reviewer-side mutation is caught as
         # STALE_REVIEW exactly like check-side mutation.
