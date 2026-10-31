@@ -194,7 +194,9 @@ def _env_argv(env: ServiceEnvironment | None, name: str, argv: list[str]) -> lis
     return argv
 
 
-def _env_cwd_env(env: ServiceEnvironment | None, root: Path) -> tuple[Path, dict[str, str]]:
+def _env_cwd_env(env: ServiceEnvironment | None, root: Path,
+                 overrides: dict[str, str] | None = None
+                 ) -> tuple[Path, dict[str, str]]:
     """Execution cwd + environment for a resolved service.
 
     cwd = service_root when hermetic (the service's own layout), else the
@@ -203,6 +205,10 @@ def _env_cwd_env(env: ServiceEnvironment | None, root: Path) -> tuple[Path, dict
     including a NON-hermetic bound run, whose PYTHONPATH must still point
     at the worktree (the process environment is never mutated)."""
     proc_env = os.environ.copy()
+    if overrides:
+        # per-invocation cache redirection (asha.verification_env); applied to
+        # a copy, so the caller's environment is never mutated
+        proc_env.update(overrides)
     if env is None:
         return root, proc_env
     proc_env.update(env.env_vars)
@@ -402,13 +408,14 @@ def _tool_unavailable(name: str, output: str) -> str | None:
 def _run_group(root: Path, names: list[str], changed_py: list[str],
                label: str, timeout_s: float,
                deps_root: Path | None,
-               deadline: Deadline | None = None) -> list[dict]:
+               deadline: Deadline | None = None,
+               env_overrides: dict[str, str] | None = None) -> list[dict]:
     """Run the matrix for one service group in that service's environment."""
     try:
         env = _service_env(root, changed_py, deps_root)
         if deps_root is not None:
             verify_source_binding(env, root, changed_py)
-        cwd, proc_env = _env_cwd_env(env, root)
+        cwd, proc_env = _env_cwd_env(env, root, env_overrides)
     except (CheckRunnerError, OSError) as exc:
         return _blocked_group(f'{type(exc).__name__}: {exc}', names, label)
     results: list[dict] = []
@@ -479,7 +486,8 @@ def _run_group(root: Path, names: list[str], changed_py: list[str],
 def run(root: Path | str, resolved: dict,
         timeout_s: float = CHECK_TIMEOUT_S,
         *, deps_root: Path | None = None,
-        deadline: Deadline | None = None) -> list[dict]:
+        deadline: Deadline | None = None,
+        env_overrides: dict[str, str] | None = None) -> list[dict]:
     """Execute the mandatory checks for a resolved scope.
 
     One group per service root: each runs the full matrix for its own files
@@ -498,7 +506,7 @@ def run(root: Path | str, resolved: dict,
     results: list[dict] = []
     for label, paths in _service_groups(root, changed_py):
         results.extend(_run_group(root, names, paths, label, timeout_s,
-                                  deps_root, deadline))
+                                  deps_root, deadline, env_overrides))
     return results
 
 
@@ -538,6 +546,7 @@ def run_scoped(
     timeout: float = CHECK_TIMEOUT_S,
     deps_root: Path | None = None,
     deadline: Deadline | None = None,
+    env_overrides: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Dumb executor of an affirmative eligibility decision (spec 1.1).
 
@@ -559,7 +568,7 @@ def run_scoped(
     if deps_root is not None:
         verify_source_binding(env, root, changed_py)
     py = str(env.python_bin) if env is not None else sys.executable
-    cwd, proc_env = _env_cwd_env(env, root)
+    cwd, proc_env = _env_cwd_env(env, root, env_overrides)
     scoped_mypy = [
         file for file in mypy_targets
         if file.endswith(('.py', '.pyi')) and (root / file).is_file()

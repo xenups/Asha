@@ -13,10 +13,10 @@ manual cleanup -- and the user had made no change at all. These tests drive the
 real gate (no monkeypatched ``check_runner``) and inspect the filesystem, since
 an *ignored* cache directory is still physically inside the target worktree.
 
-The redirect itself lives in ``ship_gate._isolated_tool_caches``; what is
-asserted here is the behaviour a repository owner cares about: caches land
-outside, the worktree stays clean, repeat runs are allowed, and genuine source
-changes still refuse.
+The redirect itself lives in ``asha.verification_env`` and is handed to the
+check run as a per-invocation environment; what is asserted here is the
+behaviour a repository owner cares about: caches land outside, the worktree
+stays clean, repeat runs are allowed, and genuine source changes still refuse.
 """
 
 from __future__ import annotations

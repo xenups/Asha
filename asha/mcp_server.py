@@ -63,6 +63,7 @@ from . import (
     telemetry,
     timeouts,
     validation,
+    verification_env,
     worker_graph,
 )
 from .ast_indexer import ImportFact, ModuleIndex, index_module
@@ -673,7 +674,9 @@ def asha_verify_tip(arguments: dict[str, Any]) -> dict[str, Any]:
                     f"scope resolution failed: "
                     f"{type(exc).__name__}: {exc}")
             scope_level = str(scope.get("scope"))
-            checks = check_runner.run(resolved_root, scope)
+            checks = check_runner.run(
+                resolved_root, scope,
+                env_overrides=verification_env.env_overrides(resolved_root))
         elif acceptance_command:
             # A declared acceptance command IS the required check for this
             # tip: recorded with its real exit code, never inferred from the
