@@ -40,6 +40,7 @@ BASELINE = {
     "pkg/__init__.py": "",
     "pkg/module_a.py": 'VALUE_A = "original a"\n',
     "pkg/module_b.py": 'VALUE_B = "original b"\n',
+    "shared.py": 'SHARED = "original shared"\n',
 }
 
 
@@ -185,3 +186,101 @@ def test_a_running_fast_sibling_does_not_block_publication(
     assert report["status"] == "ok", (report["states"], report["reason"])
     assert set(sched.reconcile_log[0]["files"]) == {"pkg/module_a.py"}
     assert sched.state_of("wb") == "DONE"
+
+
+# -- mixed batch: one FAST_PATH worker and worktree workers in the same round —
+
+def _mixed() -> list[dict]:
+    """One PROVEN_DISJOINT worker (FAST_PATH) plus two PROVEN_SHARED writers
+    (worktree route) -- routing is per worker, not per batch."""
+    return [_worker("wa", "pkg/module_a.py", 'VALUE_A = "fast a"\n'),
+            _worker("wb1", "shared.py", 'SHARED = "writer one"\n'),
+            _worker("wb2", "shared.py", 'SHARED = "writer two"\n')]
+
+
+def test_mixed_batch_runs_both_routes_without_leaking_roots(
+        tmp_path: Path) -> None:
+    import json
+
+    from asha import evidence
+
+    repo = _make_repo(tmp_path)
+    fast_inside = threading.Event()
+    release = threading.Event()
+    overlap: list[bool] = []
+
+    def execute(worker: dict, worktree: Path) -> int:
+        wid = str(worker["id"])
+        if wid == "wa":
+            fast_inside.set()
+            release.wait(timeout=20)      # released by the worktree command
+        elif wid == "wb1":
+            # proves _fast_lock does not serialise the worktree route
+            overlap.append(fast_inside.is_set())
+            release.set()
+        proc = subprocess.run(worker["cmd"], cwd=worktree,
+                              capture_output=True, text=True, timeout=60)
+        if wid == "wa":
+            fast_inside.clear()
+        return proc.returncode
+
+    sched = GovernedScheduler(repo, _mixed(), task_id="p7-mixed",
+                              fast_path_enabled=True, execute=execute)
+    report = sched.run()
+
+    assert overlap == [True], "worktree command did not overlap the FAST_PATH one"
+    assert report["status"] == "ok", (report["states"], report["reason"])
+    routing = report["routing"]
+    assert routing["wa"]["mode"] == "fast_path"
+    assert routing["wb1"]["mode"] == "full_governance"
+    assert routing["wb2"]["mode"] == "full_governance"
+    # only the worktree route needed an isolated worktree
+    assert set(report["worktrees"]) == {"wb1", "wb2"}
+    # one shared registration for every worker, whichever route ran it
+    assert sched._command_finished == {"wa", "wb1", "wb2"}
+    assert {wid: sched.state_of(wid) for wid in ("wa", "wb1", "wb2")} == {
+        "wa": "DONE", "wb1": "DONE", "wb2": "DONE"}
+    # publication: one generation step per successful pass, union preserved
+    published = [entry for entry in sched.reconcile_log if entry["ok"]]
+    assert published, sched.reconcile_log
+    assert [entry["generation"] for entry in published] == list(
+        range(1, len(published) + 1))
+    assert set().union(*(set(entry["files"]) for entry in published)) == {
+        "pkg/module_a.py", "shared.py"}
+    assert published[-1]["generation"] == sched.graph.generation
+    # evidence stays bound to its own worker and its own execution root
+    for wid in ("wa", "wb1", "wb2"):
+        payload = json.loads(Path(report["evidence"][wid]).read_text(
+            encoding="utf-8"))
+        assert payload["worker_id"] == wid
+        assert payload["authorized_to_ship"] is False
+        assert evidence.compute_digest(payload) == payload["evidence_sha256"]
+        assert payload["base_commit"] != payload["commit"]
+    # the FAST_PATH write landed in the repo; worktree writes did not
+    assert (repo / "pkg/module_a.py").read_text() == 'VALUE_A = "fast a"\n'
+    assert (repo / "shared.py").read_text() == 'SHARED = "original shared"\n'
+
+
+def test_mixed_batch_fast_failure_fails_closed_and_releases_the_lock(
+        tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    workers = _mixed()
+    workers[0]["cmd"] = [PY, "-c", "raise SystemExit(1)"]   # wa fails
+
+    sched = GovernedScheduler(repo, workers, task_id="p7-mixed-fail",
+                              fast_path_enabled=True)
+    report = sched.run()
+
+    assert report["status"] == "failed"
+    assert sched.state_of("wa") == "FAILED"
+    assert report["reason"] == "wa:FAILED"
+    assert sched.state_of("wb1") == "DONE"
+    # the lock is released even though the FAST_PATH command failed
+    assert sched._fast_lock.acquire(blocking=False)
+    sched._fast_lock.release()
+    # a failed command still exited, so it is tracked like any other; the
+    # still-deferred writer never dispatched (abort is fail-closed)
+    assert sched._command_finished == {"wa", "wb1"}
+    assert sched.state_of("wb2") == "BLOCKED", sched.states["wb2"]
+    assert sched.graph.generation == len(
+        [entry for entry in sched.reconcile_log if entry["ok"]])
