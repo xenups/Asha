@@ -105,7 +105,13 @@ def _payload(result: dict[str, Any]) -> dict[str, Any]:
 def test_asha_registered_first_and_eighth_tool() -> None:
     names = [spec["name"] for spec in server.TOOL_SPECS]
     assert names[0] == "asha", names
-    assert len(names) == 8, names
+    # 14: Phase 3 appended the host-driven Ladder lifecycle in a fixed
+    # order; the registration order of the pre-existing tools is unchanged.
+    assert len(names) == 14, names
+    assert names[-6:] == ["asha_review", "asha_review_context",
+                          "asha_review_submit_stage",
+                          "asha_review_next_stage", "asha_review_finalize",
+                          "asha_review_status"], names
     assert "asha" in server.TOOL_HANDLERS
 
 

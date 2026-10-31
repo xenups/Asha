@@ -295,6 +295,8 @@ real cost.
 ## Further reading
 
 - [Governance orientation](docs/ORIENTATION.md) — module map and invariants.
+- [Ladder review](docs/LADDER.md) — review an exact commit range and get a
+  fail-closed delivery decision (`asha review`).
 - [Linux server deployment](docs/LINUX_SERVER_DEPLOY.md)
 - [Design specs](docs/phase-5.0-design.md)
 - [v0.5.0 release notes](https://github.com/xenups/Asha/releases/tag/v0.5.0)

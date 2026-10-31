@@ -46,7 +46,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from . import (
     git_context,
@@ -947,6 +947,324 @@ def _split_path_args(raw: list[str]) -> list[str]:
     return out
 
 
+# -------------------------------------------------- Ladder (host-driven review)
+#: `asha review*` exit codes. A review that is waiting for the host LLM is
+#: PENDING (5), never 0: an unfinished review is not an approval.
+REVIEW_EXIT = {'APPROVED': 0, 'CHANGES_REQUESTED': 1, 'BLOCKED': 2,
+               'STALE': 2, 'FAILED': 2}
+REVIEW_EXIT_PENDING = 5
+REVIEW_EXIT_ERROR = 3
+REVIEW_EXIT_USAGE = 4
+
+
+class _ReviewUsage(Exception):
+    """Argument error inside a review command (maps to exit 4)."""
+
+
+class _ReviewParser(argparse.ArgumentParser):
+    """argparse that raises instead of exiting, so codes stay documented."""
+
+    def error(self, message: str) -> NoReturn:
+        raise _ReviewUsage(message)
+
+
+def _review_common(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument('--root', default='.',
+                        help='repository root (default: cwd)')
+    parser.add_argument('--json', action='store_true', dest='as_json',
+                        help='emit exactly one JSON document on stdout')
+
+
+def _emit_review(document: dict[str, Any], *, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(document, indent=2, sort_keys=True,
+                         ensure_ascii=False))
+
+
+def _print_packet(packet: dict[str, Any]) -> None:
+    target = packet.get('target') or {}
+    print(f"review {packet.get('review_run_id')}: "
+          f"{packet.get('stage')} awaiting host review")
+    if target:
+        print(f"  target {str(target.get('base_sha'))[:12]}.."
+              f"{str(target.get('head_sha'))[:12]} "
+              f"diff {str(target.get('diff_sha256'))[:12]} "
+              f"files={len(target.get('files') or [])}")
+    print(f"  stage_id {packet.get('stage_id')}")
+    print(f"  expires_at {packet.get('expires_at')}")
+    print(f"  next: {packet.get('required_next_action')}")
+    print('  A connected host LLM performs this pass; Asha does not call a '
+          'model. Fetch context with `asha review-context`, submit with '
+          '`asha review-submit --file RESULT.json`.')
+
+
+def _print_run(run: Any) -> None:
+    target = run.target
+    decision = run.decision.value if run.decision else 'PENDING'
+    print(f'review {run.run_id}: {decision} ({run.state.value})')
+    print(f'  target {target.base_sha[:12]}..{target.head_sha[:12]} '
+          f'diff {target.diff_sha256[:12]} files={len(target.files)}')
+    for stage in run.stages:
+        line = (f'  {stage.stage.value:16} {stage.status.value:14} '
+                f'{stage.verdict.value:16} findings={len(stage.findings)}')
+        if stage.reviewer.host_client:
+            line += f' host={stage.reviewer.host_client}'
+        if stage.error:
+            line += f' error={stage.error}'
+        print(line)
+    for reason in run.reasons:
+        print(f'  reason: {reason}')
+    print(f'  independence: {run.independence.value}')
+    print(f'  gate: {run.gate.get("gate_state")} '
+          f'authorized={run.gate.get("authorized_to_ship")}')
+    print(f'  artifacts: {run.artifacts}')
+
+
+def review_cmd(argv: list[str]) -> int:
+    """`asha review` -- create a run and print the first review packet."""
+    from asha.ladder import resolve_policy, start_review
+    parser = _ReviewParser(
+        prog='asha review',
+        description=('Create a host-driven Ladder review over one commit '
+                     'range and print the Code Review packet. The connected '
+                     'host LLM performs the review; Asha never calls a model '
+                     'and needs no provider credentials.'),
+        epilog=('exit codes: 5 awaiting host review, 0 approved, 1 changes '
+                'requested, 2 blocked/stale/failed, 3 execution error, '
+                '4 invalid input. An unfinished review is never 0.'))
+    _review_common(parser)
+    parser.add_argument('--base', default='origin/main', metavar='REF',
+                        help='base ref (default: origin/main)')
+    parser.add_argument('--head', default='HEAD', metavar='REF',
+                        help='head ref (default: HEAD)')
+    parser.add_argument('--policy', default=None, metavar='ID',
+                        help="review policy id (default: 'host-multipass')")
+    parser.add_argument('--deadline-seconds', type=float, default=None,
+                        metavar='SECONDS',
+                        help='absolute review expiry; it survives MCP calls '
+                             'and is never reset per stage')
+    parser.add_argument('--host-client', default='', metavar='NAME',
+                        help='optional name of this MCP client')
+    try:
+        args = parser.parse_args(argv[1:])
+    except _ReviewUsage as exc:
+        print(f'asha review: {exc}', file=sys.stderr)
+        return REVIEW_EXIT_USAGE
+    try:
+        resolve_policy(args.policy)
+    except ValueError as exc:
+        print(f'asha review: {exc}', file=sys.stderr)
+        return REVIEW_EXIT_USAGE
+    try:
+        from asha.ladder import next_stage
+        run = start_review(Path(args.root).expanduser(), base=args.base,
+                           head=args.head, policy=args.policy,
+                           deadline_seconds=args.deadline_seconds,
+                           host_client=args.host_client or 'cli')
+        packet = next_stage(Path(args.root).expanduser(), run.run_id)
+    except Exception as exc:  # fail closed, never a traceback at the caller
+        print(f'REVIEW ERROR: {type(exc).__name__}: {exc}', file=sys.stderr)
+        return REVIEW_EXIT_ERROR
+    if args.as_json:
+        _emit_review({'run': run.as_dict(), 'packet': packet}, as_json=True)
+    else:
+        _print_packet(packet)
+    return REVIEW_EXIT_PENDING
+
+
+def review_next_cmd(argv: list[str]) -> int:
+    """`asha review-next` -- print the next stage packet."""
+    from asha.ladder import next_stage
+    parser = _ReviewParser(
+        prog='asha review-next',
+        description='Print the next role-specific packet for a review run.',
+        epilog='exit codes: 5 a stage is awaiting host review, 0 all stages '
+               'validated (finalize now), 3 execution error, 4 bad input')
+    _review_common(parser)
+    parser.add_argument('--run-id', required=True, metavar='ID')
+    try:
+        args = parser.parse_args(argv[1:])
+    except _ReviewUsage as exc:
+        print(f'asha review-next: {exc}', file=sys.stderr)
+        return REVIEW_EXIT_USAGE
+    try:
+        packet = next_stage(Path(args.root).expanduser(), args.run_id)
+    except Exception as exc:
+        print(f'REVIEW ERROR: {type(exc).__name__}: {exc}', file=sys.stderr)
+        return REVIEW_EXIT_ERROR
+    if args.as_json:
+        _emit_review(packet, as_json=True)
+    else:
+        if 'stage' in packet:
+            _print_packet(packet)
+        else:
+            print(f"review {packet.get('review_run_id')}: "
+                  f"{packet.get('required_next_action')}")
+    return REVIEW_EXIT_PENDING if 'stage' in packet else 0
+
+
+def review_context_cmd(argv: list[str]) -> int:
+    """`asha review-context` -- print one bounded chunk of the pinned target."""
+    from asha.ladder import review_context
+    parser = _ReviewParser(
+        prog='asha review-context',
+        description=('Print one bounded chunk of the reviewed diff or of a '
+                     'file as it exists at the reviewed head commit. Page '
+                     'with --cursor; the reviewed source is re-read from '
+                     'git objects, never from the worktree.'),
+        epilog='exit codes: 0 chunk returned, 3 execution error, 4 bad input')
+    _review_common(parser)
+    parser.add_argument('--run-id', required=True, metavar='ID')
+    parser.add_argument('--stage-id', default='', metavar='ID')
+    parser.add_argument('--file', default=None, metavar='PATH')
+    parser.add_argument('--cursor', type=int, default=0, metavar='OFFSET')
+    parser.add_argument('--max-bytes', type=int, default=20000, metavar='N')
+    try:
+        args = parser.parse_args(argv[1:])
+    except _ReviewUsage as exc:
+        print(f'asha review-context: {exc}', file=sys.stderr)
+        return REVIEW_EXIT_USAGE
+    try:
+        chunk = review_context(Path(args.root).expanduser(), args.run_id,
+                               stage_id=args.stage_id, file_path=args.file,
+                               cursor=args.cursor, max_bytes=args.max_bytes)
+    except Exception as exc:
+        print(f'REVIEW ERROR: {type(exc).__name__}: {exc}', file=sys.stderr)
+        return REVIEW_EXIT_ERROR
+    if args.as_json:
+        _emit_review(chunk, as_json=True)
+    else:
+        print(f"# {chunk.get('kind')} {chunk.get('path') or '(diff)'} "
+              f"lines {chunk.get('line_start')}-{chunk.get('line_end')} "
+              f"of {chunk.get('total_bytes')} bytes "
+              f"sha256 {str(chunk.get('chunk_sha256'))[:12]}")
+        print(chunk.get('content', ''))
+        if chunk.get('next_cursor') is not None:
+            print(f"# next_cursor {chunk.get('next_cursor')}")
+    return 0
+
+
+def _read_submission(path: str) -> dict[str, Any]:
+    raw = Path(path).expanduser().read_text(encoding='utf-8')
+    document = json.loads(raw)
+    if not isinstance(document, dict):
+        raise _ReviewUsage('a submission file must contain one JSON object')
+    return document
+
+
+def review_submit_cmd(argv: list[str]) -> int:
+    """`asha review-submit --file RESULT.json` -- submit one stage result."""
+    from asha.ladder import submit_stage
+    parser = _ReviewParser(
+        prog='asha review-submit',
+        description=('Submit one review stage produced by a host LLM. Asha '
+                     'validates and stores it; it never performs inference.'),
+        epilog='exit codes: 5 another stage is awaited, 0 all stages '
+               'validated (finalize now), 3 execution error, 4 bad input')
+    _review_common(parser)
+    parser.add_argument('--run-id', required=True, metavar='ID')
+    parser.add_argument('--file', required=True, metavar='PATH',
+                        help='JSON file with stage, stage_id, verdict, '
+                             'summary, findings and optional reviewer_metadata')
+    try:
+        args = parser.parse_args(argv[1:])
+    except _ReviewUsage as exc:
+        print(f'asha review-submit: {exc}', file=sys.stderr)
+        return REVIEW_EXIT_USAGE
+    try:
+        document = _read_submission(args.file)
+        metadata = document.get('reviewer_metadata') or {}
+        if not isinstance(metadata, dict):
+            raise _ReviewUsage('reviewer_metadata must be an object')
+        receipt = submit_stage(
+            Path(args.root).expanduser(), args.run_id,
+            stage_id=str(document.get('stage_id', '')),
+            stage=str(document.get('stage', '')),
+            verdict=str(document.get('verdict', '')),
+            summary=str(document.get('summary', '')),
+            findings=document.get('findings'),
+            host_client=str(metadata.get('host_client', 'cli')),
+            isolation=str(metadata.get('isolation', '')),
+            attestation_source=str(metadata.get('attestation_source', '')))
+    except _ReviewUsage as exc:
+        print(f'asha review-submit: {exc}', file=sys.stderr)
+        return REVIEW_EXIT_USAGE
+    except Exception as exc:
+        print(f'REVIEW ERROR: {type(exc).__name__}: {exc}', file=sys.stderr)
+        return REVIEW_EXIT_ERROR
+    if args.as_json:
+        _emit_review(receipt, as_json=True)
+    else:
+        print(f"review {receipt['review_run_id']}: {receipt['stage']} "
+              f"{receipt['status']} findings={receipt['findings_accepted']} "
+              f"idempotent={receipt['idempotent']}")
+        print(f"  next: {receipt['required_next_action']}")
+    # A recorded submission is progress, never an approval: only finalize
+    # and review-status of a finished run can report a decision.
+    return REVIEW_EXIT_PENDING
+
+
+def review_finalize_cmd(argv: list[str]) -> int:
+    """`asha review-finalize --run-id ID` -- validate and run the Ship Gate."""
+    from asha.ladder import finalize
+    parser = _ReviewParser(
+        prog='asha review-finalize',
+        description=('Run deterministic validation over every submitted stage '
+                     'and the canonical Ship Gate. It refuses while a '
+                     'mandatory stage is missing and never assumes a missing '
+                     'stage passed.'),
+        epilog=('exit codes: 0 approved, 1 changes requested, 2 blocked, '
+                'stale or failed, 3 execution error, 4 bad input'))
+    _review_common(parser)
+    parser.add_argument('--run-id', required=True, metavar='ID')
+    try:
+        args = parser.parse_args(argv[1:])
+    except _ReviewUsage as exc:
+        print(f'asha review-finalize: {exc}', file=sys.stderr)
+        return REVIEW_EXIT_USAGE
+    try:
+        run = finalize(Path(args.root).expanduser(), args.run_id)
+    except Exception as exc:
+        print(f'REVIEW ERROR: {type(exc).__name__}: {exc}', file=sys.stderr)
+        return REVIEW_EXIT_ERROR
+    if args.as_json:
+        _emit_review(run.as_dict(), as_json=True)
+    else:
+        _print_run(run)
+    return REVIEW_EXIT.get(run.decision.value if run.decision else '',
+                           REVIEW_EXIT_ERROR)
+
+
+def review_status_cmd(argv: list[str]) -> int:
+    """`asha review-status --run-id ID` -- read a persisted run."""
+    from asha.ladder import review_status
+    parser = _ReviewParser(
+        prog='asha review-status',
+        description=('Print a persisted Ladder run: state, target, stage '
+                     'statuses, verdicts, findings, provenance, gate decision '
+                     'and blocking reasons. It re-reads artifacts; it never '
+                     're-runs or invents data.'),
+        epilog='exit codes: 0 found, 3 unknown or unreadable run, 4 bad input')
+    _review_common(parser)
+    parser.add_argument('--run-id', required=True, metavar='ID',
+                        help='review run id (rv-...)')
+    try:
+        args = parser.parse_args(argv[1:])
+    except _ReviewUsage as exc:
+        print(f'asha review-status: {exc}', file=sys.stderr)
+        return REVIEW_EXIT_USAGE
+    try:
+        run = review_status(Path(args.root).expanduser(), args.run_id)
+    except Exception as exc:
+        print(f'REVIEW ERROR: {type(exc).__name__}: {exc}', file=sys.stderr)
+        return REVIEW_EXIT_ERROR
+    if args.as_json:
+        _emit(run.as_dict(), as_json=True)
+    else:
+        _print_run(run)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     command = _first_positional(argv)
@@ -956,6 +1274,18 @@ def main(argv: list[str] | None = None) -> int:
         return _status(argv[1:])
     if command == 'inspect':
         return _inspect(argv[1:])
+    if command == 'review':
+        return review_cmd(argv)
+    if command == 'review-next':
+        return review_next_cmd(argv)
+    if command == 'review-context':
+        return review_context_cmd(argv)
+    if command == 'review-submit':
+        return review_submit_cmd(argv)
+    if command == 'review-finalize':
+        return review_finalize_cmd(argv)
+    if command == 'review-status':
+        return review_status_cmd(argv)
     # Phase 11 one-command forms: the four mode flags route to the
     # unified facade wherever they appear (Phase 11.1 order-free), and a
     # bare existing-directory path keeps routing to it too; every other
