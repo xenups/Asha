@@ -282,12 +282,20 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def verify_worker_evidence(path: Path | str,
-                           worktree: Path | None = None) -> dict[str, Any]:
+                           worktree: Path | None = None,
+                           expected_worker_id: str | None = None,
+                           ) -> dict[str, Any]:
     """Fail-closed worker-evidence verification: canonical digest intact,
     Phase-1 identity fields present, worker evidence can never authorize a
     ship (merge law), and -- when the worktree still exists -- the sealed
     target_tree_sha re-binds to the live git tree. Raises on anything
-    unproven; returns the payload. (Exact scheduler.py:73 body.)"""
+    unproven; returns the payload. (Exact scheduler.py:73 body.)
+
+    ``expected_worker_id`` binds the artifact to the worker the caller is
+    sealing: the digest proves the bytes were not edited, not whose run
+    produced them, so a byte-identical artifact could otherwise be moved
+    onto another worker's file without changing anything.
+    """
     raw = Path(path).read_text(encoding="utf-8")
     try:
         payload = json.loads(raw)
@@ -304,6 +312,13 @@ def verify_worker_evidence(path: Path | str,
         raise OrchestratorError(
             "worker evidence must seal authorized_to_ship=false "
             "(PASS(A)+PASS(B) != PASS(A U B); ship stays with the gate)")
+    if expected_worker_id is not None:
+        # Attribution, not integrity: the digest cannot tell whose run this is.
+        declared = payload.get("worker_id")
+        if declared != expected_worker_id:
+            raise OrchestratorError(
+                f"worker evidence identity mismatch: artifact declares "
+                f"worker_id={declared!r}, expected {expected_worker_id!r}")
     missing = [field for field in WORKER_EVIDENCE_FIELDS
                if field not in payload]
     if missing:
@@ -1306,7 +1321,8 @@ def collect_worker_evidence(
         sealed = evidence.seal(payload)
         evi_path = evidence_dir / (_safe_id(wid) + ".json")
         _atomic_json(evi_path, sealed)
-        verify_worker_evidence(evi_path, worktree=path)
+        verify_worker_evidence(evi_path, worktree=path,
+                             expected_worker_id=str(wid))
     except (OrchestratorError, scope_resolver.ScopeError,
             evidence.EvidenceError, OSError) as exc:
         return {"state": "INVALID_EVIDENCE",

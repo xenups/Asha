@@ -460,7 +460,8 @@ class GovernedScheduler:
             _atomic_json(evi_path, sealed)
             # Governed completion requires the sealed identity to re-bind
             # to the live tree -- digest alone is not proof.
-            verify_worker_evidence(evi_path, worktree=path)
+            verify_worker_evidence(evi_path, worktree=path,
+                                   expected_worker_id=str(wid))
             # Phase 3.1 fast path: in-memory milestones -> authoritative
             # derivation through the ledger (3.3). Ledger events never
             # reach the canonical wire format; nothing new hits disk.
