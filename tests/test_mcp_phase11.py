@@ -105,7 +105,10 @@ def _payload(result: dict[str, Any]) -> dict[str, Any]:
 def test_asha_registered_first_and_eighth_tool() -> None:
     names = [spec["name"] for spec in server.TOOL_SPECS]
     assert names[0] == "asha", names
-    assert len(names) == 8, names
+    # 10: Phase 3 appended asha_review / asha_review_status; registration
+    # order for the pre-existing tools is unchanged.
+    assert len(names) == 10, names
+    assert names[-2:] == ["asha_review", "asha_review_status"], names
     assert "asha" in server.TOOL_HANDLERS
 
 

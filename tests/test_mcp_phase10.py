@@ -215,7 +215,10 @@ def test_verify_stack_registered_as_seventh_tool(tmp_path: Path) -> None:
     names = [tool["name"] for tool in server.TOOL_SPECS]
     # Phase 11 added the unified `asha` facade as the #1 entrypoint;
     # the seven specialized tools (incl. verify_stack) stay intact.
-    assert len(names) == 8
+    # 10: Phase 3 registered asha_review and asha_review_status, which call
+    # the same shared Ladder service rather than duplicating it.
+    assert len(names) == 10
+    assert {"asha_review", "asha_review_status"} <= set(names)
     assert names[0] == "asha"
     assert "asha_verify_stack" in names
     one_shot = subprocess.run(

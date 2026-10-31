@@ -135,8 +135,15 @@ def test_forward_slice_semantics_unchanged(graph_env) -> None:
     # (target body only 688). Bound raised to 84000 (5.8% headroom) while
     # _assert_stub_dominated keeps the actual regression -- full-body
     # emission -- failing loudly.
+    # 97000: Phase 3 added the asha.ladder package, and the dependency index
+    # is import-scope-insensitive: the lazy `from asha.ladder import ...`
+    # inside asha/cli.py and asha/mcp_server.py still makes the package
+    # reachable from worker_execution, so the closure grew 376 -> 460
+    # signature stubs (+13934 bytes, target body 751 unchanged). Measured
+    # 93394; bound kept at ~3.9% headroom so stub degradation toward full
+    # bodies still fails loudly.
     body_len = len(sl.target_source) + sum(len(st.text) for st in sl.stubs)
-    assert body_len < 84000, body_len
+    assert body_len < 97000, body_len
 
 
 def test_stub_emission_reduces_t1_context(graph_env) -> None:
@@ -171,9 +178,12 @@ def test_stub_emission_reduces_t1_context(graph_env) -> None:
     # full bodies still fails loudly.
     # 88076: the same closure change measured above (371 stubs, target body
     # 9523 unchanged). Bound 93000 is a 5.6% headroom over that measurement.
+    # 106000: Phase 3's asha.ladder package joins this closure for the same
+    # reason as in test_forward_slice_semantics_unchanged (460 stubs, target
+    # body 9808 unchanged, measured 102301; ~3.6% headroom).
     _assert_stub_dominated(sl)
     emitted = len(sl.target_source) + sum(len(st.text) for st in sl.stubs)
-    assert emitted < 93000, emitted
+    assert emitted < 106000, emitted
 
 
 def test_reverse_forward_combined_keeps_required_t3_context(graph_env) -> None:

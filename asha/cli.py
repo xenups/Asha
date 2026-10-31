@@ -46,7 +46,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from . import (
     git_context,
@@ -947,6 +947,132 @@ def _split_path_args(raw: list[str]) -> list[str]:
     return out
 
 
+# ------------------------------------------------------- Ladder (review, Phase 3)
+#: `asha review` exit codes. Blocked and stale are refusals (2), an
+#: execution error is 3, and unusable arguments are 4 -- distinct so a
+#: caller never reads "blocked" as "approved-and-exited-clean".
+REVIEW_EXIT = {'APPROVED': 0, 'CHANGES_REQUESTED': 1, 'BLOCKED': 2,
+               'STALE': 2}
+REVIEW_EXIT_ERROR = 3
+REVIEW_EXIT_USAGE = 4
+
+
+class _ReviewUsage(Exception):
+    """Argument error inside a review command (maps to exit 4)."""
+
+
+class _ReviewParser(argparse.ArgumentParser):
+    """argparse that raises instead of exiting, so codes stay documented."""
+
+    def error(self, message: str) -> NoReturn:
+        raise _ReviewUsage(message)
+
+
+def _review_common(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument('--root', default='.',
+                        help='repository root (default: cwd)')
+    parser.add_argument('--json', action='store_true', dest='as_json',
+                        help='emit exactly one JSON document on stdout')
+
+
+def _print_review(result: Any) -> None:
+    target = result.target
+    print(f'review {result.run_id}: {result.decision.value}')
+    print(f'  target {target.base_sha[:12]}..{target.head_sha[:12]} '
+          f'diff {target.diff_sha256[:12]} files={len(target.files)}')
+    for stage in result.stages:
+        line = (f'  {stage.stage.value:16} {stage.status.value:14} '
+                f'{stage.verdict.value:16} findings={len(stage.findings)}')
+        if stage.provider:
+            line += f' provider={stage.provider} model={stage.model}'
+        if stage.error:
+            line += f' error={stage.error}'
+        print(line)
+    for reason in result.reasons:
+        print(f'  reason: {reason}')
+    print(f'  independence: {result.independence.value}')
+    print(f'  gate: {result.gate.get("gate_state")} '
+          f'authorized={result.gate.get("authorized_to_ship")}')
+    print(f'  artifacts: {result.artifacts}')
+
+
+def review_cmd(argv: list[str]) -> int:
+    """`asha review --base REF --head REF` -- run the Ladder once."""
+    from asha.ladder import resolve_policy, run_review
+    parser = _ReviewParser(
+        prog='asha review',
+        description=('Run the governed Ladder review over one commit range: '
+                     'Code Review, Senior Review in an isolated context, '
+                     'semantic validation, then the canonical Ship Gate.'),
+        epilog=('exit codes: 0 approved, 1 changes requested, 2 blocked or '
+                'stale, 3 execution error, 4 invalid input. A missing review '
+                'provider is a BLOCKED result, never an approval.'))
+    _review_common(parser)
+    parser.add_argument('--base', default='origin/main', metavar='REF',
+                        help='base ref (default: origin/main)')
+    parser.add_argument('--head', default='HEAD', metavar='REF',
+                        help='head ref (default: HEAD)')
+    parser.add_argument('--policy', default=None, metavar='ID',
+                        help="review policy id (default: 'default')")
+    parser.add_argument('--deadline-seconds', type=float, default=None,
+                        metavar='SECONDS',
+                        help='one budget for the whole review; every stage '
+                             'gets what is left of it')
+    try:
+        args = parser.parse_args(argv[1:])
+    except _ReviewUsage as exc:
+        print(f'asha review: {exc}', file=sys.stderr)
+        return REVIEW_EXIT_USAGE
+    try:
+        resolve_policy(args.policy)
+    except ValueError as exc:
+        print(f'asha review: {exc}', file=sys.stderr)
+        return REVIEW_EXIT_USAGE
+    try:
+        result = run_review(Path(args.root), base=args.base, head=args.head,
+                            policy=args.policy,
+                            deadline_seconds=args.deadline_seconds)
+    except Exception as exc:  # fail closed, never a traceback at the caller
+        print(f'REVIEW ERROR: {type(exc).__name__}: {exc}', file=sys.stderr)
+        return REVIEW_EXIT_ERROR
+    if args.as_json:
+        print(json.dumps(result.as_dict(), indent=2, sort_keys=True,
+                         ensure_ascii=False))
+    else:
+        _print_review(result)
+    return REVIEW_EXIT.get(result.decision.value, REVIEW_EXIT_ERROR)
+
+
+def review_status_cmd(argv: list[str]) -> int:
+    """`asha review-status --run-id ID` -- read a persisted run."""
+    from asha.ladder import review_status
+    parser = _ReviewParser(
+        prog='asha review-status',
+        description=('Print a persisted Ladder run: target, stage statuses, '
+                     'reviewers, findings, gate decision and reasons. It '
+                     're-reads artifacts; it never re-runs or invents data.'),
+        epilog='exit codes: 0 found, 3 unknown or unreadable run, 4 bad input')
+    _review_common(parser)
+    parser.add_argument('--run-id', required=True, metavar='ID',
+                        help='review run id (rv-...)')
+    try:
+        args = parser.parse_args(argv[1:])
+    except _ReviewUsage as exc:
+        print(f'asha review-status: {exc}', file=sys.stderr)
+        return REVIEW_EXIT_USAGE
+    try:
+        result = review_status(Path(args.root), args.run_id)
+    except Exception as exc:
+        print(f'REVIEW ERROR: {type(exc).__name__}: {exc}', file=sys.stderr)
+        return REVIEW_EXIT_ERROR
+    if args.as_json:
+        print(json.dumps(result.as_dict(), indent=2, sort_keys=True,
+                         ensure_ascii=False))
+    else:
+        _print_review(result)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     command = _first_positional(argv)
@@ -956,6 +1082,10 @@ def main(argv: list[str] | None = None) -> int:
         return _status(argv[1:])
     if command == 'inspect':
         return _inspect(argv[1:])
+    if command == 'review':
+        return review_cmd(argv)
+    if command == 'review-status':
+        return review_status_cmd(argv)
     # Phase 11 one-command forms: the four mode flags route to the
     # unified facade wherever they appear (Phase 11.1 order-free), and a
     # bare existing-directory path keeps routing to it too; every other

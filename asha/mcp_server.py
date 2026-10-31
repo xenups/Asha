@@ -3144,10 +3144,123 @@ def asha_asha(arguments: dict[str, Any]) -> dict[str, Any]:
         return _tool_error(f"{type(exc).__name__}: {exc}")
 
 
+
+ASHA_REVIEW_SPEC: dict[str, Any] = {
+    "name": "asha_review",
+    "description": ("Run the governed Ladder review over one commit range: "
+                    "Code Review and Senior Review in separate isolated "
+                    "contexts, semantic validation of both, then the "
+                    "canonical Ship Gate. Returns the run id, source "
+                    "identity, per-stage results, findings and the delivery "
+                    "decision. Fails closed (BLOCKED) when no review provider "
+                    "is configured -- an absent review is never approval."),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "root": {"type": "string", "default": ".",
+                     "description": ROOT_HELP},
+            "base": {"type": "string", "default": "origin/main",
+                     "description": "Base ref of the reviewed range."},
+            "head": {"type": "string", "default": "HEAD",
+                     "description": "Head ref of the reviewed range."},
+            "deadline_seconds": {"type": "number",
+                                 "description": ("One budget for the whole "
+                                                 "review (1..86400).")},
+            "policy": {"type": "string",
+                       "description": ("Approved review policy id "
+                                       "('default' or 'distinct-provider').")},
+        },
+        "additionalProperties": False,
+    },
+}
+
+ASHA_REVIEW_STATUS_SPEC: dict[str, Any] = {
+    "name": "asha_review_status",
+    "description": ("Read a persisted Ladder review by run id without "
+                    "re-running it: target, stage statuses, reviewers, "
+                    "findings, gate decision and blocking reasons."),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "root": {"type": "string", "default": ".",
+                     "description": ROOT_HELP},
+            "run_id": {"type": "string",
+                       "description": "Review run id (rv-...)."},
+        },
+        "required": ["run_id"],
+        "additionalProperties": False,
+    },
+}
+
+
+def _review_refs(arguments: dict[str, Any]) -> tuple[str, str]:
+    """Validate the two refs; both are plain strings, never commands."""
+    for name in ("base", "head"):
+        value = arguments.get(name, "origin/main" if name == "base"
+                              else "HEAD")
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must be a non-empty string")
+        if len(value) > 200 or value.startswith("-"):
+            raise ValueError(f"{name} is not a usable ref: {value!r}")
+    return (str(arguments.get("base", "origin/main")).strip(),
+            str(arguments.get("head", "HEAD")).strip())
+
+
+def asha_review(arguments: dict[str, Any]) -> dict[str, Any]:
+    """asha_review: one Ladder run; every failure is a typed refusal."""
+    try:
+        root = arguments.get("root", ".")
+        if not isinstance(root, str):
+            return _tool_error("root must be a string")
+        base, head = _review_refs(arguments)
+        policy = arguments.get("policy")
+        if policy is not None and (not isinstance(policy, str)
+                                   or len(policy) > 100):
+            return _tool_error("policy must be a string (<=100 chars)")
+        deadline = arguments.get("deadline_seconds")
+        if deadline is not None:
+            if isinstance(deadline, bool) or not isinstance(
+                    deadline, (int, float)):
+                return _tool_error("deadline_seconds must be a number")
+            if not 0 < float(deadline) <= 86400:
+                return _tool_error(
+                    "deadline_seconds must be within (0, 86400]")
+        from asha.ladder import run_review
+        result = run_review(Path(root).expanduser(), base=base, head=head,
+                            policy=policy,
+                            deadline_seconds=(None if deadline is None
+                                              else float(deadline)))
+        payload = result.as_dict()
+        payload["blocking_reason"] = next(iter(result.reasons), "")
+        return _tool_ok(payload)
+    except Exception as exc:
+        return _tool_error(f"{type(exc).__name__}: {exc}")
+
+
+def asha_review_status(arguments: dict[str, Any]) -> dict[str, Any]:
+    """asha_review_status: read a persisted run; never re-runs it."""
+    try:
+        root = arguments.get("root", ".")
+        if not isinstance(root, str):
+            return _tool_error("root must be a string")
+        run_id = arguments.get("run_id")
+        if not isinstance(run_id, str) or not run_id.strip():
+            return _tool_error("run_id must be a non-empty string")
+        run_id = run_id.strip()
+        if len(run_id) > 120 or "/" in run_id or run_id.startswith("."):
+            return _tool_error(f"run_id is not a review id: {run_id!r}")
+        from asha.ladder import review_status
+        result = review_status(Path(root).expanduser(), run_id)
+        return _tool_ok(result.as_dict())
+    except Exception as exc:
+        return _tool_error(f"{type(exc).__name__}: {exc}")
+
+
 TOOL_SPECS: list[dict[str, Any]] = [
     ASHA_SPEC, ASHA_PLAN_DAG_SPEC, ASHA_RUN_SPEC_SPEC, ASHA_STATUS_SPEC,
     ASHA_GET_SURGICAL_CONTEXT_SPEC, ASHA_DISPATCH_TASK_SPEC,
-    ASHA_VERIFY_TIP_SPEC, ASHA_VERIFY_STACK_SPEC]
+    ASHA_VERIFY_TIP_SPEC, ASHA_VERIFY_STACK_SPEC,
+    ASHA_REVIEW_SPEC, ASHA_REVIEW_STATUS_SPEC]
 
 
 TOOL_HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
@@ -3159,6 +3272,8 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "asha_dispatch_task": asha_dispatch_task,
     "asha_verify_tip": asha_verify_tip,
     "asha_verify_stack": asha_verify_stack,
+    "asha_review": asha_review,
+    "asha_review_status": asha_review_status,
 }
 
 
