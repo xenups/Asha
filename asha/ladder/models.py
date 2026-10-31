@@ -1,15 +1,19 @@
-"""Typed vocabulary for one Ladder run.
+"""Typed vocabulary for one host-driven Ladder run.
 
-Three axes are kept apart on purpose, because each can move independently:
+Asha is an MCP server: the host LLM performs every review inference and
+submits the result as a tool call. Asha owns the state machine, the
+evidence and the delivery decision.
 
-* :class:`StageStatus` -- did the stage actually execute and finish;
-* :class:`Verdict` -- what the reviewer concluded;
+Three axes stay apart, because each can move independently:
+
+* :class:`StageStatus` -- did Asha record a validated submission;
+* :class:`Verdict` -- what the host reviewer concluded;
 * :class:`Decision` -- what Asha is allowed to do with the delivery.
 
-A provider call that returns ``REQUEST_CHANGES`` is ``COMPLETED``; a
-missing provider is ``BLOCKED``; malformed output is ``FAILED``. None of
-those is approval, and approval is never inferred from the absence of a
-finding.
+``REQUEST_CHANGES`` submitted by the host is a validated stage; a missing
+stage is ``PENDING``/``AWAITING_HOST``; a rejected submission is
+``FAILED``. None of those is approval, and approval is never inferred from
+the absence of a finding.
 """
 
 from __future__ import annotations
@@ -22,7 +26,10 @@ from typing import Any
 SCHEMA = 'asha-ladder/v1'
 
 #: Bumped when the shape of a persisted artifact changes.
-ARTIFACT_SCHEMA = 1
+ARTIFACT_SCHEMA = 2
+
+#: The only execution mode this package implements: the host LLM reviews.
+EXECUTION_MODE = 'HOST_DRIVEN_MULTIPASS'
 
 
 class LadderError(Exception):
@@ -34,7 +41,19 @@ class TargetError(LadderError):
 
 
 class FindingError(LadderError):
-    """A reviewer finding does not satisfy the finding contract."""
+    """A submitted finding does not satisfy the finding contract."""
+
+
+class SubmissionError(LadderError):
+    """A stage submission is out of order, malformed or conflicting."""
+
+
+class RunNotFound(LadderError):
+    """No review run exists under that id."""
+
+
+class RunExpired(LadderError):
+    """The persisted review deadline expired; no further stage is accepted."""
 
 
 class StageType(str, Enum):
@@ -46,12 +65,22 @@ class StageType(str, Enum):
 
 class StageStatus(str, Enum):
     PENDING = 'PENDING'
-    RUNNING = 'RUNNING'
-    COMPLETED = 'COMPLETED'
+    AWAITING_HOST = 'AWAITING_HOST'
+    SUBMITTED = 'SUBMITTED'
+    VALIDATED = 'VALIDATED'
     FAILED = 'FAILED'
     BLOCKED = 'BLOCKED'
-    NOT_EXECUTED = 'NOT_EXECUTED'
     STALE = 'STALE'
+    NOT_EXECUTED = 'NOT_EXECUTED'
+
+
+class RunState(str, Enum):
+    AWAITING_HOST_REVIEW = 'AWAITING_HOST_REVIEW'
+    AWAITING_FINALIZE = 'AWAITING_FINALIZE'
+    FINALIZED = 'FINALIZED'
+    BLOCKED = 'BLOCKED'
+    STALE = 'STALE'
+    FAILED = 'FAILED'
 
 
 class Verdict(str, Enum):
@@ -66,27 +95,29 @@ class Decision(str, Enum):
     CHANGES_REQUESTED = 'CHANGES_REQUESTED'
     BLOCKED = 'BLOCKED'
     STALE = 'STALE'
+    FAILED = 'FAILED'
 
 
 class Independence(str, Enum):
-    """How much independence two review passes actually have.
+    """How much independence the recorded review passes actually have.
 
-    Ordered strongest first. ``same_provider_isolated_context`` is a real
-    separate pass, not an independent reviewer: different model names on
-    one account do not create independence.
+    Ordered strongest first. The host's statement is an attestation, not
+    evidence Asha can verify: a single MCP client name never proves which
+    model reasoned, so two role labels on one host stay
+    ``same_host_session``.
     """
 
-    DISTINCT_PROVIDER = 'distinct_provider'
-    SAME_PROVIDER_ISOLATED_CONTEXT = 'same_provider_isolated_context'
-    SAME_SESSION = 'same_session'
-    UNKNOWN = 'unknown'
+    DISTINCT_HOST_CLIENT = 'DISTINCT_HOST_CLIENT'
+    HOST_ATTESTED_ISOLATED_CONTEXT = 'HOST_ATTESTED_ISOLATED_CONTEXT'
+    SAME_HOST_SESSION = 'SAME_HOST_SESSION'
+    UNKNOWN = 'UNKNOWN'
 
 
 INDEPENDENCE_RANK: dict[Independence, int] = {
     Independence.UNKNOWN: 0,
-    Independence.SAME_SESSION: 1,
-    Independence.SAME_PROVIDER_ISOLATED_CONTEXT: 2,
-    Independence.DISTINCT_PROVIDER: 3,
+    Independence.SAME_HOST_SESSION: 1,
+    Independence.HOST_ATTESTED_ISOLATED_CONTEXT: 2,
+    Independence.DISTINCT_HOST_CLIENT: 3,
 }
 
 
@@ -295,43 +326,60 @@ class ReviewTarget:
 
 
 @dataclass(frozen=True)
+class ReviewerInfo:
+    """Who submitted a stage, as far as Asha can actually know.
+
+    ``host_client`` is whatever the MCP client reported (often nothing);
+    ``isolation`` is the host's own attestation and is recorded as a
+    claim, with its source, never as verified independence.
+    """
+
+    host_client: str = 'unknown'
+    isolation: Independence = Independence.UNKNOWN
+    attestation_source: str = ''
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            'host_client': self.host_client,
+            'isolation_claim': self.isolation.value,
+            'attestation_source': self.attestation_source,
+        }
+
+
+@dataclass(frozen=True)
 class StageResult:
-    """One stage's execution record plus what it concluded."""
+    """One stage's recorded submission plus what it concluded."""
 
     stage: StageType
     status: StageStatus
+    stage_id: str = ''
     verdict: Verdict = Verdict.NOT_APPLICABLE
-    reviewer: str = ''
+    summary: str = ''
+    reviewer: ReviewerInfo = field(default_factory=ReviewerInfo)
     execution_id: str = ''
-    provider: str = ''
-    model: str = ''
-    session_id: str = ''
-    prompt_sha256: str = ''
-    context_sha256: str = ''
-    started_at: str = ''
-    ended_at: str = ''
+    submission_sha256: str = ''
+    submitted_at: str = ''
+    validated_at: str = ''
     findings: tuple[Finding, ...] = ()
     error: str = ''
     artifact: str = ''
 
     @property
-    def completed(self) -> bool:
-        return self.status is StageStatus.COMPLETED
+    def validated(self) -> bool:
+        return self.status is StageStatus.VALIDATED
 
     def as_dict(self) -> dict[str, Any]:
         return {
             'stage': self.stage.value,
+            'stage_id': self.stage_id,
             'status': self.status.value,
             'verdict': self.verdict.value,
-            'reviewer': self.reviewer,
+            'summary': self.summary,
+            'reviewer': self.reviewer.as_dict(),
             'execution_id': self.execution_id,
-            'provider': self.provider,
-            'model': self.model,
-            'session_id': self.session_id,
-            'prompt_sha256': self.prompt_sha256,
-            'context_sha256': self.context_sha256,
-            'started_at': self.started_at,
-            'ended_at': self.ended_at,
+            'submission_sha256': self.submission_sha256,
+            'submitted_at': self.submitted_at,
+            'validated_at': self.validated_at,
             'findings': [finding.as_dict() for finding in self.findings],
             'error': self.error,
             'artifact': self.artifact,
@@ -339,22 +387,31 @@ class StageResult:
 
 
 @dataclass(frozen=True)
-class ReviewRunResult:
-    """What ``run_review`` returns and what ``load_run`` re-reads."""
+class ReviewRun:
+    """The persisted state of one host-driven review."""
 
     run_id: str
     target: ReviewTarget
-    status: StageStatus
-    decision: Decision
-    reasons: tuple[str, ...] = ()
+    state: RunState
     stages: tuple[StageResult, ...] = ()
+    decision: Decision | None = None
+    reasons: tuple[str, ...] = ()
     findings: tuple[Finding, ...] = ()
     relations: tuple[dict[str, Any], ...] = ()
     independence: Independence = Independence.UNKNOWN
+    semantic_validation: dict[str, Any] = field(default_factory=dict)
     gate: dict[str, Any] = field(default_factory=dict)
     artifacts: str = ''
-    started_at: str = ''
-    ended_at: str = ''
+    execution_mode: str = EXECUTION_MODE
+    created_at: str = ''
+    expires_at: str = ''
+    finalized_at: str = ''
+
+    def stage(self, stage: StageType) -> StageResult | None:
+        for record in self.stages:
+            if record.stage is stage:
+                return record
+        return None
 
     @property
     def approved(self) -> bool:
@@ -365,17 +422,20 @@ class ReviewRunResult:
             'schema': SCHEMA,
             'artifact_schema': ARTIFACT_SCHEMA,
             'run_id': self.run_id,
-            'status': self.status.value,
-            'decision': self.decision.value,
+            'state': self.state.value,
+            'decision': self.decision.value if self.decision else None,
             'approved': self.approved,
+            'execution_mode': self.execution_mode,
             'reasons': list(self.reasons),
             'independence': self.independence.value,
             'target': self.target.as_dict(),
             'stages': [stage.as_dict() for stage in self.stages],
             'findings': [finding.as_dict() for finding in self.findings],
             'relations': list(self.relations),
+            'semantic_validation': self.semantic_validation,
             'gate': self.gate,
             'artifacts': self.artifacts,
-            'started_at': self.started_at,
-            'ended_at': self.ended_at,
+            'created_at': self.created_at,
+            'expires_at': self.expires_at,
+            'finalized_at': self.finalized_at,
         }

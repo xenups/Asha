@@ -1,9 +1,9 @@
 """Aggregation: independence classification, finding relations, decision.
 
-The decision is derived from recorded facts only -- stage statuses,
-severities, the independence the providers actually reported, and the
-canonical Ship Gate result. Nothing here can turn a missing stage into a
-pass, and a reviewer's own ``blocking`` claim never overrides severity.
+The decision is derived from recorded facts only -- validated stage
+submissions, severities, the independence the host actually attested and
+the canonical Ship Gate result. Nothing here can turn a missing stage into
+a pass, and a reviewer's own ``blocking`` claim never overrides severity.
 """
 
 from __future__ import annotations
@@ -20,32 +20,40 @@ from asha.ladder.models import (
     StageResult,
     StageStatus,
     StageType,
+    Verdict,
 )
 from asha.ladder.policy import ReviewPolicy
 
 #: Stage types whose verdicts are about the code (semantic review is not).
 CODE_STAGES = (StageType.CODE_REVIEW, StageType.SENIOR_REVIEW)
 
+_ISOLATED_CLAIMS = (Independence.DISTINCT_HOST_CLIENT,
+                    Independence.HOST_ATTESTED_ISOLATED_CONTEXT)
 
-def classify_independence(first: StageResult, second: StageResult
-                          ) -> Independence:
-    """Classify two review passes from reported metadata only.
 
-    Different providers -> distinct. Different model names on one provider
-    is a separate pass, not an independent reviewer. Missing metadata is
-    ``unknown`` -- never upgraded to a claim.
+def classify_independence(first: StageResult,
+                          second: StageResult) -> Independence:
+    """Classify two host passes from what the host reported.
+
+    ``DISTINCT_HOST_CLIENT`` needs two different client names that both
+    claim they are distinct. Two role labels on one client are a real
+    separate pass but not an independent reviewer; missing metadata is
+    ``UNKNOWN`` and is never upgraded into a claim.
     """
-    if not first.provider or not second.provider:
+    left, right = first.reviewer, second.reviewer
+    if left.isolation is Independence.UNKNOWN or (
+            right.isolation is Independence.UNKNOWN):
         return Independence.UNKNOWN
-    if not first.execution_id or not second.execution_id:
-        return Independence.UNKNOWN
-    if first.execution_id == second.execution_id:
-        return Independence.SAME_SESSION
-    if first.session_id and first.session_id == second.session_id:
-        return Independence.SAME_SESSION
-    if first.provider != second.provider:
-        return Independence.DISTINCT_PROVIDER
-    return Independence.SAME_PROVIDER_ISOLATED_CONTEXT
+    if (left.isolation is Independence.DISTINCT_HOST_CLIENT
+            and right.isolation is Independence.DISTINCT_HOST_CLIENT):
+        if (left.host_client and right.host_client
+                and left.host_client != right.host_client):
+            return Independence.DISTINCT_HOST_CLIENT
+        # Two claims on one client are one client: do not upgrade it.
+        return Independence.SAME_HOST_SESSION
+    if left.isolation in _ISOLATED_CLAIMS and right.isolation in _ISOLATED_CLAIMS:
+        return Independence.HOST_ATTESTED_ISOLATED_CONTEXT
+    return Independence.SAME_HOST_SESSION
 
 
 def meets_independence(actual: Independence,
@@ -94,11 +102,10 @@ def disagreements(stages: tuple[StageResult, ...]) -> tuple[str, ...]:
     """Reviewer disagreements that the policy must not silently resolve."""
     verdicts = {stage.stage: stage.verdict for stage in stages
                 if stage.stage in CODE_STAGES
-                and stage.status is StageStatus.COMPLETED}
+                and stage.status is StageStatus.VALIDATED}
     if len(verdicts) < 2:
         return ()
-    values = set(verdicts.values())
-    if len(values) == 1:
+    if len(set(verdicts.values())) == 1:
         return ()
     return ('reviewers disagreed: '
             + ', '.join(f'{stage.value}={verdict.value}'
@@ -119,13 +126,13 @@ def decide(*, policy: ReviewPolicy, stages: tuple[StageResult, ...],
     for required in policy.required_stages:
         if required is StageType.SHIP_GATE:
             # The gate is this decision's terminal step, not a precondition
-            # of it; the orchestrator records its own stage result.
+            # of it; the service records its own gate result.
             continue
         stage = present.get(required)
         if stage is None:
-            reasons.append(f'{required.value}: NOT_EXECUTED (missing)')
+            reasons.append(f'{required.value}: NOT_SUBMITTED')
             continue
-        if stage.status is not StageStatus.COMPLETED:
+        if stage.status is not StageStatus.VALIDATED:
             detail = f': {stage.error}' if stage.error else ''
             reasons.append(f'{required.value}: {stage.status.value}{detail}')
     if reasons:
@@ -146,7 +153,7 @@ def decide(*, policy: ReviewPolicy, stages: tuple[StageResult, ...],
 
     inconclusive = [stage for stage in stages
                     if stage.stage in CODE_STAGES
-                    and stage.verdict is stage.verdict.INCONCLUSIVE]
+                    and stage.verdict is Verdict.INCONCLUSIVE]
     if inconclusive:
         return Decision.BLOCKED, tuple(
             f'{stage.stage.value}: reviewer was INCONCLUSIVE'
@@ -158,7 +165,7 @@ def decide(*, policy: ReviewPolicy, stages: tuple[StageResult, ...],
 
     blocking_names = '/'.join(sorted(severity.value
                                      for severity in policy.blocking_severities))
-    clean = (f'all {len(policy.required_stages)} mandatory stages completed; '
+    clean = (f'all {len(policy.required_stages)} mandatory stages validated; '
              f'no {blocking_names} finding; independence '
              f'{independence.value} meets '
              f'{policy.required_independence.value}')

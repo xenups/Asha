@@ -18,7 +18,15 @@ from asha.ladder.models import (
     StageType,
 )
 
-POLICY_SCHEMA = 1
+POLICY_SCHEMA = 2
+
+#: Every policy requires all three host review passes and the Ship Gate.
+REQUIRED_STAGES: tuple[StageType, ...] = (
+    StageType.CODE_REVIEW,
+    StageType.SENIOR_REVIEW,
+    StageType.SEMANTIC_REVIEW,
+    StageType.SHIP_GATE,
+)
 
 
 @dataclass(frozen=True)
@@ -56,38 +64,38 @@ class ReviewPolicy:
 
 
 def default_policy() -> ReviewPolicy:
-    """Both review passes, semantic validation and the Ship Gate, required."""
+    """The practical default: three host passes, no independence claim.
+
+    Asha cannot verify how many models the host used, so the default
+    requires the work (three role-specific passes, validated findings,
+    the Ship Gate) and makes no claim about reviewer independence.
+    """
     return ReviewPolicy(
-        policy_id='ladder/default',
-        required_stages=(
-            StageType.CODE_REVIEW,
-            StageType.SENIOR_REVIEW,
-            StageType.SEMANTIC_REVIEW,
-            StageType.SHIP_GATE,
-        ),
-        required_independence=Independence.SAME_PROVIDER_ISOLATED_CONTEXT,
+        policy_id='ladder/host-multipass',
+        required_stages=REQUIRED_STAGES,
+        required_independence=Independence.UNKNOWN,
     )
 
 
-def distinct_provider_policy() -> ReviewPolicy:
-    """Stricter: the two review passes must come from different providers."""
+def isolated_host_policy() -> ReviewPolicy:
+    """Stricter: the host must attest an isolated context for each pass.
+
+    Still an attestation, not verified proof: it gates what the record
+    claims, it does not create independence Asha cannot see.
+    """
     return ReviewPolicy(
-        policy_id='ladder/distinct-provider',
-        required_stages=(
-            StageType.CODE_REVIEW,
-            StageType.SENIOR_REVIEW,
-            StageType.SEMANTIC_REVIEW,
-            StageType.SHIP_GATE,
-        ),
-        required_independence=Independence.DISTINCT_PROVIDER,
+        policy_id='ladder/host-isolated',
+        required_stages=REQUIRED_STAGES,
+        required_independence=Independence.HOST_ATTESTED_ISOLATED_CONTEXT,
     )
 
 
 _POLICIES = {
+    'host-multipass': default_policy,
+    'ladder/host-multipass': default_policy,
     'default': default_policy,
-    'ladder/default': default_policy,
-    'distinct-provider': distinct_provider_policy,
-    'ladder/distinct-provider': distinct_provider_policy,
+    'host-isolated': isolated_host_policy,
+    'ladder/host-isolated': isolated_host_policy,
 }
 
 
@@ -99,6 +107,5 @@ def resolve_policy(name: str | None) -> ReviewPolicy:
     if factory is None:
         raise ValueError(
             f'unknown review policy {name!r}; approved: '
-            + ', '.join(sorted(set(_POLICIES) - {'ladder/default',
-                                                 'ladder/distinct-provider'})))
+            + ', '.join(sorted({'host-multipass', 'host-isolated'})))
     return factory()

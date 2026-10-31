@@ -48,10 +48,13 @@ EVENT_TYPES = frozenset({
     # Ladder review lifecycle (Phase 3). Each event carries the review run
     # id and, where relevant, the stage id -- never a fabricated one.
     'review_started',
-    'review_stage_completed',
-    'review_stage_blocked',
+    'review_stage_requested',
+    'review_stage_submitted',
+    'review_stage_validated',
+    'review_blocked',
     'review_stale',
-    'review_decided',
+    'review_finalized',
+    'ship_gate_evaluated',
 })
 
 # critical milestones get flush + fsync (durability barrier)
@@ -63,7 +66,9 @@ CRITICAL_EVENTS = frozenset({
     'sealing_started',
     'sealed',
     'review_started',
-    'review_decided',
+    'review_blocked',
+    'review_stale',
+    'review_finalized',
 })
 
 REQUIRED_FIELDS = ('event_id', 'run_id', 'timestamp', 'event_type', 'payload')

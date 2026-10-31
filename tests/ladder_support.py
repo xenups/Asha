@@ -1,18 +1,20 @@
 """Test-only helpers for the Ladder suite.
 
-Nothing here is importable from ``asha``: the fake provider lives in the
-test tree on purpose, so no production configuration can select it and
-turn a canned response into a shipping approval.
+This harness acts as the MCP client: it speaks the real ``tools/call``
+JSON-RPC framing and submits fixtures that stand in for a host LLM's
+reasoning. Nothing here is importable from ``asha``, and no fixture can be
+selected by production configuration, so a canned submission can never
+become a shipping approval outside a test.
 """
 
 from __future__ import annotations
 
 import json
 import subprocess
-from dataclasses import dataclass, field
+import types
+from dataclasses import dataclass
 from pathlib import Path
-
-from asha.ladder.providers import Completion
+from typing import Any
 
 BASE_SOURCE = 'def add(a, b):\n    return a + b\n'
 CHANGED_SOURCE = ('def add(a, b):\n    return a - b\n\n\n'
@@ -54,30 +56,52 @@ def make_repo(tmp_path: Path, *, changed: str = CHANGED_SOURCE) -> Repo:
                 head=git(root, 'rev-parse', 'HEAD').strip())
 
 
-def stub_gate(monkeypatch, *, checks: list[dict] | None = None) -> None:
-    """Replace the gate's check matrix so tests exercise wiring, not tools.
+@dataclass
+class GateStub:
+    """Records gate invocations and returns a fixed sealed decision."""
 
-    Only the runner and the scope resolver are stubbed; the gate's own
-    evidence validation, snapshot binding and sealing stay real.
-    """
-    from asha.governance import ship_gate
+    authorized: bool = True
+    gate_state: str = 'AUTHORIZED'
+    reasons: tuple[str, ...] = ()
+    calls: list[dict[str, Any]] = None  # type: ignore[assignment]
 
-    entries = checks if checks is not None else [
-        {'name': 'pytest', 'status': 'passed', 'exit_code': 0, 'note': ''}]
-    monkeypatch.setattr(ship_gate.check_runner, 'run',
-                        lambda root, resolved, **kwargs: list(entries))
-    monkeypatch.setattr(ship_gate.scope_resolver, 'resolve',
-                        lambda root: {'scope': {}, 'base': 'stub',
-                                      'affected_files': ['app.py'],
-                                      'checks': ['pytest']})
+    def __post_init__(self) -> None:
+        self.calls = []
+
+    def gate_ship(self, root: Path, *, reviewer: Any = None,
+                  no_execute: bool = False) -> dict[str, Any]:
+        findings = reviewer(root, 'snap-test', 30)['findings'] if reviewer else []
+        self.calls.append({'root': str(root), 'findings': findings})
+        if not self.authorized:
+            raise RuntimeError('gate refused (stub)')
+        return {
+            'gate_state': self.gate_state,
+            'authorized_to_ship': True,
+            'gate_reasons': list(self.reasons),
+            'blocking_findings': [],
+            'policy_version': 'stub',
+            'snapshot_id': 'snap-test',
+        }
 
 
-def finding(**overrides) -> dict:
+def stub_gate(monkeypatch: Any, *, authorized: bool = True,
+              gate_state: str = 'AUTHORIZED') -> GateStub:
+    """Swap the canonical gate for a recorder; assertions stay ours."""
+    from asha.ladder import orchestrator
+
+    stub = GateStub(authorized=authorized, gate_state=gate_state)
+    monkeypatch.setattr(orchestrator, 'ship_gate', types.SimpleNamespace(
+        gate_ship=stub.gate_ship, POLICY_VERSION='stub'))
+    return stub
+
+
+def finding(**overrides: Any) -> dict[str, Any]:
     """One reviewer finding in the wire contract."""
-    payload = {
+    payload: dict[str, Any] = {
+        'finding_id': 'CR-1',
+        'category': 'correctness',
         'severity': 'HIGH',
         'confidence': 'CONFIRMED',
-        'category': 'correctness',
         'title': 'add() returns a difference',
         'description': 'add subtracts instead of adding',
         'file_path': 'app.py',
@@ -92,33 +116,66 @@ def finding(**overrides) -> dict:
     return payload
 
 
-def document(*findings: dict, verdict: str = 'APPROVE') -> str:
-    return json.dumps({'verdict': verdict, 'findings': list(findings)})
+def call(name: str, **arguments: Any) -> dict[str, Any]:
+    """One real JSON-RPC ``tools/call``; returns the MCP result envelope."""
+    from asha import mcp_server
+
+    frame = {"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+             "params": {"name": name, "arguments": arguments}}
+    response = mcp_server.handle_message(dict(frame))
+    assert response is not None and "result" in response, response
+    return response["result"]
 
 
-@dataclass
-class FakeProvider:
-    """Deterministic, test-only provider with per-stage documents."""
+def tool(name: str, **arguments: Any) -> dict[str, Any]:
+    """Call a tool and return its JSON payload (raises on a tool error)."""
+    result = call(name, **arguments)
+    assert result["isError"] is False, result["content"][0]["text"]
+    return json.loads(result["content"][0]["text"])
 
-    code: str = field(default_factory=lambda: document(verdict='APPROVE'))
-    senior: str = field(default_factory=lambda: document(verdict='APPROVE'))
-    error: Exception | None = None
-    provider: str = 'fake-test-provider'
-    model: str = 'fake-1'
-    calls: list[dict] = field(default_factory=list)
 
-    @property
-    def name(self) -> str:
-        return self.provider
+def tool_error(name: str, **arguments: Any) -> str:
+    """Call a tool expecting a typed refusal; returns the error text."""
+    result = call(name, **arguments)
+    assert result["isError"] is True, result["content"][0]["text"]
+    return result["content"][0]["text"]
 
-    def complete(self, system_prompt: str, user_content: str, *,
-                 timeout_s: int) -> Completion:
-        stage = ('SENIOR_REVIEW' if 'Senior Reviewer' in system_prompt
-                 else 'CODE_REVIEW')
-        self.calls.append({'stage': stage, 'system': system_prompt,
-                           'user': user_content, 'timeout_s': timeout_s})
-        if self.error is not None:
-            raise self.error
-        return Completion(
-            text=self.senior if stage == 'SENIOR_REVIEW' else self.code,
-            provider=self.provider, model=self.model, session_id='')
+
+def start_review_via_mcp(repo: Repo, **overrides: Any) -> dict[str, Any]:
+    arguments: dict[str, Any] = {'root': str(repo.root), 'base': repo.base,
+                                 'head': repo.head}
+    arguments.update(overrides)
+    return tool('asha_review', **arguments)
+
+
+def submit_via_mcp(repo: Repo, run_id: str, packet: dict[str, Any], *,
+                   verdict: str = 'APPROVE',
+                   findings: list[dict[str, Any]] | None = None,
+                   summary: str = 'reviewed the diff',
+                   **metadata: Any) -> dict[str, Any]:
+    """Submit one stage the way a host LLM would."""
+    payload: dict[str, Any] = {
+        'stage': packet['stage'],
+        'stage_id': packet['stage_id'],
+        'verdict': verdict,
+        'summary': summary,
+        'findings': findings if findings is not None else [],
+    }
+    if metadata:
+        payload['reviewer_metadata'] = metadata
+    return tool('asha_review_submit_stage', root=str(repo.root),
+                review_run_id=run_id, **payload)
+
+
+def next_stage(repo: Repo, run_id: str) -> dict[str, Any]:
+    return tool('asha_review_next_stage', root=str(repo.root),
+                review_run_id=run_id)
+
+
+def finalize(repo: Repo, run_id: str) -> dict[str, Any]:
+    return tool('asha_review_finalize', root=str(repo.root),
+                review_run_id=run_id)
+
+
+def status(repo: Repo, run_id: str) -> dict[str, Any]:
+    return tool('asha_review_status', root=str(repo.root), run_id=run_id)

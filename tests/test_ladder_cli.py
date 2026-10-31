@@ -1,4 +1,4 @@
-"""`asha review` / `asha review-status`: exit codes, JSON, refusal handling."""
+"""CLI entry points: start, context, submit, finalize, status, exit codes."""
 
 from __future__ import annotations
 
@@ -10,134 +10,129 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from ladder_support import (  # type: ignore[import-not-found]
-    FakeProvider,
-    document,
-    finding,
-    make_repo,
-    stub_gate,
-)
+from ladder_support import make_repo, stub_gate  # type: ignore[import-not-found]
 
 from asha import cli
-from asha.ladder import orchestrator
 
 
 @pytest.fixture(autouse=True)
 def isolated_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('ASHA_STATE_DIR', str(tmp_path / 'state'))
-    monkeypatch.delenv('ASHA_LLM_API_KEY', raising=False)
+    for name in ('ASHA_LLM_API_KEY', 'ASHA_LLM_BASE_URL', 'ASHA_LLM_MODEL'):
+        monkeypatch.delenv(name, raising=False)
 
 
-def use_provider(monkeypatch: pytest.MonkeyPatch,
-                 provider: FakeProvider) -> None:
-    monkeypatch.setattr(orchestrator, 'resolve_provider', lambda: provider)
+def run_cli(*argv: str) -> tuple[int, str]:
+    import contextlib
+    import io
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        code = cli.main(list(argv))
+    return code, out.getvalue()
 
 
-def review_argv(repo, *extra: str) -> list[str]:
-    return ['review', '--root', str(repo.root), '--base', repo.base,
-            '--head', repo.head, *extra]
+def start(repo) -> tuple[int, dict]:  # type: ignore[no-untyped-def]
+    code, text = run_cli('review', '--root', str(repo.root), '--base',
+                         repo.base, '--head', repo.head, '--json')
+    return code, json.loads(text)
 
 
-def test_review_approved_exits_zero(tmp_path: Path,
-                                    monkeypatch: pytest.MonkeyPatch,
-                                    capsys: pytest.CaptureFixture[str]) -> None:
+def write_submission(tmp_path: Path, packet: dict, *, verdict: str = 'APPROVE',
+                     findings: list[dict] | None = None) -> str:
+    path = tmp_path / f'{packet["stage"]}.json'
+    path.write_text(json.dumps({
+        'stage': packet['stage'], 'stage_id': packet['stage_id'],
+        'verdict': verdict, 'summary': 'cli submission',
+        'findings': findings or [],
+        'reviewer_metadata': {'host_client': 'cli-test',
+                              'isolation': 'HOST_ATTESTED_ISOLATED_CONTEXT',
+                              'attestation_source': 'separate CLI process'},
+    }), encoding='utf-8')
+    return str(path)
+
+
+def test_review_start_is_pending_not_approved(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+
+    code, payload = start(repo)
+
+    assert code == 5
+    assert payload['run']['state'] == 'AWAITING_HOST_REVIEW'
+    assert payload['packet']['stage'] == 'CODE_REVIEW'
+    assert 'ASHA_LLM' not in json.dumps(payload)
+
+
+def test_review_status_reads_the_persisted_run(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    _, payload = start(repo)
+    run_id = payload['run']['run_id']
+
+    code, text = run_cli('review-status', '--root', str(repo.root),
+                         '--run-id', run_id, '--json')
+
+    body = json.loads(text)
+    assert code == 0
+    assert body['run_id'] == run_id
+    assert body['state'] == 'AWAITING_HOST_REVIEW'
+
+
+def test_submit_and_finalize_through_the_cli(tmp_path: Path,
+                                             monkeypatch: pytest.MonkeyPatch) -> None:
     repo = make_repo(tmp_path)
     stub_gate(monkeypatch)
-    use_provider(monkeypatch, FakeProvider())
+    _, payload = start(repo)
+    run_id = payload['run']['run_id']
+    packet = payload['packet']
 
-    code = cli.main(review_argv(repo, '--json'))
+    for _ in range(3):
+        file_path = write_submission(tmp_path, packet)
+        code, text = run_cli('review-submit', '--root', str(repo.root),
+                             '--run-id', run_id, '--file', file_path,
+                             '--json')
+        assert code in (0, 5), text
+        if code == 0:
+            break
+        code, text = run_cli('review-next', '--root', str(repo.root),
+                             '--run-id', run_id, '--json')
+        packet = json.loads(text)
+
+    code, text = run_cli('review-finalize', '--root', str(repo.root),
+                         '--run-id', run_id, '--json')
 
     assert code == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload['decision'] == 'APPROVED'
-    assert payload['approved'] is True
-    assert payload['artifact_schema'] == 1
+    body = json.loads(text)
+    assert body['decision'] == 'APPROVED'
+    assert body['gate']['authorized_to_ship'] is True
 
 
-def test_review_changes_requested_exits_one(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_review_context_prints_a_bounded_chunk(tmp_path: Path) -> None:
     repo = make_repo(tmp_path)
-    stub_gate(monkeypatch)
-    use_provider(monkeypatch, FakeProvider(
-        code=document(finding(), verdict='REQUEST_CHANGES'),
-        senior=document(finding(), verdict='REQUEST_CHANGES')))
+    _, payload = start(repo)
 
-    assert cli.main(review_argv(repo)) == 1
+    code, text = run_cli('review-context', '--root', str(repo.root),
+                         '--run-id', payload['run']['run_id'], '--json',
+                         '--max-bytes', '80')
 
-
-def test_review_without_provider_exits_blocked(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str]) -> None:
-    repo = make_repo(tmp_path)
-
-    code = cli.main(review_argv(repo, '--json'))
-
-    assert code == 2
-    payload = json.loads(capsys.readouterr().out)
-    assert payload['decision'] == 'BLOCKED'
-    assert 'ASHA_LLM_API_KEY' in payload['reasons'][0]
-
-
-def test_review_reports_stage_lines_without_json(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str]) -> None:
-    repo = make_repo(tmp_path)
-    stub_gate(monkeypatch)
-    use_provider(monkeypatch, FakeProvider())
-
-    cli.main(review_argv(repo))
-
-    out = capsys.readouterr().out
-    assert 'CODE_REVIEW' in out and 'SENIOR_REVIEW' in out
-    assert 'SEMANTIC_REVIEW' in out and 'SHIP_GATE' in out
-    assert 'decision' not in out.lower() or 'APPROVED' in out
-
-
-def test_review_rejects_unknown_policy_as_usage(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    repo = make_repo(tmp_path)
-    assert cli.main(review_argv(repo, '--policy', 'whatever')) == 4
-
-
-def test_review_rejects_an_invalid_ref(tmp_path: Path,
-                                       monkeypatch: pytest.MonkeyPatch) -> None:
-    repo = make_repo(tmp_path)
-    argv = ['review', '--root', str(repo.root), '--base', 'no-such-ref',
-            '--head', repo.head]
-    assert cli.main(argv) == 3
-
-
-def test_review_status_reads_a_previous_run(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str]) -> None:
-    repo = make_repo(tmp_path)
-    stub_gate(monkeypatch)
-    use_provider(monkeypatch, FakeProvider())
-    cli.main(review_argv(repo, '--json'))
-    run_id = json.loads(capsys.readouterr().out)['run_id']
-
-    code = cli.main(['review-status', '--root', str(repo.root),
-                     '--run-id', run_id, '--json'])
-
+    chunk = json.loads(text)
     assert code == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload['run_id'] == run_id
-    assert payload['decision'] == 'APPROVED'
+    assert chunk['kind'] == 'diff'
+    assert chunk['total_bytes'] > 80
 
 
-def test_review_status_unknown_run_exits_three(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unknown_policy_is_a_usage_error(tmp_path: Path) -> None:
     repo = make_repo(tmp_path)
-    code = cli.main(['review-status', '--root', str(repo.root),
-                     '--run-id', 'rv-nope'])
+
+    code, _ = run_cli('review', '--root', str(repo.root), '--base', repo.base,
+                      '--head', repo.head, '--policy', 'distinct-provider')
+
+    assert code == 4
+
+
+def test_unknown_run_is_an_execution_error(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+
+    code, _ = run_cli('review-status', '--root', str(repo.root),
+                      '--run-id', 'rv-missing')
+
     assert code == 3
-
-
-def test_review_status_requires_a_run_id(tmp_path: Path) -> None:
-    assert cli.main(['review-status', '--root', str(tmp_path)]) == 4
-
-
-def test_review_rejects_non_numeric_deadline(tmp_path: Path) -> None:
-    repo = make_repo(tmp_path)
-    assert cli.main(['review', '--root', str(repo.root),
-                     '--deadline-seconds', 'soon']) == 4
