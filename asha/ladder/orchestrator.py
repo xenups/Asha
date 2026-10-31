@@ -512,20 +512,18 @@ def _run_gate(root: Path, findings: tuple[Finding, ...]) -> dict[str, Any]:
         sealed = ship_gate.gate_ship(
             root, reviewer=_gate_reviewer(findings, ship_gate.POLICY_VERSION))
     except evidence_mod.EvidenceError as exc:
-        # gate_ship persists the sealed decision BEFORE refusing, so the
-        # typed state and reasons survive the refusal; reading them back
-        # keeps the recorded cause instead of the exception text alone.
-        sealed = evidence_mod.read(root) or {}
-        reasons = list(sealed.get('gate_reasons') or [])
-        if not reasons:
-            reasons = [str(exc)]
+        # A refusal carries its own record. Never read the artifact back: a
+        # precondition refusal seals nothing, so a read would report the
+        # PREVIOUS run's state (a clean COMPLETED_CLEAN) for this one.
+        recorded = getattr(exc, 'gate', None)
+        if isinstance(recorded, dict) and recorded:
+            return dict(recorded)
         return {
-            'gate_state': str(sealed.get('gate_state', 'REFUSED')),
+            'gate_state': 'INVALID_EVIDENCE',
             'authorized_to_ship': False,
-            'reasons': reasons,
-            'blocking_findings': list(sealed.get('blocking_findings') or []),
+            'reasons': [str(exc)],
+            'blocking_findings': [],
             'policy_version': ship_gate.POLICY_VERSION,
-            'snapshot_id': str(sealed.get('snapshot_id', '')),
         }
     except Exception as exc:  # a broken gate never authorizes
         return {
