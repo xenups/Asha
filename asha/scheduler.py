@@ -111,6 +111,13 @@ class GovernedScheduler:
         self.dep_index = dep_index.DependencyIndex()
         self.graph = graph_state.GraphState.empty()
         self.reconcile_log: list[dict[str, Any]] = []
+        # Workers whose COMMAND already exited (their evidence seal may still
+        # be running). Section 9 coalescing is decided by this fact, never by
+        # elapsed time: a sibling that finished executing overlapped the
+        # batch's region and belongs to the same pass, while a sibling still
+        # executing must never block a publication.
+        self._command_finished: set[str] = set()
+        self._command_lock = threading.Lock()
         self.stale_intents_dropped = 0
         # §2.5 observable ledger: every discarded intent with its
         # rejection reason (STALE_GRAPH_GENERATION) and both generations.
@@ -533,6 +540,8 @@ class GovernedScheduler:
             rc, tail = int(result[0]), str(result[1])
         else:
             rc, tail = int(result), ''
+        with self._command_lock:
+            self._command_finished.add(str(worker['id']))
         if base is None and base_tree is None:
             # legacy call shape preserved exactly (existing tests wrap
             # _collect positionally); the kwargs branch is fast-path only
@@ -862,13 +871,21 @@ class GovernedScheduler:
                         wave = {f for f in list(futures) if f.done()} \
                             - handled
                         if not wave and futures:
-                            # Section 9: bounded overlap window -- evidence
-                            # seals run in parallel, so a sibling can
-                            # resolve just after the .done() sweep above;
-                            # wait briefly (worst case one timeout only
-                            # while OTHER work is still in flight) so
-                            # overlapping completion events join THIS pass.
-                            extra, _ = wait(futures, timeout=0.5)
+                            # Section 9: a sibling whose command already
+                            # exited overlapped this batch's region, even if
+                            # its evidence seal has not returned yet -- wait
+                            # for that seal so the two completions join ONE
+                            # pass. A sibling still executing is NOT waited
+                            # for (a publish must never block on a running
+                            # worker). The condition is a recorded fact, not
+                            # a wall-clock window, so it cannot expire early.
+                            with self._command_lock:
+                                exited = set(self._command_finished)
+                            overlapped = {fut for fut, wid in futures.items()
+                                          if wid in exited}
+                            if not overlapped:
+                                break
+                            extra, _ = wait(overlapped)
                             wave = set(extra) - handled
                     if self._reconcile_batch(batch):
                         # Section 7: build a NEW sorter from the just-
