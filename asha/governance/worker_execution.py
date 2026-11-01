@@ -207,6 +207,20 @@ COMPARISON_REASONS = ("COMPARED", "NOT_COMPARED", "BASE_EQUALS_TARGET",
                       "INVENTORY_MISMATCH")
 
 
+def failure_digest(failures: Any, limit: int = 3) -> str:
+    """One-line, operator-readable identity of the observed failures.
+
+    A refusal that says only "unparsed baseline" hides the candidate's own
+    failures, which are often the actionable part. Bounded so a broken tree
+    cannot produce an unbounded reason string.
+    """
+    ordered = sorted(failures, key=lambda item: (item.location, item.check))
+    shown = [f'{item.check}:{item.code or "syntax"}@{item.location}'
+             for item in ordered[:limit]]
+    extra = len(ordered) - len(shown)
+    return ','.join(shown) + (f',+{extra} more' if extra > 0 else '') or 'none'
+
+
 def _check_inventory(checks: list[dict] | None) -> list[str]:
     """Check-name inventory (the comparable part of a check run)."""
     return sorted({str(entry.get("name")) for entry in (checks or [])})
@@ -1222,8 +1236,12 @@ def collect_worker_evidence(
             return {
                 # not DONE: an unattributable baseline authorizes nothing
                 "state": "FAILED",
-                "reason": "comparison_inconclusive:" + str(
-                    comparison["detail"] or comparison["reason"]),
+                # The candidate's own failures are what an operator can act
+                # on; the baseline detail alone named the wrong suspect.
+                "reason": ("comparison_inconclusive:"
+                           + str(comparison["detail"] or comparison["reason"])
+                           + ";candidate_failures=" + failure_digest(cur_fails)
+                           + f";worker_exit={rc}"),
                 "evidence": None,
                 "exit_status": rc,
                 "verification_status": "COMPARISON_INCONCLUSIVE",
