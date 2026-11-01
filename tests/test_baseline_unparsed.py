@@ -145,8 +145,11 @@ def test_green_candidate_with_unknown_baseline_is_not_done(
     st = report["states"]["w1"]
 
     assert st["state"] == "FAILED", st
+    # Phase 10 F2: the reason also names the candidate failures (none here,
+    # the candidate is green) and the exit status of the worker command.
     assert st["reason"] == (
-        "comparison_inconclusive:baseline_failures_unparsed"), st
+        "comparison_inconclusive:baseline_failures_unparsed"
+        ";candidate_failures=none;worker_exit=0"), st
     assert st.get("evidence") is None, st          # no success seal
     assert st["comparison"]["performed"] is False, st
     assert not report["evidence"], report
@@ -238,6 +241,8 @@ def test_cli_reports_same_diagnostic_with_and_without_keep_worktrees(
 
     assert seen[0] == seen[1], seen
     assert seen[0][1] == "FAILED", seen
-    assert seen[0][2] == "comparison_inconclusive:baseline_failures_unparsed"
+    assert seen[0][2] == (
+        "comparison_inconclusive:baseline_failures_unparsed"
+        ";candidate_failures=none;worker_exit=0"), seen
     assert seen[0][4] == "baseline_failures_unparsed"
     assert seen[0][5] is False                      # nothing sealed either way
