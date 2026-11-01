@@ -1,0 +1,3 @@
+ pydetactl/src/utils/s3_resolver.py  |  5 +++--
+ pydetactl/tests/test_s3_resolver.py | 35 +++++++++++++++++++++++++++++++++++
+ 2 files changed, 38 insertions(+), 2 deletions(-)

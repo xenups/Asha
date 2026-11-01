@@ -1,0 +1,60 @@
+diff --git a/pydetactl/src/utils/s3_resolver.py b/pydetactl/src/utils/s3_resolver.py
+index 1fd6c9c4d..e5711e618 100644
+--- a/pydetactl/src/utils/s3_resolver.py
++++ b/pydetactl/src/utils/s3_resolver.py
+@@ -10,8 +10,11 @@ from typing import Any, Dict, List, Set
+ 
+ from services.s3_client import S3Client
+ 
+-# Pattern for detecting s3:// URLs
+-_S3_URL_PATTERN = re.compile(r"s3://[^\s]+")
++# Pattern for detecting candidate URL tokens (s3://, HTTP(S) or scheme-less)
++_S3_URL_PATTERN = re.compile(r"\S+")
++
++# Punctuation that prose may glue to the end of a URL
++_TRAILING_PUNCTUATION = ".,;:!?)]}'\""
+ 
+ 
+ def detect_s3_urls(data: Any) -> List[str]:
+@@ -39,13 +42,13 @@ def detect_s3_urls(data: Any) -> List[str]:
+         elif isinstance(current, list):
+             stack.extend(current)
+         elif isinstance(current, str):
+-            # Check for s3:// URLs
+-            matches = _S3_URL_PATTERN.findall(current)
+-            urls.update(matches)
+-
+-            # Check if entire string is an HTTP(S) or scheme-less S3 URL
+-            if ("/s3/" in current or ".s3." in current) and "/" in current:
+-                urls.add(current)
++            # Take only the URL token itself, not the sentence around it
++            for token in _S3_URL_PATTERN.findall(current):
++                url = token.rstrip(_TRAILING_PUNCTUATION)
++                if "/" in url and (
++                    url.startswith("s3://") or "/s3/" in url or ".s3." in url
++                ):
++                    urls.add(url)
+     return list(urls)
+ 
+ 
+diff --git a/pydetactl/tests/test_s3_resolver.py b/pydetactl/tests/test_s3_resolver.py
+index 6632717f2..fc703d317 100644
+--- a/pydetactl/tests/test_s3_resolver.py
++++ b/pydetactl/tests/test_s3_resolver.py
+@@ -68,6 +68,16 @@ class TestDetectS3URLs:
+         assert len(urls) == 1
+         assert "s3://bucket/file.yaml" in urls
+ 
++    def test_extracts_url_token_from_sentence(self):
++        """Should return the URL token, not the surrounding sentence."""
++        data = {"m": "fetched https://host/a/s3/manifest.json ok"}
++
++        assert detect_s3_urls(data) == ["https://host/a/s3/manifest.json"]
++
++    def test_strips_trailing_prose_punctuation(self):
++        """Should strip trailing prose punctuation from detected URLs."""
++        assert detect_s3_urls("see s3://b/k.txt).") == ["s3://b/k.txt"]
++
+     def test_handles_empty_data(self):
+         """Should handle empty data structures."""
+         assert detect_s3_urls({}) == []

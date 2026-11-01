@@ -1,0 +1,5 @@
+ pydetactl/src/services/s3_client.py | 38 +++---------------
+ pydetactl/src/utils/s3_resolver.py  | 14 ++-----
+ pydetactl/src/utils/s3_url.py       | 46 ++++++++++++++++++++++
+ pydetactl/tests/test_s3_url.py      | 77 +++++++++++++++++++++++++++++++++++++
+ 4 files changed, 132 insertions(+), 43 deletions(-)

@@ -1,0 +1,85 @@
+diff --git a/pydetactl/src/core/logger.py b/pydetactl/src/core/logger.py
+index 55fe3ea77..34005cf36 100644
+--- a/pydetactl/src/core/logger.py
++++ b/pydetactl/src/core/logger.py
+@@ -21,12 +21,19 @@ class OutputManager:
+ 
+     def _configure_logger(self):
+         logger.remove()
++        # Warnings and errors go to stderr: stdout carries the machine-readable result.
++        logger.add(
++            sys.stderr,
++            format="<level>{level}</level> | {message}",
++            level="WARNING",
++        )
+         if self.mode != OutputMode.JSON:
+             logger.add(
+                 sys.stdout,
+                 colorize=True,
+                 format="<green>{time:HH:mm:ss}</green> | <level>{level}</level> | {message}",
+                 level="INFO",
++                filter=lambda record: record["level"].no < 30,
+             )
+ 
+     def set_mode(self, mode: OutputMode):
+diff --git a/pydetactl/src/utils/s3_resolver.py b/pydetactl/src/utils/s3_resolver.py
+index 1fd6c9c4d..ed9225780 100644
+--- a/pydetactl/src/utils/s3_resolver.py
++++ b/pydetactl/src/utils/s3_resolver.py
+@@ -8,6 +8,7 @@ coordinating URL detection and artifact fetching.
+ import re
+ from typing import Any, Dict, List, Set
+ 
++from core.logger import logger
+ from services.s3_client import S3Client
+ 
+ # Pattern for detecting s3:// URLs
+@@ -86,7 +87,7 @@ async def resolve_s3_artifacts(
+             artifact = await s3_client.fetch_artifact(url)
+             artifacts.append(artifact)
+         except Exception as e:
+-            # Log error but continue with other artifacts
+-            print(f"Warning: Failed to fetch {url}: {e}")
++            # Non-fatal: report on stderr so the machine-readable stdout stays clean.
++            logger.warning(f"Failed to fetch {url}: {e}")
+ 
+     return artifacts
+diff --git a/pydetactl/tests/test_s3_resolver.py b/pydetactl/tests/test_s3_resolver.py
+index 6632717f2..c9660a912 100644
+--- a/pydetactl/tests/test_s3_resolver.py
++++ b/pydetactl/tests/test_s3_resolver.py
+@@ -133,3 +133,34 @@ async def test_resolve_s3_artifacts_with_urls(mock_detect, mock_s3_client_class)
+     mock_detect.assert_called_once_with(result)
+     mock_s3_client_class.assert_called_once()
+     assert mock_client.fetch_artifact.call_count == 2
++
++
++@pytest.mark.asyncio
++@patch("utils.s3_resolver.S3Client")
++@patch("utils.s3_resolver.detect_s3_urls")
++async def test_resolve_s3_artifacts_fetch_failure_keeps_stdout_clean(
++    mock_detect, mock_s3_client_class, capsys
++):
++    """A failed fetch is non-fatal and must not write a byte to stdout."""
++    mock_detect.return_value = [
++        "s3://bucket/broken.yaml",
++        "s3://bucket/ok.yaml",
++    ]
++
++    mock_client = Mock()
++    mock_client.fetch_artifact = AsyncMock(
++        side_effect=[
++            RuntimeError("boom"),
++            {"source": "s3://bucket/ok.yaml", "content": {"data": 2}},
++        ]
++    )
++    mock_s3_client_class.return_value = mock_client
++
++    artifacts = await resolve_s3_artifacts({"name": "test"})
++
++    captured = capsys.readouterr()
++    assert captured.out == ""
++    assert "Failed to fetch s3://bucket/broken.yaml" in captured.err
++    assert artifacts == [
++        {"source": "s3://bucket/ok.yaml", "content": {"data": 2}}
++    ]

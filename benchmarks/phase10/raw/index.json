@@ -1,0 +1,50 @@
+{
+ "t1_base": {
+  "task": "T1",
+  "commit": "4befe3f22cbfadb95423f33e96bac1471af1a45d",
+  "pytest_exit": 0,
+  "pytest_tail": "39 passed in 0.51s",
+  "acceptance_exit": 0,
+  "acceptance": "{\"task\": \"T1\", \"result\": {\"c1_value\": [\"https://host/a/s3/manifest.json\"], \"c1_pass\": true, \"c2_value\": [\"s3://b/k.txt\"], \"c2_pass\": true}}"
+ },
+ "t1_asha": {
+  "task": "T1",
+  "commit": "e59ee9896444c9a1fe990e5058589d52cdb6c4fb",
+  "pytest_exit": 0,
+  "pytest_tail": "39 passed in 0.50s",
+  "acceptance_exit": 0,
+  "acceptance": "{\"task\": \"T1\", \"result\": {\"c1_value\": [\"https://host/a/s3/manifest.json\"], \"c1_pass\": true, \"c2_value\": [\"s3://b/k.txt\"], \"c2_pass\": true}}"
+ },
+ "t2_base": {
+  "task": "T2",
+  "commit": "96d2ee131ebd0747ebd67b5ef89d27e4cdd739ef",
+  "pytest_exit": 0,
+  "pytest_tail": "38 passed in 0.48s",
+  "acceptance_exit": 0,
+  "acceptance": "{\"task\": \"T2\", \"result\": {\"stdout_is_empty\": true, \"stdout_repr\": \"\", \"builtins_print_used\": false, \"non_fatal\": true, \"artifact_count\": 1, \"reported_on_stderr\": false}}"
+ },
+ "t2_asha": {
+  "task": "T2",
+  "commit": "a0305b2788e8953441b517f71d8ede709193afb6",
+  "pytest_exit": 0,
+  "pytest_tail": "38 passed in 0.52s",
+  "acceptance_exit": 0,
+  "acceptance": "{\"task\": \"T2\", \"result\": {\"stdout_is_empty\": true, \"stdout_repr\": \"\", \"builtins_print_used\": false, \"non_fatal\": true, \"artifact_count\": 1, \"reported_on_stderr\": false}}"
+ },
+ "t3_base": {
+  "task": "T3",
+  "commit": "ba55e51afcfa34bc0d3353fdcf4161405165cc46",
+  "pytest_exit": 0,
+  "pytest_tail": "55 passed in 0.44s",
+  "acceptance_exit": 0,
+  "acceptance": "{\"task\": \"T3\", \"result\": {\"detected\": [\"http://minio.s3.local/b/k.txt\", \"https://h/s3/k2\", \"https://host/a/s3/manifest.json\", \"s3://b/k.txt).\", \"s3://b1/k1\", \"s3://bucket/dir/key.json\", \"s3://bucket/key.yaml\"], \"unparseable\": [], \"property_holds\": true, \"client_contract\": true}}"
+ },
+ "t3_asha": {
+  "task": "T3",
+  "commit": "a445fed1d2df0bdbedd8cde37c62e4eb802a2ffe",
+  "pytest_exit": 0,
+  "pytest_tail": "60 passed in 0.57s",
+  "acceptance_exit": 0,
+  "acceptance": "{\"task\": \"T3\", \"result\": {\"detected\": [\"http://minio.s3.local/b/k.txt\", \"https://h/s3/k2\", \"https://h/x/s3/y.json\", \"https://host/a/s3/manifest.json\", \"s3://b/k.txt).\", \"s3://b1/k1\", \"s3://bucket/dir/key.json\", \"s3://bucket/key.yaml\"], \"unparseable\": [], \"property_holds\": true, \"client_contract\": true}}"
+ }
+}
