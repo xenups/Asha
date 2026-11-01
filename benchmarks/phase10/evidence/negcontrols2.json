@@ -1,0 +1,128 @@
+{
+ "results": [
+  {
+   "scenario": "S3_stale_target",
+   "run_id": "",
+   "stages": [
+    null,
+    null,
+    null
+   ],
+   "finalize_before_move": {},
+   "finalize_after_move": {},
+   "status_after_move": {},
+   "expected": "stale/blocked, authorized_to_ship false"
+  },
+  {
+   "scenario": "S4_substituted_worker_evidence",
+   "artifact": "/home/amir/bench/p10/neg/state/c6dca2bd9621e0eb-repo/orchestrator/mcp-fb1ed8366446/w-tool.json",
+   "probe": {
+    "exit": 0,
+    "stdout": "{\"detected\": true, \"error\": \"OrchestratorError: worker evidence identity mismatch: artifact declares worker_id='w-tool', expected 'w-other'\"}",
+    "stderr": ""
+   },
+   "expected": "detected: worker identity mismatch"
+  },
+  {
+   "scenario": "S5_invalid_task_identity",
+   "probe": {
+    "exit": 0,
+    "stdout": "{\"detected\": true, \"error\": \"OrchestratorError: worker evidence task mismatch: artifact declares task_id='mcp-fb1ed8366446', expected 'task-never-ran'\"}",
+    "stderr": ""
+   },
+   "expected": "detected: task mismatch"
+  },
+  {
+   "scenario": "S6b_regression_not_success",
+   "asha": {
+    "status": "failed",
+    "authorized_to_ship": false,
+    "reason": "w-regress:FAILED",
+    "states": {
+     "w-regress": {
+      "state": "FAILED",
+      "reason": "comparison_inconclusive:baseline_failures_unparsed",
+      "verdict": "UNKNOWN",
+      "current_failures": [
+       {
+        "check": "ruff",
+        "location": "pydetactl/src/utils/s3_resolver.py:93:12",
+        "code": null,
+        "message": "invalid-syntax: Expected a parameter or the end of the parameter list"
+       },
+       {
+        "check": "ruff",
+        "location": "pydetactl/src/utils/s3_resolver.py:94:1",
+        "code": null,
+        "message": "invalid-syntax: unexpected EOF while parsing"
+       }
+      ],
+      "comparison": {
+       "performed": false,
+       "baseline_tree": "1902e18e361a01915fbce68375a6a34bb1959e81",
+       "candidate_tree": "2628bac3e880529ad64ead6aa87cf521edf9fd9f",
+       "comparable": false,
+       "reason": "NOT_COMPARED",
+       "verdict": null,
+       "detail": "baseline_failures_unparsed"
+      },
+      "verification_status": "COMPARISON_INCONCLUSIVE",
+      "execution_id": "exec-5bfbf78f226c"
+     }
+    }
+   },
+   "states": {
+    "w-regress": {
+     "state": "FAILED",
+     "reason": "comparison_inconclusive:baseline_failures_unparsed",
+     "verdict": "UNKNOWN",
+     "current_failures": [
+      {
+       "check": "ruff",
+       "location": "pydetactl/src/utils/s3_resolver.py:93:12",
+       "code": null,
+       "message": "invalid-syntax: Expected a parameter or the end of the parameter list"
+      },
+      {
+       "check": "ruff",
+       "location": "pydetactl/src/utils/s3_resolver.py:94:1",
+       "code": null,
+       "message": "invalid-syntax: unexpected EOF while parsing"
+      }
+     ],
+     "comparison": {
+      "performed": false,
+      "baseline_tree": "1902e18e361a01915fbce68375a6a34bb1959e81",
+      "candidate_tree": "2628bac3e880529ad64ead6aa87cf521edf9fd9f",
+      "comparable": false,
+      "reason": "NOT_COMPARED",
+      "verdict": null,
+      "detail": "baseline_failures_unparsed"
+     },
+     "verification_status": "COMPARISON_INCONCLUSIVE",
+     "execution_id": "exec-5bfbf78f226c"
+    }
+   },
+   "expected": "validation/comparison failure, no PASS"
+  },
+  {
+   "scenario": "S7_valid_work_not_blocked",
+   "run_id": "rv-20261101T025644Z-3e913e84",
+   "stages": [
+    "VALIDATED",
+    "VALIDATED",
+    "VALIDATED"
+   ],
+   "finalize": {
+    "state": "FINALIZED",
+    "decision": "APPROVED",
+    "blocking_reason": "all 4 mandatory stages validated; no CRITICAL/HIGH finding; independence UNKNOWN meets UNKNOWN"
+   },
+   "status": {
+    "state": "FINALIZED",
+    "decision": "APPROVED"
+   },
+   "expected": "authorized_to_ship true"
+  }
+ ]
+}

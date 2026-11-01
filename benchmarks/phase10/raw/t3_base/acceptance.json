@@ -1,0 +1,1 @@
+{"task": "T3", "result": {"detected": ["http://minio.s3.local/b/k.txt", "https://h/s3/k2", "https://host/a/s3/manifest.json", "s3://b/k.txt).", "s3://b1/k1", "s3://bucket/dir/key.json", "s3://bucket/key.yaml"], "unparseable": [], "property_holds": true, "client_contract": true}}

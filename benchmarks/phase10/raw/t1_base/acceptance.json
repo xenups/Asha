@@ -1,0 +1,1 @@
+{"task": "T1", "result": {"c1_value": ["https://host/a/s3/manifest.json"], "c1_pass": true, "c2_value": ["s3://b/k.txt"], "c2_pass": true}}
