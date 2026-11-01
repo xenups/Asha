@@ -1,0 +1,24 @@
+{"service_failure": {"state": "FINALIZED", "decision": "APPROVED", "gate_state": "COMPLETED_CLEAN", "authorized_to_ship": true}}
+{
+ "asha_home": "/home/amir/asha-phase11",
+ "state": "/home/amir/bench/p12/state_pre4",
+ "server": {
+  "stdout": "{\n \"identity\": {\n  \"pid\": 2567966,\n  \"cwd\": \"/home/amir/asha-phase11\",\n  \"python\": \"/home/amir/bench/p12/ashap12/bin/python\",\n  \"argv\": [\n   \"/home/amir/bench/p12/ashap12/bin/python\",\n   \"-m\",\n   \"asha.mcp_server\"\n  ]\n },\n \"initialize\": {\n  \"protocolVersion\": \"2025-06-18\",\n  \"capabilities\": {\n   \"tools\": {}\n  },\n  \"serverInfo\": {\n   \"name\": \"asha-orchestrator\",\n   \"version\": \"0.4.2\"\n  }\n },\n \"tools\": [\n  \"asha\",\n  \"asha_plan_dag\",\n  \"asha_run_spec\",\n  \"asha_status\",\n  \"asha_get_surgical_context\",\n  \"asha_dispatch_task\",\n  \"asha_verify_tip\",\n  \"asha_verify_stack\",\n  \"asha_review\",\n  \"asha_review_context\",\n  \"asha_review_submit_stage\",\n  \"asha_review_next_stage\",\n  \"asha_review_finalize\",\n  \"asha_review_status\"\n ]\n}",
+  "stderr": ""
+ },
+ "service_failure": {
+  "scenario": "service_failure",
+  "changed": "pydetactl/tests/test_deliberate.py\npydetactl/tests/test_plan.py",
+  "head": "5035ff7c01af533742d5ca4dd4bef07fb3c65fe1",
+  "run_id": "rv-20261101T125912Z-0216cb0c",
+  "state": "FINALIZED",
+  "decision": "APPROVED",
+  "gate_state": "COMPLETED_CLEAN",
+  "authorized_to_ship": true,
+  "reason": "all 4 mandatory stages validated; no CRITICAL/HIGH finding; independence UNKNOWN meets UNKNOWN",
+  "snapshot_id": "b73967b05459ce8bc6a1c4d7f95dc3496f811dabbf848eb4537bd0f7f5e028a2",
+  "checks": null,
+  "pytest_evidence": [],
+  "tree": "8c2e50b766cfb4f2bb5b112b186ab6cd33f5bdd8"
+ }
+}

@@ -1,0 +1,5 @@
+{"healthy": {"state": "FINALIZED", "decision": "APPROVED", "gate_state": "COMPLETED_CLEAN", "authorized_to_ship": true}}
+{"service_failure": {"state": "BLOCKED", "decision": "BLOCKED", "gate_state": "EXECUTION_FAILED", "authorized_to_ship": false}}
+{"suite_deleted": {"state": "BLOCKED", "decision": "BLOCKED", "gate_state": "EXECUTION_FAILED", "authorized_to_ship": false}}
+git ('commit', '-qm', 'phase 12 env poisoned'): HEAD detached from 899ab1c
+nothing to commit, working tree clean

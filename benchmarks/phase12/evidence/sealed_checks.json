@@ -1,0 +1,282 @@
+{
+ "x_healthy": {
+  "gate_state": "COMPLETED_CLEAN",
+  "authorized_to_ship": true,
+  "snapshot_id": "2b39b8c9ad93a185f21014ab1e9c9586256bacf42812e56ddd7bb661694f5a14",
+  "evidence_sha256": "12deea6283bd3aaf7bbbe16b28955762216b4ae9caa99506370acd57c53915d7",
+  "checks": [
+   {
+    "name": "pytest",
+    "scope": "package",
+    "status": "passed",
+    "exit_code": 0,
+    "service": ".",
+    "tail": "                                                       [100%]\n1 passed in 0.01s\n"
+   },
+   {
+    "name": "ruff",
+    "scope": "changed_files",
+    "status": "passed",
+    "exit_code": 0,
+    "service": "pydetactl",
+    "tail": "All checks passed!\n"
+   },
+   {
+    "name": "pytest:pydetactl",
+    "scope": "package",
+    "status": "passed",
+    "exit_code": 0,
+    "service": "pydetactl",
+    "tail": "ytest.org/en/stable/how-to/capture-warnings.html\n37 passed, 6 warnings in 0.47s\n"
+   },
+   {
+    "name": "mypy",
+    "scope": "dependency_graph",
+    "status": "passed",
+    "exit_code": 0,
+    "service": "pydetactl",
+    "tail": "Success: no issues found in 1 source file\n"
+   },
+   {
+    "name": "semantic-review",
+    "scope": null,
+    "status": "passed",
+    "exit_code": 0,
+    "service": null,
+    "tail": ""
+   }
+  ]
+ },
+ "x_untracked": {
+  "gate_state": "EXECUTION_FAILED",
+  "authorized_to_ship": false,
+  "snapshot_id": "3bbc15f2ce71d24327e35f2cb061fd11ed7c94e86800a20fe4ff6f637a0cad99",
+  "evidence_sha256": "98dcb0822c58d7e128cf95aa4eae0cdef5a211037bb9fe81b1f2c0e557f8b824",
+  "checks": [
+   {
+    "name": "ruff",
+    "scope": "changed_files",
+    "status": "failed",
+    "exit_code": 1,
+    "service": ".",
+    "tail": "fix` option (467 hidden fixes can be enabled with the `--unsafe-fixes` option).\n"
+   },
+   {
+    "name": "pytest",
+    "scope": "package",
+    "status": "passed",
+    "exit_code": 0,
+    "service": ".",
+    "tail": "                                                       [100%]\n1 passed in 0.01s\n"
+   },
+   {
+    "name": "mypy",
+    "scope": "dependency_graph",
+    "status": "skipped",
+    "exit_code": 0,
+    "service": ".",
+    "tail": ""
+   },
+   {
+    "name": "semantic-review",
+    "scope": null,
+    "status": "passed",
+    "exit_code": 0,
+    "service": null,
+    "tail": ""
+   }
+  ]
+ },
+ "x_collection_error": {
+  "gate_state": "EXECUTION_FAILED",
+  "authorized_to_ship": false,
+  "snapshot_id": "9691489408505d59837cf1d36dc65582ee57f6564d323a1e6163999e669e936a",
+  "evidence_sha256": "cb3f35490740dffac969311b0cb8f6eecdc8a05d5d6e33e4fc9bd18d23224498",
+  "checks": [
+   {
+    "name": "pytest",
+    "scope": "package",
+    "status": "passed",
+    "exit_code": 0,
+    "service": ".",
+    "tail": "                                                       [100%]\n1 passed in 0.01s\n"
+   },
+   {
+    "name": "ruff",
+    "scope": "changed_files",
+    "status": "failed",
+    "exit_code": 1,
+    "service": "pydetactl",
+    "tail": "lled` imported but unused\nFound 1 error.\n[*] 1 fixable with the `--fix` option.\n"
+   },
+   {
+    "name": "pytest:pydetactl",
+    "scope": "package",
+    "status": "failed",
+    "exit_code": 2,
+    "service": "pydetactl",
+    "tail": "!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!\n1 error in 0.48s\n"
+   },
+   {
+    "name": "mypy",
+    "scope": "dependency_graph",
+    "status": "failed",
+    "exit_code": 1,
+    "service": "pydetactl",
+    "tail": "nning_mypy.html#missing-imports\nFound 1 error in 1 file (checked 1 source file)\n"
+   },
+   {
+    "name": "semantic-review",
+    "scope": null,
+    "status": "passed",
+    "exit_code": 0,
+    "service": null,
+    "tail": ""
+   }
+  ]
+ },
+ "x_env_poisoned": {
+  "gate_state": "EXECUTION_FAILED",
+  "authorized_to_ship": false,
+  "snapshot_id": "2b39b8c9ad93a185f21014ab1e9c9586256bacf42812e56ddd7bb661694f5a14",
+  "evidence_sha256": "657135e64937d850eff810ecdcb563a2e67ccb477bddd914c6e5d08b1b0c7e0d",
+  "checks": [
+   {
+    "name": "pytest",
+    "scope": "package",
+    "status": "passed",
+    "exit_code": 0,
+    "service": ".",
+    "tail": "                                                       [100%]\n1 passed in 0.01s\n"
+   },
+   {
+    "name": "ruff",
+    "scope": "changed_files",
+    "status": "failed",
+    "exit_code": 127,
+    "service": "pydetactl",
+    "tail": ""
+   },
+   {
+    "name": "pytest:pydetactl",
+    "scope": "package",
+    "status": "failed",
+    "exit_code": 127,
+    "service": "pydetactl",
+    "tail": ""
+   },
+   {
+    "name": "mypy",
+    "scope": "dependency_graph",
+    "status": "failed",
+    "exit_code": 127,
+    "service": "pydetactl",
+    "tail": ""
+   },
+   {
+    "name": "semantic-review",
+    "scope": null,
+    "status": "passed",
+    "exit_code": 0,
+    "service": null,
+    "tail": ""
+   }
+  ]
+ },
+ "x_suite_deleted": {
+  "gate_state": "EXECUTION_FAILED",
+  "authorized_to_ship": false,
+  "snapshot_id": "734381056fde638bf18835af3ce7089f7bb74d85603b4e516b376bc3472a113e",
+  "evidence_sha256": "772785f6373d0abd00c7010ef275c80d602e29a54303346b7a29cbc12da83a09",
+  "checks": [
+   {
+    "name": "ruff",
+    "scope": "changed_files",
+    "status": "failed",
+    "exit_code": 1,
+    "service": ".",
+    "tail": "fix` option (467 hidden fixes can be enabled with the `--unsafe-fixes` option).\n"
+   },
+   {
+    "name": "pytest",
+    "scope": "package",
+    "status": "passed",
+    "exit_code": 0,
+    "service": ".",
+    "tail": "                                                       [100%]\n1 passed in 0.01s\n"
+   },
+   {
+    "name": "mypy",
+    "scope": "dependency_graph",
+    "status": "skipped",
+    "exit_code": 0,
+    "service": ".",
+    "tail": ""
+   },
+   {
+    "name": "pytest:pydetactl",
+    "scope": "package",
+    "status": "failed",
+    "exit_code": null,
+    "service": "pydetactl",
+    "tail": ""
+   },
+   {
+    "name": "semantic-review",
+    "scope": null,
+    "status": "passed",
+    "exit_code": 0,
+    "service": null,
+    "tail": ""
+   }
+  ]
+ },
+ "x_service_failure": {
+  "gate_state": "EXECUTION_FAILED",
+  "authorized_to_ship": false,
+  "snapshot_id": "b73967b05459ce8bc6a1c4d7f95dc3496f811dabbf848eb4537bd0f7f5e028a2",
+  "evidence_sha256": "fca65eb43c9a8ce519806b58a26945171f960e9ee0b69ce6a4b060effb0e7fb7",
+  "checks": [
+   {
+    "name": "pytest",
+    "scope": "package",
+    "status": "passed",
+    "exit_code": 0,
+    "service": ".",
+    "tail": "                                                       [100%]\n1 passed in 0.01s\n"
+   },
+   {
+    "name": "ruff",
+    "scope": "changed_files",
+    "status": "passed",
+    "exit_code": 0,
+    "service": "pydetactl",
+    "tail": "All checks passed!\n"
+   },
+   {
+    "name": "pytest:pydetactl",
+    "scope": "package",
+    "status": "failed",
+    "exit_code": 1,
+    "service": "pydetactl",
+    "tail": ":test_deliberate_failure - assert (...\n1 failed, 37 passed, 6 warnings in 0.58s\n"
+   },
+   {
+    "name": "mypy",
+    "scope": "dependency_graph",
+    "status": "passed",
+    "exit_code": 0,
+    "service": "pydetactl",
+    "tail": "Success: no issues found in 1 source file\n"
+   },
+   {
+    "name": "semantic-review",
+    "scope": null,
+    "status": "passed",
+    "exit_code": 0,
+    "service": null,
+    "tail": ""
+   }
+  ]
+ }
+}

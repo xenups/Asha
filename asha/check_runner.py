@@ -60,6 +60,23 @@ CHECK_SCOPE = {
     'mypy': 'dependency_graph',
 }
 
+# A monorepo runs one pytest per suite: the repository's own suite keeps the
+# bare name, a service suite is named ``pytest:<service>`` so the gate can
+# require each of them separately (an evidence entry named just ``pytest``
+# could not tell a root pass from a service pass -- Phase 12 F4).
+PYTEST_PREFIX = 'pytest:'
+ROOT_LABEL = '.'
+
+
+def check_scope(name: str) -> str:
+    """Evidence `scope` for a check name, per-suite names included."""
+    base = name.split(':', 1)[0]
+    return CHECK_SCOPE[base]
+
+
+def is_pytest(name: str) -> bool:
+    return name == 'pytest' or name.startswith(PYTEST_PREFIX)
+
 # pytest's documented exit codes. Only 1 means the SUITE judged the change:
 # 2/3/4 mean the RUNNER never produced a verdict (interrupted, internal
 # error, usage/config error -- e.g. an unresolvable test path), 5 means
@@ -85,7 +102,28 @@ class CheckRunnerError(Exception):
     """A check could not be executed at all (fail-closed)."""
 
 
-def _commands(root: Path, names: list[str], changed_py: list[str]) -> list[tuple[str, list[str]]]:
+def _suite_target(root: Path, suite_root: Path | None) -> list[str]:
+    """Repo-relative pytest target for one service's own suite.
+
+    ``suite_root`` is the service root of the group being verified; the
+    repository root is the fallback. Empty when the service has no
+    ``tests/`` directory: a missing suite is recorded as a proven skip with
+    its service named, never silently replaced by another service's suite.
+    """
+    base = suite_root or root
+    if not (base / 'tests').is_dir():
+        return []
+    try:
+        rel = base.relative_to(root).as_posix()
+    except ValueError:
+        return []
+    return ['tests/'] if rel in ('', ROOT_LABEL) else [rel + '/tests/']
+
+
+def _commands(root: Path, names: list[str], changed_py: list[str],
+              suite_root: Path | None = None,
+              env: ServiceEnvironment | None = None
+              ) -> list[tuple[str, list[str]]]:
     commands: list[tuple[str, list[str]]] = []
     py = sys.executable
     for name in names:
@@ -97,7 +135,7 @@ def _commands(root: Path, names: list[str], changed_py: list[str]) -> list[tuple
             # identities must stay fail-closed UNKNOWN, never a pass).
             commands.append((name, [py, '-m', 'ruff', 'check',
                                     '--output-format=concise', *target]))
-        elif name == 'pytest':
+        elif is_pytest(name):
             # Test discovery: a `tests/` directory stays the configured
             # contract when present (unchanged behavior). Without it, pass
             # NO path so pytest resolves collection from the invocation
@@ -106,7 +144,13 @@ def _commands(root: Path, names: list[str], changed_py: list[str]) -> list[tuple
             # hardcoded 'tests/' made every root-level suite exit 4
             # (usage error: "file or directory not found") and surface as
             # EXECUTION_FAILED on code whose tests passed.
-            target = ['tests/'] if (root / 'tests').is_dir() else []
+            #
+            # `root` here is the SERVICE root of the group being run, not the
+            # repository root: a monorepo keeps `svc/tests` beside `svc/src`,
+            # and collecting only the repository suite let a change break
+            # `svc/tests` while the evidence said "pytest passed"
+            # (Phase 12 F4).
+            target = _exec_path_args(env, root, _suite_target(root, suite_root))
             commands.append((name, [py, '-m', 'pytest', *target, '-q']))
         elif name == 'mypy':
             # A .py launcher shadowed by a same-named package cannot
@@ -181,7 +225,7 @@ def _env_argv(env: ServiceEnvironment | None, name: str, argv: list[str]) -> lis
         return argv
     if not argv:
         return argv
-    if name == "pytest" and env.pytest_bin is not None:
+    if is_pytest(name) and env.pytest_bin is not None:
         # pytest_bin is the launcher itself: `-m pytest` is a marker
         # filter, not a module flag -- drop argv[1:3] or pytest would
         # select only tests marked "pytest" (silently exit 5).
@@ -352,6 +396,90 @@ def _outcome_tail(result: ExecutionOutcome) -> str:
     return _redact_env(joined[-TAIL_CHARS:])
 
 
+def _removed_suites(root: Path, affected: list[str]) -> list[str]:
+    """Services whose ``tests/`` the candidate touched but no longer has.
+
+    A deleted test file is filtered out of ``changed_py`` (it is not on
+    disk), so this walks the declared affected-file list instead: deleting
+    the suite you were required to satisfy must not read as "no suite here".
+    """
+    labels: set[str] = set()
+    for rel in affected:
+        if '/tests/' not in rel:
+            continue
+        label = rel.split('/tests/', 1)[0]
+        if label and not (root / label / 'tests').is_dir():
+            labels.add(label)
+    return sorted(labels)
+
+
+def _name_for(name: str, label: str) -> str:
+    """Evidence name for a check: pytest is qualified by its suite."""
+    if is_pytest(name) and label != ROOT_LABEL:
+        return PYTEST_PREFIX + label
+    return name
+
+
+def verification_plan(root: Path | str, resolved: dict) -> list[tuple[str, str]]:
+    """The (check name, service label) pairs this repository must produce.
+
+    ONE declaration of the verification scope, shared by the executor and by
+    the Ship Gate: the gate requires exactly these names, so a run that
+    silently omits a suite cannot authorize (Phase 12 F4). Nothing here reads
+    the executor's output -- the plan comes from the changed files and the
+    repository layout.
+
+    The repository's own `tests/` suite always runs when it exists: a
+    service change must not shadow it, and it must not be mistaken for the
+    service suite either.
+    """
+    root = Path(root).resolve()
+    names = list(resolved['checks'])
+    changed_py = [f for f in resolved.get('affected_files', [])
+                  if f.endswith(('.py', '.pyi')) and (root / f).is_file()]
+    groups = _service_groups(root, changed_py)
+    plan: list[tuple[str, str]] = []
+    if (root / 'tests').is_dir() and all(label != ROOT_LABEL
+                                         for label, _ in groups):
+        plan.append(('pytest', ROOT_LABEL))
+    for label, _ in groups:
+        for name in names:
+            plan.append((_name_for(name, label), label))
+    for label in _removed_suites(root, resolved.get('affected_files', [])):
+        plan.append((PYTEST_PREFIX + label, label))
+    return plan
+
+
+def required_check_names(root: Path | str, resolved: dict) -> list[str]:
+    """Ordered, de-duplicated check names the gate must find in evidence."""
+    seen: list[str] = []
+    for name, _ in verification_plan(root, resolved):
+        if name not in seen:
+            seen.append(name)
+    return seen
+
+
+def _suite_root_for(root: Path, rel: str) -> Path:
+    """The directory whose suite must judge ``rel``.
+
+    The environment resolver's marker walk decides the *service*; a directory
+    that merely carries a ``tests/`` suite is a verification scope even when it
+    has no project marker, because otherwise a change under ``svc/`` would be
+    judged by the repository suite alone -- the Phase 12 F4 false approval.
+    Nearest enclosing ``tests/`` wins; the repository root is the fallback.
+    """
+    resolver = EnvironmentResolver()
+    service_root = resolver.service_root_for(root, root / rel)
+    if service_root != root:
+        return service_root
+    parent = (root / rel).parent
+    while parent != root and root in parent.parents:
+        if (parent / 'tests').is_dir():
+            return parent
+        parent = parent.parent
+    return root
+
+
 def _service_groups(root: Path,
                     changed_py: list[str]) -> list[tuple[str, list[str]]]:
     """Changed paths grouped by owning service root, deterministically.
@@ -362,10 +490,9 @@ def _service_groups(root: Path,
     """
     if not changed_py:
         return [('.', [])]
-    resolver = EnvironmentResolver()
     groups: dict[str, list[str]] = {}
     for rel in changed_py:
-        service_root = resolver.service_root_for(root, root / rel)
+        service_root = _suite_root_for(root, rel)
         try:
             label = service_root.relative_to(root).as_posix() or '.'
         except ValueError:
@@ -381,8 +508,8 @@ def _blocked_group(reason: str, names: list[str], label: str) -> list[dict]:
     not a test failure, and never a silent omission.
     """
     return [{
-        'name': name,
-        'scope': CHECK_SCOPE[name],
+        'name': _name_for(name, label),
+        'scope': check_scope(name),
         'status': 'failed',
         'launched': False,
         'exit_code': None,
@@ -418,11 +545,13 @@ def _run_group(root: Path, names: list[str], changed_py: list[str],
         cwd, proc_env = _env_cwd_env(env, root, env_overrides)
     except (CheckRunnerError, OSError) as exc:
         return _blocked_group(f'{type(exc).__name__}: {exc}', names, label)
+    suite_root = root if label == ROOT_LABEL else root / label
     results: list[dict] = []
-    for name, argv in _commands(root, names, changed_py):
+    for name, argv in _commands(root, names, changed_py,
+                                suite_root=suite_root, env=env):
         entry: dict = {
-            'name': name,
-            'scope': CHECK_SCOPE[name],
+            'name': _name_for(name, label),
+            'scope': check_scope(name),
             'status': 'passed',
             'launched': True,
             'exit_code': 0,
@@ -431,7 +560,8 @@ def _run_group(root: Path, names: list[str], changed_py: list[str],
         if not argv:
             entry['status'] = 'skipped'
             entry['launched'] = False
-            entry['note'] = 'no applicable target'
+            entry['note'] = (f'no tests/ directory in service {label}'
+                             if is_pytest(name) else 'no applicable target')
             results.append(entry)
             continue
         argv = _env_argv(env, name, argv)
@@ -463,7 +593,7 @@ def _run_group(root: Path, names: list[str], changed_py: list[str],
             results.append(entry)
             continue
         combined = (result.stdout or '') + (result.stderr or '')
-        missing = _tool_unavailable(name, combined)
+        missing = _tool_unavailable(name.split(':', 1)[0], combined)
         if missing:
             # the tool was never installed: an environment gap, not a
             # failure of the code under test, and never an unparseable
@@ -474,7 +604,7 @@ def _run_group(root: Path, names: list[str], changed_py: list[str],
             entry['note'] = 'tool unavailable: ' + missing
         else:
             entry['status'] = 'passed' if result.exit_code == 0 else 'failed'
-            if name == 'pytest' and result.exit_code != 0:
+            if is_pytest(name) and result.exit_code != 0:
                 entry['note'] = _pytest_exit_note(int(result.exit_code or 0))
         entry['output_tail'] = redact_secrets(combined[-TAIL_CHARS:])
         entry['stdout_sha256'] = validation_digest(result.stdout or '')
@@ -503,10 +633,26 @@ def run(root: Path | str, resolved: dict,
     names = resolved['checks']
     changed_py = [f for f in resolved['affected_files']
                   if f.endswith(('.py', '.pyi')) and (root / f).is_file()]
+    groups = [(label, paths, False)
+              for label, paths in _service_groups(root, changed_py)]
+    if (root / 'tests').is_dir() and all(only is False and label != ROOT_LABEL
+                                         for label, _, only in groups):
+        # The repository suite runs on its own, in the repository root's
+        # environment: never merged into a service result, never skipped
+        # because the change happened to live under a service. Marked
+        # synthetic so it runs pytest only -- the service groups still own
+        # the full matrix, and a change set with no files keeps its own
+        # root group with every check.
+        groups.insert(0, (ROOT_LABEL, [], True))
     results: list[dict] = []
-    for label, paths in _service_groups(root, changed_py):
-        results.extend(_run_group(root, names, paths, label, timeout_s,
+    for label, paths, synthetic in groups:
+        group_names = ['pytest'] if synthetic else names
+        results.extend(_run_group(root, group_names, paths, label, timeout_s,
                                   deps_root, deadline, env_overrides))
+    for label in _removed_suites(root, resolved['affected_files']):
+        results.extend(_blocked_group(
+            f'service suite {label}/tests/ is missing from the candidate tree',
+            ['pytest'], label))
     return results
 
 

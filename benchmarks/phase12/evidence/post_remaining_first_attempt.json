@@ -1,0 +1,56 @@
+{"env_poisoned": {"state": "BLOCKED", "decision": "BLOCKED", "gate_state": "EXECUTION_FAILED", "authorized_to_ship": false}}
+{"collection_error": {"state": "BLOCKED", "decision": "BLOCKED", "gate_state": "EXECUTION_FAILED", "authorized_to_ship": false}}
+{"untracked": {"state": "BLOCKED", "decision": "BLOCKED", "gate_state": "EXECUTION_FAILED", "authorized_to_ship": false}}
+{
+ "asha_home": "/home/amir/asha-f4p",
+ "state": "/home/amir/bench/p12/state_post",
+ "server": {
+  "stdout": "{\n \"identity\": {\n  \"pid\": 2592345,\n  \"cwd\": \"/home/amir/asha-f4p\",\n  \"python\": \"/home/amir/bench/p12/ashap12/bin/python\",\n  \"argv\": [\n   \"/home/amir/bench/p12/ashap12/bin/python\",\n   \"-m\",\n   \"asha.mcp_server\"\n  ]\n },\n \"initialize\": {\n  \"protocolVersion\": \"2025-06-18\",\n  \"capabilities\": {\n   \"tools\": {}\n  },\n  \"serverInfo\": {\n   \"name\": \"asha-orchestrator\",\n   \"version\": \"0.4.2\"\n  }\n },\n \"tools\": [\n  \"asha\",\n  \"asha_plan_dag\",\n  \"asha_run_spec\",\n  \"asha_status\",\n  \"asha_get_surgical_context\",\n  \"asha_dispatch_task\",\n  \"asha_verify_tip\",\n  \"asha_verify_stack\",\n  \"asha_review\",\n  \"asha_review_context\",\n  \"asha_review_submit_stage\",\n  \"asha_review_next_stage\",\n  \"asha_review_finalize\",\n  \"asha_review_status\"\n ]\n}",
+  "stderr": ""
+ },
+ "env_poisoned": {
+  "scenario": "env_poisoned",
+  "changed": "pydetactl/src/asha_health_probe.py\npydetactl/tests/test_plan.py",
+  "head": "263baf98486dc7e740493512d09cf351734d19de",
+  "run_id": "rv-20261101T131123Z-75d09d68",
+  "state": "BLOCKED",
+  "decision": "BLOCKED",
+  "gate_state": "EXECUTION_FAILED",
+  "authorized_to_ship": false,
+  "reason": "ship gate refused: EXECUTION_FAILED checks failed: mypy, pytest:pydetactl, ruff",
+  "snapshot_id": "2b39b8c9ad93a185f21014ab1e9c9586256bacf42812e56ddd7bb661694f5a14",
+  "checks": null,
+  "pytest_evidence": [],
+  "tree": "f47112c22331e7f0f1057c8a83bf6ce9d6c1dac1"
+ },
+ "collection_error": {
+  "scenario": "collection_error",
+  "changed": "pydetactl/tests/test_broken.py\npydetactl/tests/test_plan.py",
+  "head": "7e1ede1727a035fbb0b7cce4e7f26bd5c2fd572c",
+  "run_id": "rv-20261101T131129Z-9dd7dae2",
+  "state": "BLOCKED",
+  "decision": "BLOCKED",
+  "gate_state": "EXECUTION_FAILED",
+  "authorized_to_ship": false,
+  "reason": "ship gate refused: EXECUTION_FAILED checks failed: mypy, pytest:pydetactl, ruff",
+  "snapshot_id": "9691489408505d59837cf1d36dc65582ee57f6564d323a1e6163999e669e936a",
+  "checks": null,
+  "pytest_evidence": [],
+  "tree": "05719004e467470105c851faaebfa3698b34b29d"
+ },
+ "untracked": {
+  "scenario": "untracked",
+  "changed": "pydetactl/notes.txt\npydetactl/tests/test_plan.py",
+  "head": "2d02b6d0ff1af6e5c54cebcba48eb45bfa4b7eb3",
+  "run_id": "rv-20261101T131139Z-1fe788e9",
+  "state": "BLOCKED",
+  "decision": "BLOCKED",
+  "gate_state": "EXECUTION_FAILED",
+  "authorized_to_ship": false,
+  "reason": "ship gate refused: EXECUTION_FAILED checks failed: ruff",
+  "snapshot_id": "3bbc15f2ce71d24327e35f2cb061fd11ed7c94e86800a20fe4ff6f637a0cad99",
+  "checks": null,
+  "pytest_evidence": [],
+  "tree": "a3a0cc02a310485bdf311ba6965aa561305dd4ce"
+ }
+}
