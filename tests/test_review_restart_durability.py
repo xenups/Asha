@@ -246,6 +246,27 @@ def test_a_corrupted_run_artifact_fails_closed_on_restart(
     assert (run_dir / "run.json").read_text(encoding="utf-8").endswith("COMPLET")
 
 
+def test_a_run_artifact_is_not_accepted_under_another_run_id(
+        restart_world: dict[str, Any], tmp_path: Path) -> None:
+    """Cross-run substitution: rename the directory, keep the sealed record."""
+    state = tmp_path / "renamed-state"
+    shutil.copytree(restart_world["state"], state)
+    run_dir = next(state.glob(f"*/reviews/{restart_world['run_id']}"))
+    renamed = run_dir.with_name("rv-20990101T000000Z-deadbeef")
+    run_dir.rename(renamed)
+
+    server = Server(state)
+    try:
+        error = server.tool_error(
+            "asha_review_status", root=str(restart_world["repo"].root),
+            run_id=renamed.name)
+    finally:
+        server.stop()
+
+    assert "declares run" in error
+    assert restart_world["run_id"] in error
+
+
 def test_a_missing_review_artifact_does_not_reconstruct_approval(
         restart_world: dict[str, Any], tmp_path: Path) -> None:
     state = tmp_path / "missing-state"

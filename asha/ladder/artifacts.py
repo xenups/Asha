@@ -159,6 +159,12 @@ def load_run(root: Path, run_id: str) -> ReviewRun:
         raise ArtifactError(
             f'review artifact {path} is incomplete: missing '
             + ', '.join(sorted(missing)))
+    if str(document.get('run_id')) != run_id:
+        # The directory is a namespace, not identity: a run record copied
+        # under another run id must not be read as that run.
+        raise ArtifactError(
+            f'review artifact {path} declares run '
+            f'{document.get("run_id")!r}, expected {run_id!r}')
     if document.get('artifact_schema') != ARTIFACT_SCHEMA:
         raise ArtifactError(
             f'review artifact {path} has schema '
