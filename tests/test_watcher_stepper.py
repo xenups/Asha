@@ -203,7 +203,7 @@ def test_watch_stepper_current_vs_last_sealed(tmp_path: Path) -> None:
 
 # The commit the frozen trio is measured against: every edit made after it
 # must be approved and the anchor advanced in the same review.
-_GOVERNANCE_ANCHOR = '9a815b0'  # Phase 9: worker-evidence task binding
+_GOVERNANCE_ANCHOR = '9ac7970'  # Phase 12: per-service verification suites
 
 
 def test_governance_trio_frozen(tmp_path: Path) -> None:
@@ -254,6 +254,11 @@ def test_governance_trio_frozen(tmp_path: Path) -> None:
     # completions always publish ONE generation and a running sibling still
     # never blocks a publication. scoping.py and check_runner.py untouched;
     # the trio guard and the anchor-names-a-trio-commit test stay in force.
+    # Phase 12 (F4): the approved monorepo-verification change edits
+    # check_runner.py -- per-suite pytest targets (pytest / pytest:<service>),
+    # layout-first suite discovery, the verification plan the Ship Gate now
+    # requires -- so the anchor advances to that commit alone. scoping.py and
+    # scheduler.py are untouched.
     out = sp.run(['git', 'diff', f'{_GOVERNANCE_ANCHOR}..HEAD', '--',
                   'asha/scoping.py', 'asha/check_runner.py',
                   'asha/scheduler.py'],
