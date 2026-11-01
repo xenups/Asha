@@ -1,0 +1,233 @@
+diff --git a/pydetactl/src/services/s3_client.py b/pydetactl/src/services/s3_client.py
+index 735e63f2e..392f89fd6 100644
+--- a/pydetactl/src/services/s3_client.py
++++ b/pydetactl/src/services/s3_client.py
+@@ -13,6 +13,7 @@ import yaml
+ from minio import Minio
+ 
+ from settings.config import settings
++from utils.s3_url import parse_s3_url
+ 
+ 
+ class S3Client:
+@@ -56,9 +57,7 @@ class S3Client:
+         """
+         Parse S3 URL to extract bucket and key.
+ 
+-        Supports formats:
+-        - s3://bucket/key/path
+-        - http(s)://endpoint/bucket/key/path
++        Grammar lives in utils.s3_url.parse_s3_url (s3:// and HTTP(S) forms).
+ 
+         Args:
+             url: S3 URL to parse
+@@ -69,35 +68,10 @@ class S3Client:
+         Raises:
+             ValueError: If URL format is invalid
+         """
+-        if url.startswith("s3://"):
+-            # Format: s3://bucket/key
+-            parts = url[5:].split("/", 1)
+-            if len(parts) != 2:
+-                raise ValueError(f"Invalid S3 URL format: {url}")
+-            return parts[0], parts[1]
+-
+-        # Handle HTTP(S) or scheme-less URLs
+-        # Remove protocol if present
+-        if url.startswith("https://"):
+-            without_protocol = url[8:]
+-        elif url.startswith("http://"):
+-            without_protocol = url[7:]
+-        else:
+-            without_protocol = url
+-
+-        # Format: endpoint/bucket/key
+-        parts = without_protocol.split("/", 1)
+-        if len(parts) != 2:
+-            # If no bucket/key separator, it's invalid for artifact fetch
+-            raise ValueError(f"Invalid S3 URL format (missing bucket/key): {url}")
+-
+-        # Now split bucket and key from the rest
+-        # parts[0] is endpoint, parts[1] is bucket/key/...
+-        bucket_key = parts[1].split("/", 1)
+-        if len(bucket_key) != 2:
+-            raise ValueError(f"Invalid S3 URL format (missing key): {url}")
+-
+-        return bucket_key[0], bucket_key[1]
++        parsed = parse_s3_url(url)
++        if parsed is None:
++            raise ValueError(f"Invalid S3 URL format: {url}")
++        return parsed
+ 
+     def _parse_content(self, content: str) -> Any:
+         """
+diff --git a/pydetactl/src/utils/s3_resolver.py b/pydetactl/src/utils/s3_resolver.py
+index 1fd6c9c4d..6e15c1e26 100644
+--- a/pydetactl/src/utils/s3_resolver.py
++++ b/pydetactl/src/utils/s3_resolver.py
+@@ -5,13 +5,10 @@ Follows the Single Responsibility Principle by focusing solely on
+ coordinating URL detection and artifact fetching.
+ """
+ 
+-import re
+ from typing import Any, Dict, List, Set
+ 
+ from services.s3_client import S3Client
+-
+-# Pattern for detecting s3:// URLs
+-_S3_URL_PATTERN = re.compile(r"s3://[^\s]+")
++from utils.s3_url import find_s3_urls
+ 
+ 
+ def detect_s3_urls(data: Any) -> List[str]:
+@@ -39,13 +36,8 @@ def detect_s3_urls(data: Any) -> List[str]:
+         elif isinstance(current, list):
+             stack.extend(current)
+         elif isinstance(current, str):
+-            # Check for s3:// URLs
+-            matches = _S3_URL_PATTERN.findall(current)
+-            urls.update(matches)
+-
+-            # Check if entire string is an HTTP(S) or scheme-less S3 URL
+-            if ("/s3/" in current or ".s3." in current) and "/" in current:
+-                urls.add(current)
++            # Only URLs the shared grammar accepts, so every one is fetchable.
++            urls.update(find_s3_urls(current))
+     return list(urls)
+ 
+ 
+diff --git a/pydetactl/src/utils/s3_url.py b/pydetactl/src/utils/s3_url.py
+new file mode 100644
+index 000000000..00ca0a7f7
+--- /dev/null
++++ b/pydetactl/src/utils/s3_url.py
+@@ -0,0 +1,46 @@
++"""S3 URL recognition and parsing — the single source of truth.
++
++Both discovery (utils.s3_resolver) and fetching (services.s3_client) must
++agree on what counts as an S3 URL, so every scheme decision lives here.
++"""
++
++import re
++from typing import List, Optional, Tuple
++
++_S3_URI_RE = re.compile(r"s3://[^\s\"'<>]+")
++_TOKEN_RE = re.compile(r"[^\s\"'<>]+")
++
++
++def parse_s3_url(url: str) -> Optional[Tuple[str, str]]:
++    """Return (bucket, key) when url is an S3 URL, else None.
++
++    Accepted forms:
++    - s3://bucket/key
++    - http(s)://endpoint/bucket/key
++    - endpoint/bucket/key (scheme-less)
++
++    Both bucket and key must be non-empty.
++    """
++    if url.startswith("s3://"):
++        bucket, _, key = url[5:].partition("/")
++    else:
++        for scheme in ("https://", "http://"):
++            if url.startswith(scheme):
++                url = url[len(scheme) :]
++                break
++        _endpoint, _, path = url.partition("/")
++        bucket, _, key = path.partition("/")
++    return (bucket, key) if bucket and key else None
++
++
++def find_s3_urls(text: str) -> List[str]:
++    """Return the S3 URLs embedded in text; unparseable candidates dropped."""
++    if not text:
++        return []
++    urls = [u for u in _S3_URI_RE.findall(text) if parse_s3_url(u)]
++    urls += [
++        t
++        for t in _TOKEN_RE.findall(text)
++        if ("/s3/" in t or ".s3." in t) and parse_s3_url(t)
++    ]
++    return urls
+diff --git a/pydetactl/tests/test_s3_url.py b/pydetactl/tests/test_s3_url.py
+new file mode 100644
+index 000000000..012178f85
+--- /dev/null
++++ b/pydetactl/tests/test_s3_url.py
+@@ -0,0 +1,77 @@
++"""Tests for the shared S3 URL grammar and its resolver/client round trip."""
++
++import pytest
++
++from services.s3_client import S3Client
++from utils.s3_resolver import detect_s3_urls
++from utils.s3_url import find_s3_urls, parse_s3_url
++
++# __new__ skips __init__: parsing needs no settings/Minio connection.
++PARSER = S3Client.__new__(S3Client)
++
++
++@pytest.mark.parametrize(
++    "url, expected",
++    [
++        ("s3://bucket/key/file.yaml", ("bucket", "key/file.yaml")),
++        ("https://minio.local:9000/bucket/key", ("bucket", "key")),
++        ("http://minio.local:9000/bucket/key/file", ("bucket", "key/file")),
++        ("minio.local:9000/bucket/key", ("bucket", "key")),
++        ("s3://bucket", None),
++        ("s3://bucket/", None),
++        ("https://minio.local", None),
++        ("https://bucket.s3.amazonaws.com/key", None),
++        ("", None),
++    ],
++)
++def test_parse_s3_url(url, expected):
++    assert parse_s3_url(url) == expected
++
++
++def test_find_s3_urls_extracts_only_parseable_candidates():
++    text = (
++        "made s3://bucket/a.yaml and https://minio.s3.local:9000/bucket/b.yaml "
++        "plus https://bucket.s3.amazonaws.com/not-parseable"
++    )
++    assert set(find_s3_urls(text)) == {
++        "s3://bucket/a.yaml",
++        "https://minio.s3.local:9000/bucket/b.yaml",
++    }
++
++
++def test_find_s3_urls_ignores_plain_http_and_empty_input():
++    assert find_s3_urls("") == []
++    assert find_s3_urls("http://example.com/file.yaml") == []
++    assert find_s3_urls("just a string") == []
++
++
++CORPUS = [
++    "s3://bucket/file.yaml",
++    "s3://bucket/nested/dir/file.json",
++    "https://minio.s3.local:9000/bucket/file.yaml",
++    "http://minio.s3.local:9000/bucket/dir/file.yaml",
++    "see s3://bucket/a.yaml and http://minio.s3.local:9000/bucket/b.yaml",
++    {
++        "results": [
++            "s3://bucket/x.yaml",
++            {"url": "https://minio.s3.local:9000/b2/y.json"},
++        ]
++    },
++    "http://example.com/file.yaml",
++    "https://bucket.s3.amazonaws.com/key",
++    "s3://bucket",
++    "no urls here",
++    {"n": None, "x": 1},
++]
++
++
++@pytest.mark.parametrize("payload", CORPUS)
++def test_detected_urls_are_always_parseable_by_the_client(payload):
++    for url in detect_s3_urls(payload):
++        bucket, key = PARSER._parse_s3_url(url)
++        assert bucket and key
++        assert parse_s3_url(url) == (bucket, key)
++
++
++def test_unparseable_virtual_hosted_url_is_not_detected():
++    assert detect_s3_urls("https://bucket.s3.amazonaws.com/key") == []

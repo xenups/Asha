@@ -1,0 +1,96 @@
+{
+  "benchmark_id": "p10-asha-vs-baseline-2026-11-01",
+  "frozen_at": "2026-11-01T02:00:00Z",
+  "frozen_before_any_execution": true,
+  "randomization": {"seed": 20261101, "method": "python random.Random(seed).shuffle over per-task condition order"},
+  "target_project": {
+    "repository": "xenups/detailist (local checkout /home/amir/src/detailist)",
+    "component": "pydetactl",
+    "base_commit": "899ab1c3692067c4f13c28365cc19ce8183624f1",
+    "why_suitable": "real user-maintained monorepo component; 37 hermetic pytest tests that run in <1s; poetry-pinned deps; no network or database needed"
+  },
+  "asha_baseline": {
+    "repository": "xenups/Asha",
+    "main_sha": "87ae8484e42654579301930d3de3da63c4804faf",
+    "pr_18_merge": "87ae8484e42654579301930d3de3da63c4804faf"
+  },
+  "budgets": {
+    "wall_clock_minutes_per_execution": 25,
+    "max_shell_commands_per_execution": 60,
+    "token_budget": "not enforceable by the harness; recorded as unknown"
+  },
+  "tasks": [
+    {
+      "task_id": "T1",
+      "category": "bug_fix",
+      "file_scope": ["pydetactl/src/utils/s3_resolver.py"],
+      "description": "detect_s3_urls returns false positives and truncated-free captures: any string containing '/s3/' or '.s3.' is returned whole (sentence, not URL), and the s3:// regex captures trailing prose punctuation.",
+      "acceptance": [
+        "detect_s3_urls({'m': 'fetched https://host/a/s3/manifest.json ok'}) == ['https://host/a/s3/manifest.json']",
+        "detect_s3_urls('see s3://b/k.txt).') == ['s3://b/k.txt']",
+        "all pre-existing pydetactl tests pass unchanged",
+        "new regression tests cover both cases"
+      ],
+      "validation_commands": ["cd pydetactl && python -m pytest tests -q"],
+      "expected_areas": ["pydetactl/src/utils/s3_resolver.py", "pydetactl/tests/test_s3_resolver.py"]
+    },
+    {
+      "task_id": "T2",
+      "category": "bug_fix",
+      "file_scope": ["pydetactl/src/utils/s3_resolver.py"],
+      "description": "resolve_s3_artifacts prints a fetch-failure warning to stdout. pydetactl writes its machine-readable result to stdout, so one unreachable artifact corrupts piped output.",
+      "acceptance": [
+        "no bytes written to stdout on the fetch-failure path (capsys/capfd observable)",
+        "a failed artifact remains non-fatal: other artifacts are still returned",
+        "the failure is still reported through the existing logger (core.logger) on stderr",
+        "all pre-existing pydetactl tests pass unchanged",
+        "new regression test covers stdout cleanliness and non-fatal behaviour"
+      ],
+      "validation_commands": ["cd pydetactl && python -m pytest tests -q"],
+      "expected_areas": ["pydetactl/src/utils/s3_resolver.py", "pydetactl/tests/test_s3_resolver.py"]
+    },
+    {
+      "task_id": "T3",
+      "category": "maintenance_refactor",
+      "file_scope": [
+        "pydetactl/src/utils/s3_resolver.py",
+        "pydetactl/src/services/s3_client.py"
+      ],
+      "description": "S3 URL classification is duplicated and inconsistent: the resolver decides what is an S3 URL while S3Client._parse_s3_url independently parses it. Extract one shared pure helper and make the resolver return only URLs the client can parse.",
+      "acceptance": [
+        "a single shared pure helper (module-level function) owns s3:// and HTTP(s) S3 URL recognition/parsing; neither file re-implements the scheme logic",
+        "S3Client._parse_s3_url keeps its existing contract for every input already covered by the test suite",
+        "property: for every URL detect_s3_urls returns against the fixture corpus, S3Client._parse_s3_url resolves a non-empty (bucket, key)",
+        "all pre-existing pydetactl tests pass unchanged",
+        "new unit tests cover the helper and the resolver/client round-trip property"
+      ],
+      "validation_commands": ["cd pydetactl && python -m pytest tests -q"],
+      "expected_areas": [
+        "pydetactl/src/utils/s3_resolver.py",
+        "pydetactl/src/services/s3_client.py",
+        "pydetactl/tests/test_s3_resolver.py"
+      ]
+    }
+  ],
+  "conditions": {
+    "A_with_asha": "host LLM edits code in its worktree and drives the real Asha MCP server (tools/list, asha_plan_dag or asha_run_spec/review lifecycle, asha_verify_tip, asha_review + submit stages + finalize) from the verified Asha main checkout with an isolated ASHA_STATE_DIR",
+    "B_without_asha": "host LLM edits code in its worktree, runs the tests itself, reviews its own diff; no Asha MCP server, tools, CLI, artifacts, journal or Ship Gate"
+  },
+  "measurement_rules": {
+    "start": "wall clock at first tool call of the execution",
+    "end": "wall clock at the moment the agent declares completion",
+    "tokens": "not exposed by the delegation harness; recorded as 'Not measured'",
+    "cost": "no billing data for delegated subagent runs; recorded as 'Not measured'",
+    "exit_codes": "captured verbatim from the final independent validation, which is re-run by the evaluator after the agent stops",
+    "failed_runs": "retained verbatim; a rerun is allowed only for an environmental failure defined in this protocol and both runs are kept"
+  },
+  "exclusion_rules": {
+    "environmental": "the worktree or its virtualenv is unusable (missing interpreter, unreadable repo) and no code was produced",
+    "not_excluded": "failures caused by the submitted code, refusals, gate blocks, timeouts of the agent itself"
+  },
+  "rubric": [
+    "functional correctness", "regression safety", "maintainability",
+    "consistency with existing architecture", "error handling", "scope discipline",
+    "test quality", "type safety and static-analysis quality", "documentation accuracy"
+  ]
+}
