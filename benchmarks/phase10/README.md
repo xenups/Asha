@@ -139,7 +139,44 @@ id→condition map was withheld from the reviewer. A separate evaluator applied 
 tested each patch in a throwaway copy of the repository and rated nine dimensions
 without knowing which process produced which patch.
 
-<!-- BLIND_RESULTS -->
+### Scores (0-3 per dimension; ids unmasked only after scoring)
+
+| id | task / condition | funct | regress | maintain | arch | err-handling | scope | tests | static | docs | total |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| W3 | T1 baseline | 2 | 1 | 2 | 3 | 2 | 3 | 2 | 3 | 2 | 20 |
+| E2 | T1 asha | 3 | 2 | 3 | 3 | 2 | 3 | 2 | 3 | 3 | **25** |
+| C5 | T2 baseline | 1 | 2 | 3 | 3 | 2 | 2 | 1 | 3 | 1 | 18 |
+| N1 | T2 asha | 3 | 2 | 2 | 3 | 3 | 2 | 2 | 2 | 3 | **22** |
+| B9 | T3 baseline | 2 | 3 | 2 | 2 | 2 | 3 | 3 | 3 | 2 | 22 |
+| F7 | T3 asha | 3 | 3 | 3 | 3 | 2 | 3 | 3 | 3 | 3 | **26** |
+
+Reviewer's per-task verdicts: **E2 > W3, N1 > C5, F7 > B9** — the Asha
+implementation won all three pairs on code quality alone. All six patches applied
+cleanly and their suites passed in the reviewer's own throwaway copies
+(`39/39`, `38/38`, `55/60`).
+
+Findings worth carrying into the release decision (full record:
+`evidence/blind_review.md`):
+
+* **C5 (baseline, T2) fails its own acceptance in the real configuration** — with
+  `OutputManager(PRETTY)` built at import the warning still reached stdout (138
+  bytes measured), and in JSON/TXT mode it vanished entirely; its test patches the
+  logger, so it cannot catch the defect. A *baseline* failure, found blind.
+* **N1 (asha, T2) fixes the right layer** and was verified byte-level in all three
+  output modes, but its regression test is order-dependent
+  (`pytest tests/test_s3_resolver.py` alone fails, because loguru binds the sink to
+  the `sys.stderr` object captured at `logger.add` time), and it ships one
+  `black --check` violation plus a hardcoded level `30`.
+* **W3 (baseline, T1) silently loses URLs** the base commit emitted: markdown
+  links, parenthesised and quoted URLs return nothing.
+* **F7 (asha, T3)** leaves no scheme strings in either consumer; residual issues are
+  duplicate hits and inherited trailing punctuation.
+* **B9 (baseline, T3) half-satisfies its own AC1** — recognition stays duplicated
+  while the docstring claims single ownership.
+
+Reviewer's declared limits: no mypy available (static typing scored by reading), no
+fuzzing, and the T2/T3 verdicts rest on probes the reviewer wrote rather than on
+each patch's own tests.
 
 ## 8. Safety and governance — controlled negative tests
 
@@ -258,6 +295,9 @@ Why not `PASS`:
 
 What the experiment does show in Asha's favour, honestly:
 
+* **The blind reviewer preferred the Asha implementation in all three pairs**
+  (25 vs 20, 22 vs 18, 26 vs 22) — better architecture, better tests, better docs —
+  without knowing which patch came from which process.
 * Review depth is real and produced actionable findings (a MEDIUM test-coverage gap in
   T1, contract-narrowing notes in T3) that the baseline condition never surfaced.
 * Scope discipline and evidence identity held in every controlled test that did not
