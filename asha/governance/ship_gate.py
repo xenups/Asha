@@ -123,7 +123,7 @@ def _run_reviewer(reviewer: ReviewerFn | None, root: Path,
     return artifact
 
 
-def _gate_evidence(snapshot_id: str, resolved: dict,
+def _gate_evidence(root: Path, snapshot_id: str, resolved: dict,
                    checks: list[dict],
                    reviewer_artifact: dict | None) -> gate_states.GateEvidence:
     """Adapt the resolved inventory + executed results to the contract.
@@ -131,8 +131,14 @@ def _gate_evidence(snapshot_id: str, resolved: dict,
     Findings come exclusively from the reviewer artifact; under phase2
     both the artifact identity and the finding schema are validated
     inside validate_evidence (missing/wrong artifact -> INVALID).
+
+    The inventory is the repository's verification PLAN (checker names plus
+    one pytest entry per suite), not the executor's output: a suite that was
+    planned but produced no evidence is `missing` at the contract boundary and
+    denies (Phase 12 F4), and evidence for a suite nobody planned is
+    `unexpected` and denies as well.
     """
-    required = list(resolved['checks'])
+    required = check_runner.required_check_names(root, resolved)
     if POLICY_VERSION == 'phase2' and 'semantic-review' not in required:
         # The review is part of the mandatory inventory under phase2.
         required.append('semantic-review')
@@ -237,7 +243,7 @@ def gate_ship(root: Path, *, no_execute: bool = False,
     # mismatch means the checks did not consume the audited state.
     current_id = audit_snapshot.snapshot_id_of(root)
     try:
-        gate_evidence = _gate_evidence(audited_id, resolved, checks,
+        gate_evidence = _gate_evidence(root, audited_id, resolved, checks,
                                        reviewer_artifact)
         decision = gate_states.evaluate(
             gate_evidence, authorized_snapshot_id=current_id)
