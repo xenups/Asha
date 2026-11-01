@@ -1,0 +1,37 @@
+{
+ "server": {
+  "python": "/home/amir/src/Asha/.venv/bin/python",
+  "asha_home": "/home/amir/asha-phase11",
+  "info_exit": 0,
+  "info": "{\n \"identity\": {\n  \"pid\": 2280431,\n  \"cwd\": \"/home/amir/asha-phase11\",\n  \"python\": \"/home/amir/src/Asha/.venv/bin/python\",\n  \"argv\": [\n   \"/home/amir/src/Asha/.venv/bin/python\",\n   \"-m\",\n   \"asha.mcp_server\"\n  ]\n },\n \"initialize\": {\n  \"protocolVersion\": \"2025-06-18\",\n  \"capabilities\": {\n   \"tools\": {}\n  },\n  \"serverInfo\": {\n   \"name\": \"asha-orchestrator\",\n   \"version\": \"0.4.2\"\n  }\n },\n \"tools\": [\n",
+  "stderr": "",
+  "code_head": "bdbcc42cd80dbf1b154b0c767bb7ab81a46e89c0"
+ },
+ "healthy_change": {
+  "run_id": "rv-20261101T110935Z-8f652ff3",
+  "head": "50747d13f2a3ea8f4b09d02ffea879c1d1b0c09b",
+  "state": "FINALIZED",
+  "decision": "APPROVED",
+  "gate_state": "COMPLETED_CLEAN",
+  "authorized_to_ship": true,
+  "snapshot_id": "a9b3ab9e8b55c6cc3a336460e507e1da2eee5e9fc78f0682bc48c930e06bdca6"
+ },
+ "breaking_change": {
+  "run_id": "rv-20261101T110941Z-e75c581d",
+  "head": "8dc6f9605bc4a21bd976357a0bec805ad3af4448",
+  "state": "BLOCKED",
+  "decision": "BLOCKED",
+  "gate_state": "EXECUTION_FAILED",
+  "authorized_to_ship": false,
+  "reason": "ship gate refused: EXECUTION_FAILED checks failed: ruff"
+ },
+ "tampered_evidence": {
+  "run_id": "rv-20261101T110950Z-6e557ee2",
+  "artifact": "None",
+  "state": "FINALIZED",
+  "decision": "APPROVED",
+  "gate_state": "COMPLETED_CLEAN",
+  "authorized_to_ship": true,
+  "reason": "all 4 mandatory stages validated; no CRITICAL/HIGH finding; independence UNKNOWN meets UNKNOWN"
+ }
+}

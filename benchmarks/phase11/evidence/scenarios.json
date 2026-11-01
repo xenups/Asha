@@ -1,0 +1,230 @@
+{
+ "A": {
+  "scenario": "A sha-pinned, branch moved, identical tree",
+  "reviewed": {
+   "head_ref": "6a28d802f8be6652087fe0bd3197259efeaebec1",
+   "commit": "6a28d802f8be6652087fe0bd3197259efeaebec1",
+   "tree": "ba9e553681853a0793929e966c6572eddcca58fe"
+  },
+  "review_stages": [
+   "VALIDATED",
+   "VALIDATED",
+   "VALIDATED"
+  ],
+  "candidate": {
+   "head": "8ad952d391cdbea859eceefaf1070a0c8bafd535",
+   "head_tree": "ba9e553681853a0793929e966c6572eddcca58fe",
+   "status": []
+  },
+  "review": {
+   "state": "FINALIZED",
+   "decision": "APPROVED",
+   "approved": true,
+   "blocking_reason": "all 4 mandatory stages validated; no CRITICAL/HIGH finding; independence UNKNOWN meets UNKNOWN",
+   "gate_state": "COMPLETED_CLEAN",
+   "authorized_to_ship": true,
+   "snapshot_id": "16e7cb82d6b2e6e0b14f08772c6974d9d4c8518e61833d2a2019c6480f746283"
+  },
+  "expected": "FINALIZED/APPROVED: trees identical, no false stale"
+ },
+ "B": {
+  "scenario": "B sha-pinned, candidate tree changed",
+  "reviewed": {
+   "head_ref": "fc47315f8c50a371dade9ad98b88773d2646abea",
+   "commit": "fc47315f8c50a371dade9ad98b88773d2646abea",
+   "tree": "ba9e553681853a0793929e966c6572eddcca58fe"
+  },
+  "review_stages": [
+   "VALIDATED",
+   "VALIDATED",
+   "VALIDATED"
+  ],
+  "candidate": {
+   "head": "18061d3575a7b1041525828b5276afb474c51c3f",
+   "head_tree": "032d03bda16581d8100e09fda4db6cde77a2512d",
+   "status": []
+  },
+  "review": {
+   "state": "STALE",
+   "decision": "STALE",
+   "approved": false,
+   "blocking_reason": "checked-out tree is not the reviewed tree: ba9e55368185 -> 032d03bda165; the gate audits the working tree, so the reviewed content must be what is checked out",
+   "gate_state": "NOT_EXECUTED",
+   "authorized_to_ship": false,
+   "snapshot_id": null
+  },
+  "expected": "STALE, gate NOT_EXECUTED, unauthorized"
+ },
+ "C": {
+  "scenario": "C ref-pinned, ref moved",
+  "reviewed": {
+   "head_ref": "HEAD",
+   "commit": "9c34c39325f12ed833d2a936a6dde7665de0c511",
+   "tree": "ba9e553681853a0793929e966c6572eddcca58fe"
+  },
+  "review_stages": [
+   "VALIDATED",
+   "VALIDATED",
+   "VALIDATED"
+  ],
+  "candidate": {
+   "head": "7dff3dced17d5c32130dd5090458c52e04f07cdb",
+   "head_tree": "032d03bda16581d8100e09fda4db6cde77a2512d",
+   "status": []
+  },
+  "review": {
+   "state": "STALE",
+   "decision": "STALE",
+   "approved": false,
+   "blocking_reason": "ref 'HEAD' moved during the review: 9c34c39325f1 -> 7dff3dced17d; the reviewed source is no longer what this ref points at, so a new review is required",
+   "gate_state": "NOT_EXECUTED",
+   "authorized_to_ship": false,
+   "snapshot_id": null
+  },
+  "expected": "STALE, unauthorized"
+ },
+ "D1": {
+  "scenario": "D1 annotated tag, tree changed",
+  "reviewed": {
+   "head_ref": "reviewed-tag",
+   "commit": "72582e000dd62a762810f4b8b15905d7c2167533",
+   "tree": "ba9e553681853a0793929e966c6572eddcca58fe"
+  },
+  "review_stages": [
+   "VALIDATED",
+   "VALIDATED",
+   "VALIDATED"
+  ],
+  "candidate": {
+   "head": "a62a8863128d45bb5bd8401742bac3191eabcda6",
+   "head_tree": "032d03bda16581d8100e09fda4db6cde77a2512d",
+   "status": []
+  },
+  "review": {
+   "state": "STALE",
+   "decision": "STALE",
+   "approved": false,
+   "blocking_reason": "checked-out tree is not the reviewed tree: ba9e55368185 -> 032d03bda165; the gate audits the working tree, so the reviewed content must be what is checked out",
+   "gate_state": "NOT_EXECUTED",
+   "authorized_to_ship": false,
+   "snapshot_id": null
+  },
+  "expected": "STALE after the tree changes"
+ },
+ "D2": {
+  "scenario": "D2 HEAD~1 reviewed while HEAD is checked out",
+  "reviewed": {
+   "head_ref": "HEAD~1",
+   "commit": "fedf75ea5b67bab41fa3a2fa223ea6fb69590daa",
+   "tree": "ba9e553681853a0793929e966c6572eddcca58fe"
+  },
+  "review_stages": [
+   "VALIDATED",
+   "VALIDATED",
+   "VALIDATED"
+  ],
+  "candidate": {
+   "head": "0fbf26d6bc237bf6fb30c26f5530907973a057ba",
+   "head_tree": "4d59254ef3740d7a8b06e6188b6db48cbc5a849c",
+   "status": []
+  },
+  "review": {
+   "state": "STALE",
+   "decision": "STALE",
+   "approved": false,
+   "blocking_reason": "checked-out tree is not the reviewed tree: ba9e55368185 -> 4d59254ef374; the gate audits the working tree, so the reviewed content must be what is checked out",
+   "gate_state": "NOT_EXECUTED",
+   "authorized_to_ship": false,
+   "snapshot_id": null
+  },
+  "expected": "refused: reviewed content is not the checked-out tree"
+ },
+ "D3": {
+  "scenario": "D3 detached HEAD at the reviewed commit",
+  "reviewed": {
+   "head_ref": "0d24bdaf001ffc031b43151864d376900ddeca0b",
+   "commit": "0d24bdaf001ffc031b43151864d376900ddeca0b",
+   "tree": "ba9e553681853a0793929e966c6572eddcca58fe"
+  },
+  "review_stages": [
+   "VALIDATED",
+   "VALIDATED",
+   "VALIDATED"
+  ],
+  "candidate": {
+   "head": "0d24bdaf001ffc031b43151864d376900ddeca0b",
+   "head_tree": "ba9e553681853a0793929e966c6572eddcca58fe",
+   "status": []
+  },
+  "review": {
+   "state": "FINALIZED",
+   "decision": "APPROVED",
+   "approved": true,
+   "blocking_reason": "all 4 mandatory stages validated; no CRITICAL/HIGH finding; independence UNKNOWN meets UNKNOWN",
+   "gate_state": "COMPLETED_CLEAN",
+   "authorized_to_ship": true,
+   "snapshot_id": "16e7cb82d6b2e6e0b14f08772c6974d9d4c8518e61833d2a2019c6480f746283"
+  },
+  "expected": "FINALIZED/APPROVED: identical content"
+ },
+ "E": {
+  "scenario": "E tracked file modified after the review",
+  "reviewed": {
+   "head_ref": "0c47a6b895ada2acfb4b430be0ee536f4cf327d4",
+   "commit": "0c47a6b895ada2acfb4b430be0ee536f4cf327d4",
+   "tree": "ba9e553681853a0793929e966c6572eddcca58fe"
+  },
+  "review_stages": [
+   "VALIDATED",
+   "VALIDATED",
+   "VALIDATED"
+  ],
+  "candidate": {
+   "head": "0c47a6b895ada2acfb4b430be0ee536f4cf327d4",
+   "head_tree": "ba9e553681853a0793929e966c6572eddcca58fe",
+   "status": [
+    "M pydetactl/README.md"
+   ]
+  },
+  "review": {
+   "state": "BLOCKED",
+   "decision": "BLOCKED",
+   "approved": false,
+   "blocking_reason": "ship gate refused: REFUSED working tree is dirty; ship evidence requires a clean tree:  M pydetactl/README.md",
+   "gate_state": "REFUSED",
+   "authorized_to_ship": false,
+   "snapshot_id": null
+  },
+  "expected": "REFUSED, unauthorized"
+ },
+ "F": {
+  "scenario": "F untracked user file created after the review",
+  "reviewed": {
+   "head_ref": "4ec42aa9ceeb76d5d4e4d0add15ae559e2efb12c",
+   "commit": "4ec42aa9ceeb76d5d4e4d0add15ae559e2efb12c",
+   "tree": "ba9e553681853a0793929e966c6572eddcca58fe"
+  },
+  "review_stages": [
+   "VALIDATED",
+   "VALIDATED",
+   "VALIDATED"
+  ],
+  "candidate": {
+   "head": "4ec42aa9ceeb76d5d4e4d0add15ae559e2efb12c",
+   "head_tree": "ba9e553681853a0793929e966c6572eddcca58fe",
+   "status": [
+    "?? user_note.txt"
+   ]
+  },
+  "review": {
+   "state": "BLOCKED",
+   "decision": "BLOCKED",
+   "approved": false,
+   "blocking_reason": "ship gate refused: REFUSED working tree is dirty; ship evidence requires a clean tree: ?? user_note.txt",
+   "gate_state": "REFUSED",
+   "authorized_to_ship": false,
+   "snapshot_id": null
+  },
+  "expected": "REFUSED, unauthorized"
+ }
+}
