@@ -104,6 +104,19 @@ class TreeIntegrator:
                 return None, [], (
                     f'{wid}: evidence base {payload.get("base_commit")} '
                     f'!= target HEAD {base}')
+            # Commit identity alone does not bind the tree: resolve the
+            # base commit's real tree and compare it with what was sealed.
+            declared_base_tree = payload.get('base_tree_sha')
+            try:
+                actual_base_tree = _git(self.repo, 'rev-parse',
+                                        f'{base}^{{tree}}')
+            except OrchestratorError:
+                return None, [], (
+                    f'{wid}: base commit tree unreadable: {base}')
+            if declared_base_tree != actual_base_tree:
+                return None, [], (
+                    f'{wid}: base_tree_sha {declared_base_tree} != base '
+                    f'commit tree {actual_base_tree}')
             try:
                 _git(self.repo, 'cat-file', '-e', f'{commit}^{{object}}')
                 actual = _git(self.repo, 'rev-parse', f'{commit}^{{tree}}')

@@ -203,7 +203,7 @@ def test_watch_stepper_current_vs_last_sealed(tmp_path: Path) -> None:
 
 # The commit the frozen trio is measured against: every edit made after it
 # must be approved and the anchor advanced in the same review.
-_GOVERNANCE_ANCHOR = 'afc6449'  # Phase 8: worker-evidence identity binding
+_GOVERNANCE_ANCHOR = '9a815b0'  # Phase 9: worker-evidence task binding
 
 
 def test_governance_trio_frozen(tmp_path: Path) -> None:

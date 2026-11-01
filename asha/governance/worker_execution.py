@@ -284,6 +284,7 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
 def verify_worker_evidence(path: Path | str,
                            worktree: Path | None = None,
                            expected_worker_id: str | None = None,
+                           expected_task_id: str | None = None,
                            ) -> dict[str, Any]:
     """Fail-closed worker-evidence verification: canonical digest intact,
     Phase-1 identity fields present, worker evidence can never authorize a
@@ -291,10 +292,11 @@ def verify_worker_evidence(path: Path | str,
     target_tree_sha re-binds to the live git tree. Raises on anything
     unproven; returns the payload. (Exact scheduler.py:73 body.)
 
-    ``expected_worker_id`` binds the artifact to the worker the caller is
-    sealing: the digest proves the bytes were not edited, not whose run
-    produced them, so a byte-identical artifact could otherwise be moved
-    onto another worker's file without changing anything.
+    ``expected_worker_id`` / ``expected_task_id`` bind the artifact to the
+    worker and task the caller is sealing: the digest proves the bytes were
+    not edited, not whose run produced them, so a byte-identical artifact
+    could otherwise be moved onto another worker's file or into another
+    task's directory without changing anything.
     """
     raw = Path(path).read_text(encoding="utf-8")
     try:
@@ -319,6 +321,13 @@ def verify_worker_evidence(path: Path | str,
             raise OrchestratorError(
                 f"worker evidence identity mismatch: artifact declares "
                 f"worker_id={declared!r}, expected {expected_worker_id!r}")
+    if expected_task_id is not None:
+        # Same argument one level up: the task directory is not proof.
+        declared_task = payload.get("task_id")
+        if declared_task != expected_task_id:
+            raise OrchestratorError(
+                f"worker evidence task mismatch: artifact declares "
+                f"task_id={declared_task!r}, expected {expected_task_id!r}")
     missing = [field for field in WORKER_EVIDENCE_FIELDS
                if field not in payload]
     if missing:
@@ -1322,7 +1331,8 @@ def collect_worker_evidence(
         evi_path = evidence_dir / (_safe_id(wid) + ".json")
         _atomic_json(evi_path, sealed)
         verify_worker_evidence(evi_path, worktree=path,
-                             expected_worker_id=str(wid))
+                             expected_worker_id=str(wid),
+                             expected_task_id=str(task_id))
     except (OrchestratorError, scope_resolver.ScopeError,
             evidence.EvidenceError, OSError) as exc:
         return {"state": "INVALID_EVIDENCE",
