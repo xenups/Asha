@@ -310,3 +310,80 @@ At **2.51× wall clock and 2.81× model calls** for equal acceptance and zero sh
 authorizations, the cost side is unambiguous. The value side is review findings and
 evidence discipline — real, but currently delivered alongside a gate that either
 refuses valid work (self-inflicted) or authorizes unreviewed trees (F1).
+
+---
+
+## Addendum — 2026-11-01, after findings triage
+
+The observations above are unchanged and remain the record of the benchmark run.
+Two of them were investigated afterwards on a disposable clone; this addendum
+records what the investigation found. Nothing above was rewritten.
+
+### F1 — confirmed bug, not expected SHA-pinned behaviour
+
+Reproduction (`harness/f1_repro.py`, run before any production change):
+
+| case | reviewed tree | tree at finalize | finalize | authorized |
+|---|---|---|---|---|
+| head pinned to a commit id | `ba9e55368185` | `4d59254ef374` | `FINALIZED` / `APPROVED` | **true** |
+| head pinned to a ref | `ba9e55368185` | `4d59254ef374` | `STALE` / `STALE` | false |
+
+`assert_target_unchanged` re-resolved the recorded SHAs and the named refs. A
+commit id never moves, so pinning `head` to a SHA made the drift invisible; the
+Ship Gate then audited the current working tree and reported `COMPLETED_CLEAN`
+for content the review never saw, while `approved` stayed scoped to the older
+commit. Classification: **CONFIRMED BUG** — authorization was applied to content
+other than the content reviewed. The ref-pinned path was already correct.
+
+### F3 — correction: the untracked file was not Asha's plan artifact
+
+The paragraph in §6 that attributes a root-level `root_network_plan_planned.yaml`
+to "Asha's plan tool" is **wrong** and is corrected here, not edited away.
+
+Measured (`harness/f3_repro.py`): running the target's own suite
+(`pytest tests` inside `pydetactl`) in a clone that never contacts Asha creates
+
+```
+?? pydetactl/root_network_plan_planned.yaml
+```
+
+The writer is `pydetactl/tests/test_plan.py`, which invokes the project's `plan`
+CLI command and that command writes `<project>_planned.yaml` into the *current
+working directory* instead of `tmp_path`. Asha contains no such artifact code
+(`grep -r network_plan asha/` returns nothing).
+
+Where the file lands depends only on the working directory the process ran in:
+`pydetactl/…` for an agent that ran the suite from the component directory,
+repo-root `root_network_plan_planned.yaml` for Asha's check matrix, which runs
+with the repository root as cwd. Both files have the same fixed name.
+
+Consequences recorded honestly:
+
+* the Ship Gate's refusal was **correct** — the tree really was dirty with
+  content that no review had seen;
+* the dirt did **not** originate in Asha, so the "self-inflicted" wording in §6
+  applies only to the cwd choice, not to artifact creation;
+* Asha contributes to the friction by running checks inside the governed
+  worktree with the repository root as cwd, so any target-side residue ends up
+  in the tree it is about to audit.
+
+No Asha production change follows from F3: ignoring untracked files, or
+whitelisting a filename, would weaken the fail-closed protection against
+genuinely unreviewed content. The smallest safe change belongs to the target
+repository (`tmp_path` in its tests); an Asha-side alternative — running checks
+in a scratch copy of the tree — is a design change, not a fix, and is not part
+of this evaluation.
+
+### F2 — confirmed, diagnostic improved separately
+
+`comparison_inconclusive:baseline_failures_unparsed` named the baseline while
+the actionable failures were the candidate's own ruff syntax errors, already
+recorded in `current_failures`. Classification: **CONFIRMED (diagnostic
+insufficiency, not a wrong verdict)** — the failure classification and the
+fail-closed outcome were correct. Remediated on a separate branch, not here.
+
+### Effect on the headline result
+
+The count stays **0 of 3 authorized**. F1 does not change it (none of the three
+benchmark runs was SHA-pinned). F3 explains it fully: every run's tree held an
+untracked file written by the target's own test suite.
