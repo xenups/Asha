@@ -1,0 +1,65 @@
+diff --git a/pydetactl/src/utils/s3_resolver.py b/pydetactl/src/utils/s3_resolver.py
+index 1fd6c9c4d..13e1b587e 100644
+--- a/pydetactl/src/utils/s3_resolver.py
++++ b/pydetactl/src/utils/s3_resolver.py
+@@ -8,6 +8,7 @@ coordinating URL detection and artifact fetching.
+ import re
+ from typing import Any, Dict, List, Set
+ 
++from core.logger import logger
+ from services.s3_client import S3Client
+ 
+ # Pattern for detecting s3:// URLs
+@@ -86,7 +87,7 @@ async def resolve_s3_artifacts(
+             artifact = await s3_client.fetch_artifact(url)
+             artifacts.append(artifact)
+         except Exception as e:
+-            # Log error but continue with other artifacts
+-            print(f"Warning: Failed to fetch {url}: {e}")
++            # Log to stderr so machine-readable stdout stays clean
++            logger.warning(f"Failed to fetch {url}: {e}")
+ 
+     return artifacts
+diff --git a/pydetactl/tests/test_s3_resolver.py b/pydetactl/tests/test_s3_resolver.py
+index 6632717f2..acd14cc0e 100644
+--- a/pydetactl/tests/test_s3_resolver.py
++++ b/pydetactl/tests/test_s3_resolver.py
+@@ -133,3 +133,38 @@ async def test_resolve_s3_artifacts_with_urls(mock_detect, mock_s3_client_class)
+     mock_detect.assert_called_once_with(result)
+     mock_s3_client_class.assert_called_once()
+     assert mock_client.fetch_artifact.call_count == 2
++
++
++@pytest.mark.asyncio
++@patch("utils.s3_resolver.logger")
++@patch("utils.s3_resolver.S3Client")
++@patch("utils.s3_resolver.detect_s3_urls")
++async def test_resolve_s3_artifacts_failure_keeps_stdout_clean(
++    mock_detect, mock_s3_client_class, mock_logger, capsys
++):
++    """Should log fetch failures without writing to stdout and keep other artifacts."""
++    mock_detect.return_value = [
++        "s3://bucket/file1.yaml",
++        "s3://bucket/missing.yaml",
++        "s3://bucket/file2.yaml",
++    ]
++
++    mock_client = Mock()
++    mock_client.fetch_artifact = AsyncMock(
++        side_effect=[
++            {"source": "s3://bucket/file1.yaml", "content": {"data": 1}},
++            RuntimeError("boom"),
++            {"source": "s3://bucket/file2.yaml", "content": {"data": 2}},
++        ]
++    )
++    mock_s3_client_class.return_value = mock_client
++
++    artifacts = await resolve_s3_artifacts({"name": "test"})
++
++    assert capsys.readouterr().out == ""
++    assert artifacts == [
++        {"source": "s3://bucket/file1.yaml", "content": {"data": 1}},
++        {"source": "s3://bucket/file2.yaml", "content": {"data": 2}},
++    ]
++    mock_logger.warning.assert_called_once()
++    assert "s3://bucket/missing.yaml" in mock_logger.warning.call_args.args[0]

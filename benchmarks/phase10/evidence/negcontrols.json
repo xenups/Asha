@@ -1,0 +1,247 @@
+{
+ "base": "899ab1c3692067c4f13c28365cc19ce8183624f1",
+ "results": [
+  {
+   "scenario": "S1_verification_failure",
+   "asha": {
+    "exit": 0,
+    "ok": true,
+    "payload": {
+     "dry_run": false,
+     "root": "/home/amir/bench/p10/neg/repo",
+     "task_id": "mcp-e675e2958583",
+     "status": "failed",
+     "reason": "w-fail:FAILED",
+     "generation_count": 1,
+     "generations": [
+      [
+       "w-fail"
+      ]
+     ],
+     "states": {
+      "w-fail": {
+       "state": "FAILED",
+       "reason": "worker_exit_7",
+       "comparison": {
+        "performed": false,
+        "baseline_tree": "57d8fa680b8ff318feca9ba02ca80f0afabd0982",
+        "candidate_tree": null,
+        "comparable": false,
+        "reason": "NOT_COMPARED",
+        "verdict": null,
+        "detail": "missing_tree_identifier"
+       },
+       "execution_id": "exec-f82cf3a82b58"
+      }
+     },
+     "successful_workers": [],
+     "failed_workers": [
+      "w-fail"
+     ],
+     "deferred_workers": [],
+     "blocked_workers": [],
+     "invalid_evidence_workers": [],
+     "evidence": {},
+     "deferrals": [],
+     "graph": {
+      "generation": 0,
+      "worker_generation": 0,
+      "derived": [],
+      "uncertain_owners": [],
+      "reconcile_passes": 0,
+      "stale_intents_dropped": 0,
+      "failures": []
+     },
+     "worktrees": {
+      "w-fail": "/tmp/asha-repo-wt-545e23823acd/w-fail"
+     },
+     "cleanup_errors": [],
+     "authorized_to_ship": false
+    },
+    "stderr": ""
+   },
+   "expected": "worker FAILED / not authorized / no sealed evidence"
+  },
+  {
+   "scenario": "S2_out_of_scope_write",
+   "asha": {
+    "exit": 0,
+    "ok": true,
+    "payload": {
+     "dry_run": false,
+     "root": "/home/amir/bench/p10/neg/repo",
+     "task_id": "mcp-fa152a68d029",
+     "status": "failed",
+     "reason": "w-scope:INVALID_EVIDENCE",
+     "generation_count": 1,
+     "generations": [
+      [
+       "w-scope"
+      ]
+     ],
+     "states": {
+      "w-scope": {
+       "state": "INVALID_EVIDENCE",
+       "reason": "scope_violation:pydetactl/src/utils/s3_resolver.py",
+       "comparison": {
+        "performed": false,
+        "baseline_tree": "57d8fa680b8ff318feca9ba02ca80f0afabd0982",
+        "candidate_tree": "c4e80ae2a4c011fc6ea9808bdf98329e7f280cac",
+        "comparable": false,
+        "reason": "NOT_COMPARED",
+        "verdict": null,
+        "detail": null
+       },
+       "execution_id": "exec-0c215f299d27"
+      }
+     },
+     "successful_workers": [],
+     "failed_workers": [],
+     "deferred_workers": [],
+     "blocked_workers": [],
+     "invalid_evidence_workers": [
+      "w-scope"
+     ],
+     "evidence": {},
+     "deferrals": [],
+     "graph": {
+      "generation": 0,
+      "worker_generation": 0,
+      "derived": [],
+      "uncertain_owners": [],
+      "reconcile_passes": 0,
+      "stale_intents_dropped": 0,
+      "failures": []
+     },
+     "worktrees": {
+      "w-scope": "/tmp/asha-repo-wt-b5d81cce9178/w-scope"
+     },
+     "cleanup_errors": [],
+     "authorized_to_ship": false
+    },
+    "stderr": ""
+   },
+   "expected": "INVALID_EVIDENCE / scope violation, no success"
+  },
+  {
+   "scenario": "S3_stale_target",
+   "run_id": "",
+   "asha": {
+    "exit": 1,
+    "ok": false,
+    "payload": {
+     "_raw": "asha_review_finalize: unknown argument(s): run_id"
+    },
+    "stderr": ""
+   },
+   "expected": "STALE/BLOCKED, authorized_to_ship false"
+  },
+  {
+   "scenario": "S4_substituted_worker_evidence",
+   "probe": {
+    "exit": 0,
+    "stdout": "{\"error\": \"fewer than two artifacts\", \"found\": []}",
+    "stderr": ""
+   },
+   "expected": "detected: identity mismatch"
+  },
+  {
+   "scenario": "S5_invalid_task_identity",
+   "probe": {
+    "exit": 0,
+    "stdout": "{\"error\": \"no artifacts\"}",
+    "stderr": ""
+   },
+   "expected": "detected: task mismatch"
+  },
+  {
+   "scenario": "S6_missing_tool_is_not_a_pass",
+   "asha": {
+    "exit": 0,
+    "ok": true,
+    "payload": {
+     "dry_run": false,
+     "root": "/home/amir/bench/p10/neg/repo",
+     "task_id": "mcp-fb1ed8366446",
+     "status": "ok",
+     "reason": null,
+     "generation_count": 1,
+     "generations": [
+      [
+       "w-tool"
+      ]
+     ],
+     "states": {
+      "w-tool": {
+       "state": "DONE",
+       "reason": null,
+       "verdict": "NO_FAILURES",
+       "baseline_failures": [],
+       "current_failures": [],
+       "delta_failures": [],
+       "comparison": {
+        "performed": true,
+        "baseline_tree": "1902e18e361a01915fbce68375a6a34bb1959e81",
+        "candidate_tree": "dac2cc2dd1a1578e14d7abdc8270c733efb3043e",
+        "comparable": true,
+        "reason": "COMPARED",
+        "verdict": "NO_FAILURES",
+        "detail": null
+       },
+       "applied": true,
+       "writes_observed": [
+        "pydetactl/README.md"
+       ],
+       "verification_status": "VERIFIED_NO_REGRESSION",
+       "execution_id": "exec-a8e6f885d5e0"
+      }
+     },
+     "successful_workers": [
+      "w-tool"
+     ],
+     "failed_workers": [],
+     "deferred_workers": [],
+     "blocked_workers": [],
+     "invalid_evidence_workers": [],
+     "evidence": {
+      "w-tool": "/home/amir/bench/p10/neg/state/c6dca2bd9621e0eb-repo/orchestrator/mcp-fb1ed8366446/w-tool.json"
+     },
+     "deferrals": [],
+     "graph": {
+      "generation": 1,
+      "worker_generation": 1,
+      "derived": [],
+      "uncertain_owners": [],
+      "reconcile_passes": 1,
+      "stale_intents_dropped": 0,
+      "failures": []
+     },
+     "worktrees": {
+      "w-tool": "/tmp/asha-repo-wt-fc5f7540d9ae/w-tool"
+     },
+     "cleanup_errors": [],
+     "authorized_to_ship": false
+    },
+    "stderr": ""
+   },
+   "expected": "check failure surfaced, validation not PASS"
+  },
+  {
+   "scenario": "S7_valid_work_not_blocked",
+   "pytest": {
+    "exit": 0,
+    "tail": "37 passed in 0.49s"
+   },
+   "run_id": "rv-20261101T025334Z-860640c6",
+   "asha": {
+    "exit": 1,
+    "ok": false,
+    "payload": {
+     "_raw": "asha_review_finalize: unknown argument(s): run_id"
+    },
+    "stderr": ""
+   },
+   "expected": "authorized_to_ship true (no false refusal)"
+  }
+ ]
+}
