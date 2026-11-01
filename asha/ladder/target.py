@@ -148,6 +148,12 @@ def assert_target_unchanged(root: Path, target: ReviewTarget) -> None:
     Both the recorded SHAs and the refs the caller asked for are checked:
     a branch that moved mid-run means the review no longer covers what the
     caller is about to ship, even though the recorded commit is intact.
+
+    A ref pinned by commit id cannot move, so the content actually checked
+    out is compared as well: the gate audits the working tree, and
+    authorizing a tree the review never saw is the failure this function
+    exists to prevent. Trees are compared with trees -- equal content at a
+    different commit stays reviewable.
     """
     for ref, recorded in ((target.base_ref, target.base_sha),
                           (target.head_ref, target.head_sha)):
@@ -175,6 +181,13 @@ def assert_target_unchanged(root: Path, target: ReviewTarget) -> None:
             'reviewed source changed during the run: '
             + '; '.join(f'{name} {old[:12]} -> {new[:12]}'
                         for name, (old, new) in drift.items()))
+    reviewed_tree = _git(root, 'rev-parse', f'{head_sha}^{{tree}}')
+    checkout_tree = _git(root, 'rev-parse', 'HEAD^{tree}')
+    if reviewed_tree != checkout_tree:
+        raise StaleTargetError(
+            f'checked-out tree is not the reviewed tree: {reviewed_tree[:12]} '
+            f'-> {checkout_tree[:12]}; the gate audits the working tree, so '
+            'the reviewed content must be what is checked out')
 
 
 def is_secret_path(path: str) -> bool:
