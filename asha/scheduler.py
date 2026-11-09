@@ -37,6 +37,7 @@ from .governance.worker_execution import (
     default_execute,  # extracted (H.2.1)
     verify_worker_evidence,  # extracted (H.2.1)
 )
+from .observability import events as obs
 from .router import RuntimeMode, route
 from .types import (
     STATES,
@@ -153,6 +154,16 @@ class GovernedScheduler:
     def _set(self, worker_id: str, state: str, reason: str | None) -> None:
         assert state in STATES, state
         self.states[worker_id] = {'state': state, 'reason': reason}
+        node = self.by_id.get(worker_id) or {}
+        obs.emit(
+            obs.worker_event(state),
+            'scheduler', stage_id='worker', status=state,
+            message=reason or '', worker_id=str(worker_id),
+            data={'task': node.get('task') or node.get('description') or '',
+                  'reads': list(node.get('reads') or []),
+                  'writes': list(node.get('writes') or []),
+                  'declared_scope': list(node.get('declared_scope') or []),
+                  'deps': [str(d) for d in (node.get('deps') or [])]})
 
     def state_of(self, worker_id: str) -> str:
         return str(self.states[worker_id]['state'])
@@ -718,6 +729,29 @@ class GovernedScheduler:
             sorter.add(worker['id'],
                        *(self.worker_graph['edges'].get(worker['id'])
                          or ()))
+        self._obs_run = obs.new_run_id('sched')
+        obs.start_run(self.repo, self._obs_run, {
+            'task_id': self.task_id, 'command': 'scheduler',
+            'workers': len(self.workers)})
+        obs.emit('run.started', 'scheduler', stage_id='result',
+                 status='running', message='governed run started',
+                 data={'task_id': self.task_id,
+                       'workers': len(self.workers)})
+        obs.emit('dag.created', 'scheduler', stage_id='dag',
+                 status='created', message='worker graph projected',
+                 data={'nodes': [
+                     {'id': str(w.get('id')),
+                      'task': w.get('task') or w.get('description') or '',
+                      'reads': list(w.get('reads') or []),
+                      'writes': list(w.get('writes') or []),
+                      'declared_scope': list(w.get('declared_scope') or []),
+                      'deps': [str(d) for d in (w.get('deps') or [])]}
+                     for w in self.workers],
+                     'edges': {str(wid): sorted(str(d) for d in preds)
+                               for wid, preds in
+                               self.worker_graph['edges'].items()},
+                     'generation': self.worker_graph['generation'],
+                     'uncertain': sorted(self.worker_graph['uncertain'])})
         report: dict[str, Any] = {
             'task_id': self.task_id, 'status': 'failed', 'reason': None,
             'base_commit': self.dispatcher.base_commit,
@@ -742,8 +776,12 @@ class GovernedScheduler:
             report['reason'] = 'cycle'
             report['cycle'] = cycle
             report['graph'] = self._graph_report()
+            obs.emit('dag.validated', 'scheduler', stage_id='dag',
+                     status='invalid', message='cycle detected',
+                     data={'cycle': cycle})
             self.dispatcher.cleanup()
             report['cleanup_errors'] = list(self.dispatcher.cleanup_errors)
+            obs.finish_run('failed', reason='cycle')
             return report
 
         ready: list[str] = list(sorter.get_ready())
@@ -947,6 +985,13 @@ class GovernedScheduler:
         report['reason'] = None if all_done else (
             fail_reason or 'incomplete')
         report['graph'] = self._graph_report()
+        obs.emit('evidence.sealed' if report.get('status') == 'ok'
+                 else 'evidence.rejected', 'evidence', stage_id='evidence',
+                 status='SEALED' if report.get('status') == 'ok'
+                 else 'NOT_SEALED',
+                 message=str(report.get('reason') or ''))
+        obs.finish_run(str(report.get('status')),
+                       reason=report.get('reason'))
         return report
 
 

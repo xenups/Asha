@@ -51,6 +51,7 @@ from asha.execution import (
     ExecutionTimeout,
 )
 from asha.governance import delta
+from asha.observability import events as obs
 from asha.runner import dispatch_runner
 from asha.types import (
     TAIL_CHARS,
@@ -1146,6 +1147,9 @@ def collect_worker_evidence(
         commit_line, tree_line = _git(path, "rev-parse", "HEAD",
                                       "HEAD^{tree}").split()
         target_commit, target_tree = commit_line, tree_line
+        obs.emit("scope_validation.started", "scope", stage_id="scope",
+                 status="running", worker_id=str(wid),
+                 message="comparing observed changes with declared scope")
         observed = scope_resolver.changed_files(
             path, base=effective_base)
         declared = worker.get("declared_scope") or []
@@ -1155,6 +1159,13 @@ def collect_worker_evidence(
         violations = [item for item in observed
                       if not any(covered(item, entry)
                                  for entry in declared)]
+        obs.emit("scope_validation.completed", "scope", stage_id="scope",
+                 worker_id=str(wid),
+                 status="violation" if violations else "clean",
+                 message=("outside declared scope: " + ", ".join(violations[:5])
+                          if violations else "every observed change is declared"),
+                 data={"files": observed[:200],
+                       "violations": violations[:50]})
         if violations:
             return {"state": "INVALID_EVIDENCE",
                     "reason": "scope_violation:"
@@ -1180,6 +1191,9 @@ def collect_worker_evidence(
                     "baseline_deferred requires repo (baseline worktree)")
             # Same authoritative decision, clean tree at `base`: the only
             # way the two check inventories are genuinely comparable.
+            obs.emit("baseline.started", "verification", stage_id="baseline",
+                     status="running", worker_id=str(wid),
+                     message="baseline checks on a clean worktree at base")
             baseline_journal = deferred_baseline_checks(
                 worker, path, effective_base, effective_base_tree,
                 Path(repo), task_id, resolved, decision, deps_root=deps_root,
@@ -1187,8 +1201,30 @@ def collect_worker_evidence(
             baseline_checks = (baseline_journal or {}).get("checks")
             baseline_scope = (
                 (baseline_journal or {}).get("resolved") or {}).get("scope")
+            base_rows = (baseline_journal or {}).get("checks") or []
+            obs.emit("baseline.completed", "verification",
+                     stage_id="baseline", worker_id=str(wid),
+                     status="completed" if base_rows else "unknown",
+                     message=f"{len(base_rows)} baseline check(s)",
+                     data={"checks": [{"name": c.get("name"),
+                                       "status": c.get("status"),
+                                       "exit_code": c.get("exit_code")}
+                                      for c in base_rows][:50]})
+        obs.emit("candidate_check.started", "verification",
+                 stage_id="candidate", status="running", worker_id=str(wid),
+                 message="candidate checks on the worker tree",
+                 data={"mode": getattr(decision, "mode", None)})
         checks = _run_checks(decision, path, resolved, deps_root=deps_root,
                              deadline=deadline)
+        for entry in checks:
+            obs.emit("candidate_check.completed", "verification",
+                     stage_id="candidate", worker_id=str(wid),
+                     status=entry.get("status"),
+                     message=str(entry.get("name")),
+                     data={"name": entry.get("name"),
+                           "status": entry.get("status"),
+                           "exit_code": entry.get("exit_code"),
+                           "tail": str(entry.get("output_tail") or "")[-400:]})
         # A task Deadline that stopped a mandatory check is the cause; a
         # parser/comparison complaint further down is only its symptom.
         if _deadline_stopped(checks, baseline_checks):
@@ -1220,6 +1256,24 @@ def collect_worker_evidence(
         new_fails = delta.delta_failures(cur_fails, base_fails)
         verdict = delta.verdict_for(cur_fails, base_fails,
                                     has_failed_checks=bool(failed))
+        obs.emit("delta.computed", "delta", stage_id="delta",
+                 worker_id=str(wid), status=verdict,
+                 message=(f"{len(new_fails)} new / "
+                          f"{len(base_fails or ())} pre-existing failure(s)"),
+                 data={"new_failures": [f.location for f in new_fails][:50],
+                       "pre_existing": [f.location
+                                        for f in (base_fails or [])][:50],
+                       "unparsed": bool(unparsed_baseline),
+                       "failed_checks": failed[:50]})
+        obs.emit("verdict.computed", "delta", stage_id="delta",
+                 worker_id=str(wid), status=verdict,
+                 message=("failed checks: " + ", ".join(failed))
+                         if failed else "no failing candidate check",
+                 data={"status": verdict,
+                       "new_failures": [f.location for f in new_fails][:50],
+                       "pre_existing": [f.location
+                                        for f in (base_fails or [])][:50],
+                       "unparsed": bool(unparsed_baseline)})
         comparison = build_comparison(
             base_tree=effective_base_tree, candidate_tree=target_tree,
             baseline_checks=baseline_list, candidate_checks=checks,
@@ -1351,8 +1405,23 @@ def collect_worker_evidence(
         verify_worker_evidence(evi_path, worktree=path,
                              expected_worker_id=str(wid),
                              expected_task_id=str(task_id))
+        obs.emit("evidence.created", "evidence", stage_id="evidence",
+                 worker_id=str(wid), status="written",
+                 message="worker evidence document written",
+                 data={"path": str(evi_path), "checks": len(checks)})
+        obs.emit("evidence.validated", "evidence", stage_id="evidence",
+                 worker_id=str(wid), status="validated",
+                 message="evidence bound to worktree, worker and task")
+        obs.emit("evidence.sealed", "evidence", stage_id="evidence",
+                 worker_id=str(wid), status="SEALED",
+                 message="evidence digest computed",
+                 data={"sha256": sealed.get("evidence_sha256"),
+                       "path": str(evi_path)})
     except (OrchestratorError, scope_resolver.ScopeError,
             evidence.EvidenceError, OSError) as exc:
+        obs.emit("evidence.rejected", "evidence", stage_id="evidence",
+                 worker_id=str(wid), status="NOT_SEALED",
+                 message=f"{type(exc).__name__}: {exc}")
         return {"state": "INVALID_EVIDENCE",
                 "reason": f"{type(exc).__name__}: {exc}",
                 "evidence": None, "comparison": comparison}

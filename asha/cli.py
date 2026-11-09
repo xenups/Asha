@@ -1265,11 +1265,46 @@ def review_status_cmd(argv: list[str]) -> int:
     return 0
 
 
+def _dashboard_cmd(argv: list[str]) -> int:
+    """Serve the read-only observability dashboard on loopback only."""
+    parser = argparse.ArgumentParser(
+        prog='asha dashboard',
+        description='Read-only execution observability (loopback only).')
+    parser.add_argument('--root', default='.',
+                        help='repository checkout whose runs are shown')
+    parser.add_argument('--host', default='127.0.0.1',
+                        help='bind address (loopback by default; never 0.0.0.0)')
+    parser.add_argument('--port', type=int, default=7331)
+    args = parser.parse_args(argv)
+    if args.host not in ('127.0.0.1', 'localhost', '::1'):
+        print('asha dashboard: refusing non-loopback bind ' + args.host,
+              file=sys.stderr)
+        return 2
+    from asha.observability import server
+    try:
+        httpd = server.make_server(Path(args.root), args.host, args.port)
+    except OSError as exc:
+        print(f'asha dashboard: cannot bind {args.host}:{args.port}: {exc}',
+              file=sys.stderr)
+        return 2
+    url = 'http://' + args.host + ':' + str(httpd.server_address[1])
+    print(f'asha dashboard: {url}  (Ctrl+C to stop)', file=sys.stderr)
+    try:
+        httpd.serve_forever(poll_interval=0.5)
+    except KeyboardInterrupt:
+        print('asha dashboard: stopped', file=sys.stderr)
+    finally:
+        httpd.server_close()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     command = _first_positional(argv)
     if command == 'run':
         return run_spec_cmd(argv)
+    if command == 'dashboard':
+        return _dashboard_cmd(argv[1:])
     if command == 'status':
         return _status(argv[1:])
     if command == 'inspect':

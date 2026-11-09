@@ -48,6 +48,7 @@ from asha.common import paths as common_paths
 from asha.conflict import ConflictManager, covered, scope_status
 from asha.contracts.validation import validate_workers
 from asha.governance import worker_execution
+from asha.observability import events as obs
 from asha.router import RuntimeMode, route
 from asha.types import STATES, OrchestratorError
 from asha.worktree import WorktreeDispatcher, _git, _safe_id
@@ -128,6 +129,16 @@ class DAGCoordinator:
     def _set(self, worker_id: str, state: str, reason: str | None) -> None:
         assert state in STATES, state
         self.states[worker_id] = {"state": state, "reason": reason}
+        node = self.by_id.get(worker_id) or {}
+        obs.emit(
+            obs.worker_event(state),
+            "dag_coordinator", stage_id="worker", status=state,
+            message=reason or "", worker_id=str(worker_id),
+            data={"task": node.get("task") or node.get("description") or "",
+                  "reads": list(node.get("reads") or []),
+                  "writes": list(node.get("writes") or []),
+                  "declared_scope": list(node.get("declared_scope") or []),
+                  "deps": [str(d) for d in (node.get("deps") or [])]})
 
     def state_of(self, worker_id: str) -> str:
         return str(self.states[worker_id]["state"])
@@ -195,6 +206,21 @@ class DAGCoordinator:
         if self.journal is None:
             return
         ok = report.get("status") == "ok"
+        cleanups = list(self.dispatcher.cleanup_errors)
+        obs.emit("worktree.cleanup.completed", "worktree",
+                 stage_id="worktree",
+                 status="completed" if not cleanups else "warning",
+                 message="; ".join(cleanups)[:400],
+                 data={"errors": cleanups})
+        obs.emit("evidence.sealed" if ok else "evidence.rejected", "evidence",
+                 stage_id="evidence",
+                 status="SEALED" if ok else "NOT_SEALED",
+                 message=str(report.get("reason") or ""),
+                 data={"evidence": dict(self.evidence_paths),
+                       "worker_states": report.get("states")})
+        obs.finish_run(str(report.get("status")),
+                       reason=report.get("reason"),
+                       data={"worker_count": len(self.workers)})
         self._journal(
             "sealed" if ok else "execution_failed",
             {"scope": "task", "status": report.get("status"),
@@ -490,6 +516,29 @@ class DAGCoordinator:
             sorter.add(worker["id"],
                        *(self.worker_graph["edges"].get(worker["id"])
                          or ()))
+        self._obs_run = obs.new_run_id("dag")
+        obs.start_run(self.repo, self._obs_run, {
+            "task_id": self.task_id, "command": "dag",
+            "workers": len(self.workers)})
+        obs.emit("run.started", "dag_coordinator", stage_id="result",
+                 status="running", message="governed DAG run started",
+                 data={"task_id": self.task_id,
+                       "workers": len(self.workers)})
+        obs.emit("dag.created", "dag_coordinator", stage_id="dag",
+                 status="created", message="worker DAG projected",
+                 data={"nodes": [
+                     {"id": str(w.get("id")),
+                      "task": w.get("task") or w.get("description") or "",
+                      "reads": list(w.get("reads") or []),
+                      "writes": list(w.get("writes") or []),
+                      "declared_scope": list(w.get("declared_scope") or []),
+                      "deps": [str(d) for d in (w.get("deps") or [])]}
+                     for w in self.workers],
+                     "edges": {str(wid): sorted(str(d) for d in preds)
+                               for wid, preds in
+                               self.worker_graph["edges"].items()},
+                     "generation": self.worker_graph["generation"],
+                     "uncertain": sorted(self.worker_graph["uncertain"])})
         report: dict[str, Any] = {
             "task_id": self.task_id, "status": "failed", "reason": None,
             "base_commit": self.dispatcher.base_commit,
@@ -512,11 +561,18 @@ class DAGCoordinator:
             report["reason"] = "cycle"
             report["cycle"] = cycle
             report["graph"] = self._graph_report()
+            obs.emit("dag.validated", "dag_coordinator", stage_id="dag",
+                     status="invalid", message="cycle detected",
+                     data={"cycle": cycle})
             self.dispatcher.cleanup()
             report["cleanup_errors"] = list(self.dispatcher.cleanup_errors)
             self._finish_task(report)
             return report
 
+        obs.emit("dag.validated", "dag_coordinator", stage_id="dag",
+                 status="validated", message="DAG is acyclic",
+                 data={"workers": len(self.workers),
+                       "generation": self.worker_graph["generation"]})
         ready: list[str] = list(sorter.get_ready())
         futures: dict[Future[dict[str, Any]], str] = {}
         abort = False
@@ -574,6 +630,10 @@ class DAGCoordinator:
                                 self._run_one_fast, worker)] = wid
                             dispatched += 1
                             continue
+                        obs.emit("worktree.create.started", "worktree",
+                                 stage_id="worktree", status="running",
+                                 worker_id=wid,
+                                 message="creating isolated worktree")
                         try:
                             path = self.dispatcher.create(wid)
                         except OrchestratorError as exc:
@@ -581,6 +641,10 @@ class DAGCoordinator:
                             abort = True
                             fail_reason = fail_reason or f"{wid}:worktree"
                             continue
+                        obs.emit("worktree.create.completed", "worktree",
+                                 stage_id="worktree", status="completed",
+                                 worker_id=wid,
+                                 data={"worktree": str(path)})
                         self._set(wid, "RUNNING", None)
                         self.conflicts.start(wid, worker)
                         self._begin_execution(wid)

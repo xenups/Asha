@@ -43,6 +43,7 @@ from .ast_indexer import (
     index_module,
     prime_session_cache,
 )
+from .observability import events as obs
 from .scoping import _module_name, _repository_py_files
 
 _CACHE_NAMES = ('meta.json', 'files.json', 'modules.json', 'graph.json')
@@ -316,6 +317,28 @@ def load(root: Path, cache_dir: Path) -> CacheLoadResult:
                 purged_reason = (f'save_failed: '
                                  f'{type(exc).__name__}: {exc}')
     t_end = time.perf_counter()
+    unresolved = [node for node, boundary in graph.boundaries
+                  if boundary == codegraph.BOUNDARY_UNRESOLVED]
+    obs.emit("codegraph.build.completed" if mode != "warm_hit"
+             else "codegraph.load.completed", "codegraph",
+             stage_id="codegraph", status="completed",
+             message=f"graph {mode}: {len(graph.nodes)} nodes, "
+                     f"{len(graph.edges)} edges",
+             data={"state": "INCOMPLETE" if unresolved else "COMPLETE",
+                   "source": mode,
+                   "modules": len(sources),
+                   "edges": len(graph.edges),
+                   "nodes": [{"id": node, "kind": "module",
+                              "module": node.split(".")[0],
+                              "confidence": (
+                                  "UNKNOWN"
+                                  if (node, codegraph.BOUNDARY_UNRESOLVED)
+                                  in graph.boundaries else "COMPLETE")}
+                             for node in sorted(graph.nodes)[:4000]],
+                   "relations": [{"from": edge.source, "to": edge.target,
+                                  "rel": edge.kind}
+                                 for edge in list(graph.edges)[:8000]],
+                   "unresolved": len(unresolved)})
     return CacheLoadResult(
         sources=sources,
         graph=graph,

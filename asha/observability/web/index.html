@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Asha — Live Execution</title>
+<link rel="icon" href="/favicon.svg">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+      <path d="M12 2 3 7v10l9 5 9-5V7Z" fill="none" stroke="url(#g)" stroke-width="1.6"/>
+      <path d="M7 12h10M12 7v10" stroke="#8b9dff" stroke-width="1.2"/>
+      <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#8b5cf6"/><stop offset="1" stop-color="#3b82f6"/>
+      </linearGradient></defs>
+    </svg>
+    <span>Asha</span><em>observability</em>
+  </div>
+  <div class="runhead">
+    <label>Run
+      <select id="runSelect" aria-label="Run"></select>
+    </label>
+    <span id="runId" class="mono dim">—</span>
+    <span id="rootPath" class="mono dim trunc"></span>
+  </div>
+  <div class="headstate">
+    <span id="statusPill" class="pill">—</span>
+    <span id="phaseName" class="dim">—</span>
+    <span id="elapsed" class="mono">00:00</span>
+    <span id="progress" class="mono dim">—</span>
+    <span id="conn" class="conn off">DISCONNECTED</span>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button role="tab" class="active" data-tab="live">Live</button>
+  <button role="tab" data-tab="dag">Worker DAG</button>
+  <button role="tab" data-tab="graph">CodeGraph</button>
+  <button role="tab" data-tab="evidence">Verification</button>
+  <button role="tab" data-tab="log">Activity</button>
+  <button role="tab" data-tab="history">History</button>
+</nav>
+
+<main>
+  <!-- LIVE -->
+  <section id="tab-live" class="tabpane active">
+    <div class="stats" id="stats"></div>
+    <div class="grid2">
+      <div class="card">
+        <h2>Execution pipeline</h2>
+        <p class="hint">Phases appear only when the engine reports them. Nothing is estimated.</p>
+        <div id="pipeline" class="pipeline"></div>
+        <div id="phaseDetail" class="detail"></div>
+      </div>
+      <div class="card">
+        <h2>Current worker</h2>
+        <div id="currentWorker" class="current"></div>
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <h2>Workers</h2>
+        <div id="workerTable" class="tablewrap"></div>
+      </div>
+      <div class="card">
+        <h2>Latest events</h2>
+        <div id="liveTail" class="tail mono"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DAG -->
+  <section id="tab-dag" class="tabpane">
+    <div class="card">
+      <div class="row">
+        <h2>Worker DAG</h2>
+        <div class="tools">
+          <button id="dagFit" class="btn">Fit</button>
+          <button id="dagZoomIn" class="btn">+</button>
+          <button id="dagZoomOut" class="btn">−</button>
+        </div>
+      </div>
+      <p class="hint" id="dagMeta">No DAG event in this run.</p>
+      <div class="canvas" id="dagCanvas">
+        <svg id="dagSvg" role="img" aria-label="Worker dependency graph"></svg>
+      </div>
+    </div>
+    <div class="card" id="dagDetailCard">
+      <h2>Selected worker</h2>
+      <div id="dagDetail" class="detail">Select a node.</div>
+    </div>
+  </section>
+
+  <!-- CODEGRAPH -->
+  <section id="tab-graph" class="tabpane">
+    <div class="card">
+      <div class="row">
+        <h2>CodeGraph</h2>
+        <div class="tools">
+          <input id="gSearch" class="input" placeholder="search module or symbol" aria-label="Search CodeGraph">
+          <select id="gRel" class="input" aria-label="Relationship filter">
+            <option value="">all relations</option>
+          </select>
+          <button id="gFit" class="btn">Fit</button>
+        </div>
+      </div>
+      <p class="hint" id="gMeta">No CodeGraph event in this run.</p>
+      <div class="canvas" id="gCanvas"><svg id="gSvg" role="img" aria-label="Code graph"></svg></div>
+    </div>
+    <div class="card"><h2>Selection</h2><div id="gDetail" class="detail">Select a node.</div></div>
+  </section>
+
+  <!-- EVIDENCE -->
+  <section id="tab-evidence" class="tabpane">
+    <div class="grid2">
+      <div class="card"><h2>Verdict</h2><div id="verdictBox" class="detail"></div></div>
+      <div class="card"><h2>Evidence seal</h2><div id="sealBox" class="detail"></div></div>
+    </div>
+    <div class="grid2">
+      <div class="card"><h2>Scope validation</h2><div id="scopeBox" class="detail"></div></div>
+      <div class="card"><h2>Checks</h2><div id="checkList" class="tablewrap"></div></div>
+    </div>
+    <div class="card">
+      <h2>Worker verdicts</h2>
+      <div id="workerVerdicts" class="tablewrap"></div>
+    </div>
+  </section>
+
+  <!-- LOG -->
+  <section id="tab-log" class="tabpane">
+    <div class="card">
+      <div class="row">
+        <h2>Activity log</h2>
+        <div class="tools">
+          <input id="logSearch" class="input" placeholder="search" aria-label="Search events">
+          <select id="logSeverity" class="input" aria-label="Severity">
+            <option value="">all severities</option>
+            <option value="error">error</option>
+            <option value="warning">warning</option>
+            <option value="info">info</option>
+          </select>
+          <select id="logWorker" class="input" aria-label="Worker"><option value="">all workers</option></select>
+          <button id="logFollow" class="btn on">Auto-scroll</button>
+          <button id="logCopy" class="btn">Copy</button>
+        </div>
+      </div>
+      <div id="logList" class="loglist mono"></div>
+    </div>
+  </section>
+
+  <!-- HISTORY -->
+  <section id="tab-history" class="tabpane">
+    <div class="card">
+      <div class="row"><h2>Run history</h2><span class="hint" id="histCount"></span></div>
+      <div id="historyTable" class="tablewrap"></div>
+    </div>
+  </section>
+</main>
+<footer class="foot">
+  <span>Read-only observability. Not governance evidence — never authorizes shipping.</span>
+  <span id="footStats" class="mono dim"></span>
+</footer>
+<script src="/app.js"></script>
+</body>
+</html>
