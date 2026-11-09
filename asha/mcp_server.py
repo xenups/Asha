@@ -81,6 +81,7 @@ from .execution import (
 )
 from .governance.dag import run_workers_dag
 from .governance.worker_execution import build_acceptance, run_worker_in_worktree
+from .observability import events as obs
 from .router import RuntimeMode, route
 from .runner import _acceptance_env
 from .types import OrchestratorError
@@ -1511,7 +1512,12 @@ def asha_run_spec(arguments: dict[str, Any], *,
 
         # Reuse the Phase-5.4 DAG verbatim: same normalizer, same
         # validator, same generations -- no second builder exists here.
+        obs.emit("planning.started", "planner", stage_id="planning",
+                 status="running", message="pre-flight DAG plan")
         plan_result = asha_plan_dag({"root": root, "workers": workers})
+        obs.emit("planning.completed", "planner", stage_id="planning",
+                 status="completed",
+                 message="DAG plan computed (pre-flight, nothing executed)")
         if plan_result["isError"]:
             return plan_result
         plan = json.loads(plan_result["content"][0]["text"])
@@ -2100,6 +2106,9 @@ def asha_get_surgical_context(arguments: dict[str, Any]
                                             errors="replace")
             root_node = sym_node(module, item_symbol)
             reach = closure(graph, (root_node,), module)
+            obs.emit("context_slice.started", "context",
+                     stage_id="context", status="running",
+                     message="slicing " + str(item_symbol))
             sliced = slice_context(source, target_name=item_symbol,
                                    target_module=module, graph=graph,
                                    indices=indices)
