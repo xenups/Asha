@@ -119,7 +119,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._json(store.snapshot(self.root, run_id))
         elif sub == 'graph':
             snap = store.snapshot(self.root, run_id)
-            self._json({'dag': snap['dag'], 'codegraph': snap['codegraph']})
+            codegraph_view = snap['codegraph']
+            if not codegraph_view.get('available'):
+                meta = store.read_meta(self.root, run_id)
+                codegraph_view = _project_graph(str(meta.get('root') or ''))
+            self._json({'dag': snap['dag'], 'codegraph': codegraph_view})
         elif sub == 'events':
             after = _int(params, 'after', 0)
             limit = min(_int(params, 'limit', 2000), 5000)
@@ -161,7 +165,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
                                            limit=500)
                 for event in events:
                     frame = (f'id: {event["sequence"]}\n'
-                             f'event: {event.get("event_type", "message")}\n'
                              'data: ' + json.dumps(event, default=str)
                              + '\n\n')
                     self.wfile.write(frame.encode('utf-8'))
@@ -188,6 +191,54 @@ class DashboardHandler(BaseHTTPRequestHandler):
 def _opt(params: dict[str, list[str]], key: str) -> str | None:
     value = (params.get(key) or [''])[0]
     return value or None
+
+
+_GRAPH_MEMO: dict[str, tuple[float, dict[str, Any]]] = {}
+GRAPH_TTL_S = 60.0
+
+
+def _project_graph(root: str) -> dict[str, Any]:
+    """The checkout's real CodeGraph, via Asha's own index cache.
+
+    Nothing is synthesised: if the graph cannot be built the answer is
+    UNKNOWN with a reason, never an empty-but-plausible graph.
+    """
+    now = time.monotonic()
+    memo = _GRAPH_MEMO.get(root)
+    if memo and now - memo[0] < GRAPH_TTL_S:
+        return memo[1]
+    try:
+        from asha import codegraph, graph_cache
+        from asha.common import paths
+
+        root_path = Path(root)
+        result = graph_cache.load(root_path, paths.get_cache_dir(root_path)
+                                  / 'codegraph')
+        graph = result.graph
+        unresolved = {node for node, boundary in graph.boundaries
+                      if boundary == codegraph.BOUNDARY_UNRESOLVED}
+        payload: dict[str, Any] = {
+            'available': True,
+            'state': 'INCOMPLETE' if unresolved else 'COMPLETE',
+            'source': 'dashboard:' + result.mode,
+            'modules': len({node.split('.')[0] for node in graph.nodes}),
+            'edges': len(graph.edges),
+            'unresolved': len(unresolved),
+            'nodes': [{'id': node, 'kind': 'module',
+                       'module': node.split('.')[0],
+                       'confidence': 'UNKNOWN' if node in unresolved
+                       else 'COMPLETE'}
+                      for node in sorted(graph.nodes)[:4000]],
+            'relations': [{'from': edge.source, 'to': edge.target,
+                           'rel': edge.kind}
+                          for edge in list(graph.edges)[:8000]],
+        }
+    except Exception as exc:  # a graph is optional; never break the page
+        payload = {'available': False, 'state': 'UNKNOWN',
+                   'reason': f'graph unavailable: {type(exc).__name__}: {exc}'
+                             [:200]}
+    _GRAPH_MEMO[root] = (now, payload)
+    return payload
 
 
 def _int(params: dict[str, list[str]], key: str, default: int) -> int:

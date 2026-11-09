@@ -12,10 +12,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from asha import mcp_server  # noqa: E402
-from asha.governance import dag  # noqa: E402
-from asha.observability import events as obs  # noqa: E402
-from asha.observability import store  # noqa: E402
+from asha import mcp_server
+from asha.governance import dag
+from asha.observability import events as obs
+from asha.observability import store
 
 FILES = {"a.txt": "one\n", "test_ok.py": "def test_ok():\n    assert True\n"}
 

@@ -189,13 +189,13 @@ def test_health_and_run_listing(http) -> None:
 
 def test_snapshot_graph_and_events_endpoints(http) -> None:
     base, _ = http
-    status, _, body = _get(base + "/api/runs/run-1")
+    _, _, body = _get(base + "/api/runs/run-1")
     snap = json.loads(body)
     assert snap["run_id"] == "run-1"
     assert snap["sequence"] == 5  # 4 events + terminal
-    status, _, body = _get(base + "/api/runs/run-1/graph")
+    _, _, body = _get(base + "/api/runs/run-1/graph")
     assert set(json.loads(body)) == {"dag", "codegraph"}
-    status, _, body = _get(base + "/api/runs/run-1/events?after=3")
+    _, _, body = _get(base + "/api/runs/run-1/events?after=3")
     assert [e["sequence"] for e in json.loads(body)["events"]] == [4, 5]
 
 
@@ -225,7 +225,7 @@ def test_security_headers_and_static_assets(http) -> None:
 
 
 def test_sse_replay_then_live_delivery(http) -> None:
-    base, root = http
+    base, _root = http
     res = urllib.request.urlopen(base + "/api/stream?run_id=run-1", timeout=5)
     frames: list[str] = []
     try:

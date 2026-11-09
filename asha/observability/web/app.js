@@ -37,7 +37,7 @@ function setConn(mode) {
   state.conn = mode;
   const pill = $('conn');
   pill.textContent = mode;
-  pill.className = 'conn ' + ({ LIVE: 'live', RECONNECTING: 'reconnecting' }[mode] || 'off');
+  pill.className = 'conn ' + ({ LIVE: 'live', RECONNECTING: 'reconnecting', ENDED: 'ended' }[mode] || 'off');
 }
 
 async function api(path) {
@@ -76,6 +76,7 @@ const fmtAgo = (iso) => {
 };
 const shortId = (s) => (s && s.length > 12 ? s.slice(0, 8) + '…' : esc(s));
 const list = (v) => (Array.isArray(v) && v.length ? v.map((x) => esc(typeof x === 'string' ? x : JSON.stringify(x))) : []);
+const asList = (v) => (Array.isArray(v) ? v : (v ? [String(v)] : []));
 
 function pillFor(status) {
   const s = String(status || '').toUpperCase();
@@ -122,6 +123,11 @@ async function openRun(runId, { reset = true } = {}) {
   state.runId = runId;
   try {
     state.snap = await api(`/api/runs/${encodeURIComponent(runId)}`);
+    try {
+      const g = await api(`/api/runs/${encodeURIComponent(runId)}/graph`);
+      if (g && g.codegraph && g.codegraph.available) state.snap.codegraph = g.codegraph;
+      if (g && g.dag && g.dag.available) state.snap.dag = g.dag;
+    } catch { /* graph is optional */ }
   } catch (err) {
     setConn('DISCONNECTED');
     $('liveTail').replaceChildren(el('div', 'lvl-error', `Cannot read run: ${err.message}`));
@@ -139,16 +145,16 @@ function startStream() {
   const es = new EventSource(url);
   state.es = es;
   es.onopen = () => setConn('LIVE');
-  es.onerror = () => setConn(es.readyState === 2 ? 'DISCONNECTED' : 'RECONNECTING');
+  // every frame is a plain message; the payload carries event_type
   es.onmessage = (ev) => ingest(ev);
-  for (const name of ['run.completed', 'run.failed', 'worker.started', 'worker.completed',
-    'worker.failed', 'candidate_check.completed', 'verdict.computed', 'evidence.sealed']) {
-    es.addEventListener(name, ingest);
-  }
-  es.addEventListener('end', () => { setConn('DISCONNECTED'); scheduleRefetch(); });
+  es.addEventListener('end', () => {
+    setConn('ENDED');
+    if (state.es) { state.es.close(); state.es = null; }
+    scheduleRefetch();
+  });
   es.onerror = () => {
-    setConn(es.readyState === 2 ? 'DISCONNECTED' : 'RECONNECTING');
-    if (es.readyState === 2) setTimeout(() => startStream(), 3000);
+    if (es.readyState === 2) { setConn('DISCONNECTED'); setTimeout(() => startStream(), 3000); }
+    else setConn('RECONNECTING');
   };
 }
 
@@ -170,7 +176,12 @@ function scheduleRefetch() {
   state.refetchTimer = setTimeout(async () => {
     state.refetchTimer = null;
     try {
+      const prev = state.snap;
       state.snap = await api(`/api/runs/${encodeURIComponent(state.runId)}`);
+      if (prev) {
+        if (prev.codegraph && prev.codegraph.available) state.snap.codegraph = prev.codegraph;
+        if (prev.dag && prev.dag.available && !(state.snap.dag || {}).available) state.snap.dag = prev.dag;
+      }
       renderAll();
     } catch { /* keep last good snapshot */ }
   }, 700);
@@ -686,9 +697,9 @@ function renderEvidence() {
     const row = (k, val) => { dl.append(el('dt', '', k), el('dd', '', val)); };
     row('verdict', v.status || 'UNKNOWN');
     row('reason', v.reason || '—');
-    row('new failures', (v.new_failures || []).join(', ') || 'none');
-    row('pre-existing', (v.pre_existing || []).join(', ') || 'none');
-    row('unparsed', (v.unparsed || []).join(', ') || 'none');
+    row('new failures', asList(v.new_failures).join(', ') || 'none');
+    row('pre-existing', asList(v.pre_existing).join(', ') || 'none');
+    row('unparsed', asList(v.unparsed).join(', ') || 'none');
     vbox.append(dl);
     const note = el('div', 'notice', 'A verdict describes Asha\'s comparison outcome. A sealed evidence document is not proof that the code is correct, and this dashboard never authorizes shipping.');
     vbox.append(note);
@@ -717,7 +728,7 @@ function renderEvidence() {
     const dl = el('dl');
     const row = (k, val) => { dl.append(el('dt', '', k), el('dd', '', val)); };
     row('status', scope.status || '—');
-    row('violations', (scope.violations || []).join(', ') || 'none');
+    row('violations', asList(scope.violations).join(', ') || 'none');
     row('files', String((scope.files || []).length));
     scbox.append(dl);
   }
@@ -884,6 +895,24 @@ $('gFit').onclick = () => { state.gview = {}; renderCodeGraph(); };
 $('dagFit').onclick = () => { state.view = {}; renderDag(); };
 $('dagZoomIn').onclick = () => { const v = state.view; v.w /= 1.25; v.h /= 1.25; renderDag(); };
 $('dagZoomOut').onclick = () => { const v = state.view; v.w *= 1.25; v.h *= 1.25; renderDag(); };
+
+/* follow a newly started run: the dashboard can be open first */
+async function followLiveRun() {
+  if (!state.snap || !state.runId) return;
+  if (!['RUNNING', 'INTERRUPTED', 'UNKNOWN'].includes(String(state.snap.status))) return;
+  try {
+    const data = await api('/api/runs');
+    const live = data.runs.find((r) => r.run_id !== state.runId && r.status === 'RUNNING');
+    const stillListed = data.runs.some((r) => r.run_id === state.runId);
+    if (live) {
+      $('runSelect').value = live.run_id;
+      await openRun(live.run_id);
+    } else if (!stillListed) {
+      await loadRuns();
+    }
+  } catch { /* server gone: keep the current view */ }
+}
+setInterval(followLiveRun, 3000);
 
 /* elapsed ticks while a run is live */
 setInterval(() => {

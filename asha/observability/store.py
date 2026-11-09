@@ -68,7 +68,7 @@ def read_events(root: Path, run_id: str, *, after: int = 0,
             try:
                 event = json.loads(line)
                 seq = int(event['sequence'])
-            except Exception:  # noqa: S112 -- skip a malformed record
+            except Exception:  # noqa: S112 -- torn record: skip, never crash
                 continue
             if seq <= after:
                 continue
@@ -163,11 +163,13 @@ def snapshot(root: Path, run_id: str) -> dict[str, Any]:
                                         event['timestamp'])
 
         if etype == 'dag.created':
-            dag = {'nodes': _scrub(data.get('nodes', [])),
+            dag = {'available': True,
+                   'nodes': _scrub(data.get('nodes', [])),
                    'edges': _scrub(data.get('edges', {})),
                    'generation': data.get('generation')}
         elif etype in ('codegraph.build.completed', 'codegraph.load.completed'):
-            codegraph = {'state': data.get('state', 'COMPLETE'),
+            codegraph = {'available': True,
+                         'state': data.get('state', 'COMPLETE'),
                          'modules': data.get('modules', 0),
                          'edges': data.get('edges', 0),
                          'nodes': _scrub(data.get('nodes', [])),
@@ -252,7 +254,7 @@ def list_runs(root: Path, *, limit: int = 100) -> list[dict[str, Any]]:
             continue
         try:
             meta = json.loads((entry / 'meta.json').read_text('utf-8'))
-        except Exception:  # noqa: S112 -- unreadable run: skip it
+        except Exception:  # noqa: S112 -- a directory without valid meta is not a run
             continue
         rows = read_events(root, entry.name, limit=100000)
         terminal = [e for e in rows if e.get('event_type') in TERMINAL]

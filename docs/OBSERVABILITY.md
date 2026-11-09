@@ -58,6 +58,14 @@ Not emitted, because Asha does not observe them: a worker's private
 reasoning, an LLM token stream, CPU/memory of a child process, progress of a
 long external command. The dashboard never invents them.
 
+## 3a. CodeGraph source
+
+The CodeGraph view shows a run's own `codegraph.*` event when the run built a
+graph. When it did not, the dashboard builds one for the run's `--root` through
+`asha.graph_cache.load` (Asha's own indexer, its own cache — cold, warm-hit or
+purged), labels the source `dashboard:<mode>` and caches the projection for
+60 s. It never renders a graph it did not obtain from Asha.
+
 ## 4. Event schema (v1)
 
 ```json
@@ -113,6 +121,15 @@ deletes, and no path is built from user input (run ids match
 `^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`; static assets are a fixed whitelist).
 
 ## 7. Browser views
+
+Real captures from a two-worker demo run (`asha run` against a scratch repo,
+recorded with `ASHA_TELEMETRY=1`):
+
+![Live execution view](img/live.png)
+![Worker DAG](img/dag.png)
+![CodeGraph (built for the checkout through Asha's index cache)](img/codegraph.png)
+![Run history](img/history.png)
+
 
 * **Live** — header (run, repo, status, current phase, elapsed, progress),
   worker counters, a pipeline whose phases come from emitted events only,
