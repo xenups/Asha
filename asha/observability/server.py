@@ -67,6 +67,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                          if ctype.startswith('text/') or ctype.endswith(
                              'javascript') else ctype)
         self.send_header('Content-Length', str(len(body)))
+        # a stale app.js outlives a dashboard upgrade: never cache the bundle
+        self.send_header('Cache-Control', 'no-store')
         for key, value in HEADERS.items():
             self.send_header(key, value)
         self.end_headers()

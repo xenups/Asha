@@ -213,6 +213,13 @@ def snapshot(root: Path, run_id: str) -> dict[str, Any]:
 
     if ended is None and meta.get('started_at'):
         status = 'RUNNING' if _alive(meta) else 'INTERRUPTED'
+    # A worker event may carry no task text (older runs, lean specs); the DAG
+    # node is the authoritative mapping from worker id to its task.
+    for node in (dag or {}).get('nodes') or []:
+        worker = workers.get(str(node.get('id')))
+        if worker is not None and not worker.get('task') and node.get('task'):
+            worker['task'] = node['task']
+
     # A running worker has no terminal event yet: its duration is "so far",
     # computed from the same clock the terminal path uses.
     if status == 'RUNNING':

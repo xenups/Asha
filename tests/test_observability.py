@@ -586,3 +586,60 @@ def test_terminal_status_replaces_running_in_the_snapshot(tmp_path) -> None:
     snap = store.snapshot(root, "run-live")
     assert snap["status"] == "ok"
     assert snap["ended_at"]
+
+# ---------------------------------------------------------------- phase 19 --
+def _p19_run(tmp_path: Path, run_id: str, nodes: list[dict],
+             starts: list[tuple[str, str]]) -> Path:
+    root = _p18_root(tmp_path)
+    obs.start_run(root, run_id, {"pid": 999999})
+    obs.emit("dag.created", "dag", stage_id="dag", status="created",
+             message="worker DAG projected",
+             data={"nodes": nodes, "edges": {}, "generation": 0})
+    for wid, task in starts:
+        obs.emit("worker.started", "dag", stage_id="worker", status="RUNNING",
+                 worker_id=wid, data={"task": task, "writes": ["a.py"]})
+    return root
+
+
+def test_worker_task_comes_from_its_own_event(tmp_path) -> None:
+    root = _p19_run(tmp_path, "run-task", [{"id": "w1", "task": "node task"}],
+                    [("w1", "event task")])
+    assert store.snapshot(root, "run-task")["workers"]["w1"]["task"] == "event task"
+
+
+def test_worker_task_falls_back_to_the_dag_node(tmp_path) -> None:
+    root = _p19_run(tmp_path, "run-fallback", [{"id": "w1", "task": "node task"}],
+                    [("w1", "")])
+    assert store.snapshot(root, "run-fallback")["workers"]["w1"]["task"] == "node task"
+
+
+def test_worker_task_stays_empty_when_nothing_knows_it(tmp_path) -> None:
+    root = _p19_run(tmp_path, "run-notask", [{"id": "w1"}], [("w1", "")])
+    assert store.snapshot(root, "run-notask")["workers"]["w1"]["task"] == ""
+
+
+def test_worker_tasks_map_by_id_not_by_order(tmp_path) -> None:
+    root = _p19_run(
+        tmp_path, "run-multi",
+        [{"id": "alpha", "task": "task alpha"}, {"id": "beta", "task": "task beta"}],
+        [("beta", ""), ("alpha", "")])
+    workers = store.snapshot(root, "run-multi")["workers"]
+    assert workers["alpha"]["task"] == "task alpha"
+    assert workers["beta"]["task"] == "task beta"
+
+
+def test_worker_task_replays_from_persisted_events(tmp_path) -> None:
+    root = _p19_run(tmp_path, "run-replay", [{"id": "w1", "task": "replayed task"}],
+                    [("w1", "")])
+    obs.reset()  # a fresh process reads only what is on disk
+    assert store.snapshot(root, "run-replay")["workers"]["w1"]["task"] == "replayed task"
+
+
+def test_static_assets_are_served_no_store(http) -> None:
+    base, _ = http
+    for path in ("/", "/app.js", "/styles.css"):
+        status, headers, body = _get(base + path)
+        assert status == 200 and body
+        assert headers.get("Cache-Control") == "no-store", path
+        assert "Content-Security-Policy" in headers, path
+        assert headers.get("X-Content-Type-Options") == "nosniff", path
