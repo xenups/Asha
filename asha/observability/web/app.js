@@ -121,6 +121,7 @@ async function openRun(runId, { reset = true } = {}) {
     state.selectedWorker = null; state.selectedStage = null; state.selectedGraph = null;
   }
   state.runId = runId;
+  state.streamDone = false;
   try {
     state.snap = await api(`/api/runs/${encodeURIComponent(runId)}`);
     try {
@@ -131,6 +132,8 @@ async function openRun(runId, { reset = true } = {}) {
   } catch (err) {
     setConn('DISCONNECTED');
     $('liveTail').replaceChildren(el('div', 'lvl-error', `Cannot read run: ${err.message}`));
+    // the dashboard server may simply be down: keep trying, never a dead page
+    setTimeout(() => openRun(runId, { reset: false }), 3000);
     return;
   }
   state.meta = state.snap.meta || {};
@@ -148,11 +151,13 @@ function startStream() {
   // every frame is a plain message; the payload carries event_type
   es.onmessage = (ev) => ingest(ev);
   es.addEventListener('end', () => {
+    state.streamDone = true;
     setConn('ENDED');
     if (state.es) { state.es.close(); state.es = null; }
     scheduleRefetch();
   });
   es.onerror = () => {
+    if (state.streamDone) return;  // a finished run must not reconnect in a loop
     if (es.readyState === 2) { setConn('DISCONNECTED'); setTimeout(() => startStream(), 3000); }
     else setConn('RECONNECTING');
   };
@@ -162,8 +167,12 @@ function ingest(ev) {
   let payload;
   try { payload = JSON.parse(ev.data); } catch { return; }
   const seq = Number(payload.sequence);
-  if (!seq || state.seen.has(seq)) return; // duplicate-event protection
-  state.seen.add(seq);
+  // duplicate-event protection is per (run_id, sequence): two runs both
+  // start at sequence 1, so a bare sequence key would drop real events.
+  if (!seq || payload.run_id !== state.runId) return;
+  const key = payload.run_id + ':' + seq;
+  if (state.seen.has(key)) return;
+  state.seen.add(key);
   state.events.push(payload);
   state.cursor = Math.max(state.cursor, seq);
   if (state.events.length > 5000) state.events = state.events.slice(-4000);
