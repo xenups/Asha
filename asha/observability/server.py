@@ -70,9 +70,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
         for key, value in HEADERS.items():
             self.send_header(key, value)
         self.end_headers()
-        self.wfile.write(body)
+        if not getattr(self, '_head_only', False):
+            self.wfile.write(body)
 
     # -- routing ---------------------------------------------------------
+    def do_HEAD(self) -> None:
+        """Same headers as GET, no body: health probes and caches."""
+        self._head_only = True
+        self.do_GET()
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         route = parsed.path

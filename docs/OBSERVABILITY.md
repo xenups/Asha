@@ -128,6 +128,7 @@ recorded with `ASHA_TELEMETRY=1`):
 ![Live execution view](img/live.png)
 ![Worker DAG](img/dag.png)
 ![CodeGraph (built for the checkout through Asha's index cache)](img/codegraph.png)
+![Verification and evidence](img/verification.png)
 ![Run history](img/history.png)
 
 
