@@ -292,6 +292,24 @@ real cost.
   is not ship authorization.
 - The benchmark above is bounded evidence from four frozen scenarios.
 
+## Live observability dashboard
+
+Asha can record its real execution and show it in a local, read-only
+dashboard — worker DAG, CodeGraph, verification evidence, activity log and run
+history. Recording is off unless you ask for it; nothing is simulated, and the
+dashboard can never authorize a ship.
+
+
+
+```bash
+ASHA_TELEMETRY=1 asha run --spec task.json      # record a run
+asha dashboard --root .                          # http://127.0.0.1:7331
+```
+
+The dashboard binds loopback only, serves no external assets and exposes no
+command endpoints. See [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) for the
+event schema, storage layout, API and limitations.
+
 ## Further reading
 
 - [Governance orientation](docs/ORIENTATION.md) — module map and invariants.

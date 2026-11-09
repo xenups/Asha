@@ -181,9 +181,13 @@ def test_stub_emission_reduces_t1_context(graph_env) -> None:
     # 110500: Phase 3's asha.ladder package joins this closure for the same
     # reason as in test_forward_slice_semantics_unchanged (491 stubs, target
     # body 9808 unchanged, measured 106334; ~3.9% headroom).
+    # 114000: Phase 13 instrumentation adds one import stub to
+    # worker_execution (observability events), measured 110811 -- +311 bytes
+    # over the previous 110500 bound, so the bound moves by a measured amount
+    # and still fails loudly if stubs degrade toward full bodies.
     _assert_stub_dominated(sl)
     emitted = len(sl.target_source) + sum(len(st.text) for st in sl.stubs)
-    assert emitted < 110500, emitted
+    assert emitted < 114000, emitted
 
 
 def test_reverse_forward_combined_keeps_required_t3_context(graph_env) -> None:
