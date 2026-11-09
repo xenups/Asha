@@ -166,7 +166,8 @@ def snapshot(root: Path, run_id: str) -> dict[str, Any]:
             dag = {'available': True,
                    'nodes': _scrub(data.get('nodes', [])),
                    'edges': _scrub(data.get('edges', {})),
-                   'generation': data.get('generation')}
+                   'generation': data.get('generation'),
+                   'truncation': data.get('truncation')}
         elif etype in ('codegraph.build.completed', 'codegraph.load.completed'):
             codegraph = {'available': True,
                          'state': data.get('state', 'COMPLETE'),
@@ -175,7 +176,8 @@ def snapshot(root: Path, run_id: str) -> dict[str, Any]:
                          'nodes': _scrub(data.get('nodes', [])),
                          'relations': _scrub(data.get('relations', [])),
                          'source': etype.split('.')[1],
-                         'reason': data.get('reason')}
+                         'reason': data.get('reason'),
+                         'truncation': data.get('truncation')}
         elif etype.startswith(('candidate_check', 'baseline')):
             checks.append({'type': etype, 'name': data.get('name'),
                            'status': data.get('status', event.get('status')),

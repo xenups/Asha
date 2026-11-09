@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
 import threading
 import time
 import urllib.error
@@ -282,3 +283,210 @@ def test_run_scope_never_writes_inside_the_repository(tmp_path) -> None:
     assert not (root / "observability").exists()
     assert store.runs_dir(root).is_dir()
     time.sleep(0.01)
+
+# -- Phase 15: F1 oversized events and F2 CodeGraph root validation ----------
+
+
+def _dag_data(workers: int) -> dict:
+    return {
+        "nodes": [{"id": f"w{i}", "task": f"build module {i}",
+                   "reads": [f"src/m{i}.py"], "writes": [f"src/m{i}.py"],
+                   "declared_scope": [f"src/m{i}.py"],
+                   "deps": [] if i == 0 else [f"w{i - 1}"]}
+                  for i in range(workers)],
+        "edges": {f"w{i}": ([] if i == 0 else [f"w{i - 1}"])
+                  for i in range(workers)},
+        "generation": workers,
+        "uncertain": [],
+    }
+
+
+def _emit_dag(run_root: Path, workers: int, run_id: str) -> tuple[Path, str]:
+    obs.start_run(run_root, run_id, {"command": "dag", "workers": workers})
+    obs.emit("dag.created", "dag_coordinator", stage_id="dag",
+             status="created", message="worker DAG projected",
+             data=_dag_data(workers))
+    obs.emit("worker.started", "test", worker_id="w0", status="RUNNING",
+             message="tick")
+    obs.finish_run("ok")
+    return run_root, run_id
+
+
+def _every_line_parses(run_root: Path, run_id: str) -> list[dict]:
+    path = obs.run_dir(run_root) / "runs" / run_id / "events.jsonl"
+    return [json.loads(line) for line in
+            path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def test_large_dag_event_sixty_workers_is_persisted(tmp_path: Path) -> None:
+    root, run_id = _emit_dag(_root(tmp_path), 60, "dag-60")
+    records = _every_line_parses(root, run_id)
+    dag = next(r for r in records if r["event_type"] == "dag.created")
+    assert len(dag["data"]["nodes"]) == 60
+    assert dag["data"]["nodes"][0]["id"] == "w0"
+    assert dag["data"]["edges"]["w59"] == ["w58"]
+    assert dag["data"].get("truncation") is None
+    replayed = store.read_events(root, run_id, limit=10)
+    assert replayed[0]["event_type"] == "dag.created"
+
+
+def test_large_dag_event_hundred_workers_is_persisted(tmp_path: Path) -> None:
+    root, run_id = _emit_dag(_root(tmp_path), 100, "dag-100")
+    records = _every_line_parses(root, run_id)
+    dag = next(r for r in records if r["event_type"] == "dag.created")
+    assert len(dag["data"]["nodes"]) == 100
+    assert len(json.dumps(dag).encode("utf-8")) <= obs.MAX_EVENT_BYTES
+
+
+def test_oversized_dag_is_pruned_and_marked(tmp_path: Path) -> None:
+    root, run_id = _emit_dag(_root(tmp_path), 600, "dag-600")
+    records = _every_line_parses(root, run_id)
+    dag = next(r for r in records if r["event_type"] == "dag.created")
+    cut = dag["data"]["truncation"]
+    assert cut["truncated"] is True
+    assert cut["omitted"]["nodes"] > 0
+    assert cut["omitted"]["edges"] > 0
+    ids = {node["id"] for node in dag["data"]["nodes"]}
+    assert ids
+    assert ids <= {f"w{i}" for i in range(600)}
+    for key, deps in dag["data"]["edges"].items():
+        assert key in ids
+        assert all(dep in ids for dep in deps)
+
+
+def test_codegraph_event_with_many_nodes_stays_readable(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    run_id = "graph-200"
+    obs.start_run(root, run_id, {"command": "dag"})
+    nodes = [{"id": f"pkg.mod{i}.run", "kind": "module",
+              "module": f"pkg.mod{i}", "confidence": "COMPLETE"}
+             for i in range(200)]
+    relations = [{"from": nodes[i]["id"], "to": nodes[i + 1]["id"],
+                  "rel": "import"} for i in range(len(nodes) - 1)]
+    obs.emit("codegraph.load.completed", "codegraph", stage_id="codegraph",
+             status="completed", message="graph warm_hit",
+             data={"state": "COMPLETE", "source": "warm_hit", "modules": 200,
+                   "edges": len(relations), "nodes": nodes,
+                   "relations": relations, "unresolved": 0})
+    obs.finish_run("ok")
+    records = _every_line_parses(root, run_id)
+    graph = next(r for r in records if r["event_type"].startswith("codegraph"))
+    assert graph["data"]["nodes"]
+    if graph["data"].get("truncation"):
+        assert graph["data"]["state"] == "INCOMPLETE"
+        kept = {node["id"] for node in graph["data"]["nodes"]}
+        assert all(rel["from"] in kept and rel["to"] in kept
+                   for rel in graph["data"]["relations"])
+
+
+def test_multibyte_payload_measures_utf8_bytes(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    run_id = "utf8"
+    obs.start_run(root, run_id, {"command": "dag"})
+    filler = "فایل‌های پروژه با نام بسیار طولانی " * 12  # 2 bytes per char
+    obs.emit("log.info", "test", message="شروع بررسی",
+             data={"files": [f"{filler}{i}.py" for i in range(150)]})
+    obs.emit("log.info", "test", message="پایان")
+    obs.finish_run("ok")
+    records = _every_line_parses(root, run_id)
+    for record in records:
+        assert len(json.dumps(record, ensure_ascii=False).encode("utf-8"))             <= obs.MAX_EVENT_BYTES
+    big = records[0]
+    assert big["message"] == "شروع بررسی"
+    assert big["data"].get("truncation") or big["data"].get("reason")
+
+
+def test_replay_integrity_across_large_and_small_events(tmp_path: Path) -> None:
+    root, run_id = _emit_dag(_root(tmp_path), 600, "mix")
+    obs.emit("log.info", "test", message="after the big one")
+    obs.finish_run("ok")
+    records = _every_line_parses(root, run_id)
+    sequences = [record["sequence"] for record in records]
+    assert sequences == list(range(1, len(records) + 1))
+    assert len(set(sequences)) == len(sequences)
+    assert [r["event_type"] for r in records][-1] == "run.completed"
+    assert len(store.read_events(root, run_id, limit=100)) == len(records)
+
+
+def _git_repo(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", str(path)], check=True,
+                   capture_output=True)
+    (path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    return path
+
+
+def test_project_graph_rejects_an_empty_root(tmp_path: Path,
+                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    dash._GRAPH_MEMO.clear()
+    monkeypatch.chdir(_git_repo(tmp_path / "cwd"))
+    assert dash._project_graph("") == {
+        "available": False, "state": "UNKNOWN",
+        "reason": "no repository root in run metadata"}
+
+
+def test_project_graph_rejects_a_missing_path(tmp_path: Path) -> None:
+    dash._GRAPH_MEMO.clear()
+    out = dash._project_graph(str(tmp_path / "absent"))
+    assert out["available"] is False
+    assert out["state"] == "UNKNOWN"
+    assert "not a directory" in out["reason"]
+
+
+def test_project_graph_rejects_a_regular_file(tmp_path: Path) -> None:
+    dash._GRAPH_MEMO.clear()
+    target = tmp_path / "plain.txt"
+    target.write_text("x", encoding="utf-8")
+    out = dash._project_graph(str(target))
+    assert out["available"] is False
+    assert "not a directory" in out["reason"]
+
+
+def test_project_graph_rejects_a_non_git_directory(tmp_path: Path) -> None:
+    dash._GRAPH_MEMO.clear()
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    out = dash._project_graph(str(plain))
+    assert out["available"] is False
+    assert "not a git repository" in out["reason"]
+
+
+def test_project_graph_never_uses_the_working_directory(tmp_path: Path,
+                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    dash._GRAPH_MEMO.clear()
+    cwd_repo = _git_repo(tmp_path / "cwd")
+    (cwd_repo / "other.py").write_text("y = 2\n", encoding="utf-8")
+    monkeypatch.chdir(cwd_repo)
+    for bad in ("", str(tmp_path / "absent"), str(tmp_path)):
+        out = dash._project_graph(bad)
+        assert out["available"] is False
+        assert out["state"] == "UNKNOWN"
+        assert "nodes" not in out
+
+
+def test_project_graph_accepts_a_valid_repository(tmp_path: Path) -> None:
+    dash._GRAPH_MEMO.clear()
+    repo = _git_repo(tmp_path / "repo")
+    out = dash._project_graph(str(repo))
+    assert out["available"] is True
+    assert out["state"] in ("COMPLETE", "INCOMPLETE")
+    assert out["nodes"]
+
+
+def test_project_graph_accepts_a_linked_worktree(tmp_path: Path) -> None:
+    dash._GRAPH_MEMO.clear()
+    repo = _git_repo(tmp_path / "repo")
+    (repo / "b.py").write_text("z = 3\n", encoding="utf-8")
+    git = ["git", "-C", str(repo), "-c", "user.email=a@b.c",
+           "-c", "user.name=audit"]
+    subprocess.run([*git, "add", "."], check=True, capture_output=True)
+    subprocess.run([*git, "commit", "-qm", "base"], check=True,
+                   capture_output=True)
+    worktree = tmp_path / "wt"
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q",
+                    str(worktree), "-b", "side"], check=True,
+                   capture_output=True)
+    assert (worktree / ".git").is_file()
+    out = dash._project_graph(str(worktree))
+    assert out["available"] is True
+    assert out["nodes"]

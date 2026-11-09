@@ -203,21 +203,36 @@ _GRAPH_MEMO: dict[str, tuple[float, dict[str, Any]]] = {}
 GRAPH_TTL_S = 60.0
 
 
+def _repo_root(root: str) -> tuple[Path | None, str | None]:
+    """The run's repository, or the reason it cannot be treated as one."""
+    if not root:
+        return None, 'no repository root in run metadata'
+    path = Path(root)
+    if not path.is_dir():
+        return None, f'repository root is not a directory: {root[:200]}'
+    git = path / '.git'
+    if not (git.is_dir() or git.is_file()):  # a worktree records .git as a file
+        return None, f'not a git repository: {root[:200]}'
+    return path, None
+
+
 def _project_graph(root: str) -> dict[str, Any]:
     """The checkout's real CodeGraph, via Asha's own index cache.
 
     Nothing is synthesised: if the graph cannot be built the answer is
     UNKNOWN with a reason, never an empty-but-plausible graph.
     """
+    root_path, why = _repo_root(root)
+    if root_path is None:
+        return {'available': False, 'state': 'UNKNOWN', 'reason': why}
     now = time.monotonic()
-    memo = _GRAPH_MEMO.get(root)
+    memo = _GRAPH_MEMO.get(str(root_path))
     if memo and now - memo[0] < GRAPH_TTL_S:
         return memo[1]
     try:
         from asha import codegraph, graph_cache
         from asha.common import paths
 
-        root_path = Path(root)
         result = graph_cache.load(root_path, paths.get_cache_dir(root_path)
                                   / 'codegraph')
         graph = result.graph
@@ -243,7 +258,7 @@ def _project_graph(root: str) -> dict[str, Any]:
         payload = {'available': False, 'state': 'UNKNOWN',
                    'reason': f'graph unavailable: {type(exc).__name__}: {exc}'
                              [:200]}
-    _GRAPH_MEMO[root] = (now, payload)
+    _GRAPH_MEMO[str(root_path)] = (now, payload)
     return payload
 
 

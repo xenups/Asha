@@ -490,7 +490,10 @@ function renderDag() {
   if (!state.view.w) { state.view = { x: 0, y: 0, w: rect.width || 1200, h: rect.height || 520 }; }
   const view = state.view;
   svg.setAttribute('viewBox', `${view.x} ${view.y} ${view.w} ${view.h}`);
-  $('dagMeta').textContent = `${layout.nodes.length} workers · ${layout.gens} generations · ${Object.keys(layout.edges).length} nodes with dependencies · generation ${dag.generation ?? '—'}`;
+  const cut = dag.truncation && dag.truncation.truncated
+    ? ` · TRUNCATED: ${JSON.stringify(dag.truncation.omitted)} omitted, edges filtered`
+    : '';
+  $('dagMeta').textContent = `${layout.nodes.length} workers · ${layout.gens} generations · ${Object.keys(layout.edges).length} nodes with dependencies · generation ${dag.generation ?? '—'}${cut}`;;
   const gEdges = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   const gNodes = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   svg.append(gEdges, gNodes);
@@ -616,7 +619,9 @@ function renderCodeGraph() {
   const view = state.gview;
   svg.setAttribute('viewBox', `${view.x} ${view.y} ${view.w} ${view.h}`);
   const counts = layout.nodes.length;
-  meta.textContent = `state ${cg.state || 'UNKNOWN'} · ${counts} nodes · ${layout.rels.length} relations · ${layout.mods.length} modules · source ${cg.source || '—'}` +
+  const cut = cg.truncation && cg.truncation.truncated
+    ? ` · TRUNCATED: ${JSON.stringify(cg.truncation.omitted)} omitted` : '';
+  meta.textContent = `state ${cg.state || 'UNKNOWN'} · ${counts} nodes · ${layout.rels.length} relations · ${layout.mods.length} modules · source ${cg.source || '—'}${cut}` +
     (cg.state === 'COMPLETE' ? '' : ' — incompleteness is not safety: UNKNOWN is never rendered as SAFE');
   const gEdges = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   const gNodes = document.createElementNS('http://www.w3.org/2000/svg', 'g');

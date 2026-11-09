@@ -25,7 +25,8 @@ from typing import Any, Protocol
 
 SCHEMA_VERSION = 1
 MAX_TEXT = 4000
-MAX_DATA = 8000
+MAX_EVENT_BYTES = 64_000  # one JSONL record; overflow is pruned, never sliced
+_KEEP_STEPS = (200, 100, 50, 20, 10, 5, 1)
 
 _SECRET = re.compile(
     r'(?i)\b(token|secret|password|passwd|api[_-]?key|access[_-]?key'
@@ -63,6 +64,76 @@ def _scrub_obj(value: Any, depth: int = 0) -> Any:
     if isinstance(value, str):
         return redact(value)
     return value
+
+
+def _dump(event: dict[str, Any]) -> str:
+    return json.dumps(event, ensure_ascii=False, default=str)
+
+
+def _shrink(value: Any, keep: int) -> Any:
+    """Cap every list at `keep` items, deterministically from the front."""
+    if isinstance(value, list):
+        return [_shrink(item, keep) for item in value[:keep]]
+    if isinstance(value, dict):
+        return {key: _shrink(item, keep) for key, item in value.items()}
+    return value
+
+
+def _coherent(data: dict[str, Any]) -> dict[str, Any]:
+    """Drop edges whose endpoints were pruned, so a cut graph stays honest."""
+    nodes = data.get('nodes')
+    if not isinstance(nodes, list):
+        return data
+    ids = {str(node.get('id')) for node in nodes
+           if isinstance(node, dict) and node.get('id') is not None}
+    if not ids:
+        return data
+    edges = data.get('edges')
+    if isinstance(edges, dict):
+        data = dict(data, edges={str(key): [str(dep) for dep in deps
+                                           if str(dep) in ids]
+                                 for key, deps in edges.items()
+                                 if str(key) in ids})
+    relations = data.get('relations')
+    if isinstance(relations, list):
+        data = dict(data, relations=[
+            item for item in relations
+            if isinstance(item, dict) and str(item.get('from')) in ids
+            and str(item.get('to')) in ids])
+    return data
+
+
+def _bounded(event: dict[str, Any], limit: int = MAX_EVENT_BYTES) -> str:
+    """Serialize one record that always parses.
+
+    Oversized optional collections are pruned to a deterministic prefix, the
+    loss is recorded in ``data.truncation``, and a pruned graph is never
+    reported COMPLETE. The envelope and message are never cut.
+    """
+    line = _dump(event)
+    if len(line.encode('utf-8')) <= limit:
+        return line
+    data = event.get('data')
+    if isinstance(data, dict):
+        totals = {k: len(v) for k, v in data.items() if isinstance(v, list)}
+        for keep in _KEEP_STEPS:
+            pruned = _coherent(_shrink(data, keep))
+            kept = {k: len(v) for k, v in pruned.items() if isinstance(v, list)}
+            omitted = {k: totals[k] - kept[k] for k in totals
+                       if totals[k] > kept[k]}
+            if not omitted:
+                break
+            pruned['truncation'] = {'truncated': True, 'kept': keep,
+                                    'omitted': omitted}
+            if pruned.get('state') == 'COMPLETE':
+                pruned['state'] = 'INCOMPLETE'
+            line = _dump(dict(event, data=pruned))
+            if len(line.encode('utf-8')) <= limit:
+                return line
+    # the envelope alone is small; keep the event readable and say why
+    return _dump(dict(event, data={
+        'truncated': True,
+        'reason': 'payload exceeded the event size limit'}))
 
 
 class Sink(Protocol):
@@ -107,8 +178,7 @@ class JsonlSink:
         with self._lock:
             self._seq += 1
             event['sequence'] = self._seq
-            line = json.dumps(event, ensure_ascii=False, default=str)
-            self._fh.write(line[:MAX_DATA + 2000] + '\n')
+            self._fh.write(_bounded(event) + '\n')
             self._fh.flush()
 
     def close(self) -> None:
@@ -242,7 +312,21 @@ def emit(event_type: str, component: str, *,
     if message:
         event['message'] = redact(message)
     if data:
-        event['data'] = _scrub_obj(data)
+        clean = _scrub_obj(data)
+        if isinstance(clean, dict):
+            clean = _coherent(clean)
+            lost = {key: len(value) - len(clean.get(key, []))
+                    for key, value in data.items()
+                    if isinstance(value, (list, dict))
+                    and isinstance(clean.get(key), (list, dict))
+                    and len(value) > len(clean[key])}
+            if lost:
+                if clean.get('state') == 'COMPLETE':
+                    clean['state'] = 'INCOMPLETE'
+                clean['truncation'] = {'truncated': True, 'kept': 200,
+                                       'omitted': lost,
+                                       'note': 'collection cap applied at emit'}
+        event['data'] = clean
     try:
         _STATE.sink.emit(event)
     except Exception as exc:

@@ -66,6 +66,14 @@ graph. When it did not, the dashboard builds one for the run's `--root` through
 purged), labels the source `dashboard:<mode>` and caches the projection for
 60 s. It never renders a graph it did not obtain from Asha.
 
+The root itself is validated first: it must be non-empty, an existing
+directory and a Git repository (`.git` as a directory, or as a file for a
+linked worktree). An empty or invalid root is answered with
+`{"available": false, "state": "UNKNOWN", "reason": "..."}` and no graph
+loading happens at all — the dashboard never falls back to its own working
+directory, so a graph belonging to another checkout can never be presented as
+this run's CodeGraph.
+
 ## 4. Event schema (v1)
 
 ```json
@@ -88,6 +96,20 @@ purged), labels the source `dashboard:<mode>` and caches the projection for
 * `timestamp` is UTC with milliseconds.
 * Payload strings are redacted (token/secret/password/api-key shapes and
   secret-named keys) and bounded; `data` is depth- and length-limited.
+* One record never exceeds **64,000 UTF-8 bytes** (`MAX_EVENT_BYTES`).
+  Oversized optional collections are pruned to a deterministic prefix —
+  largest lists first, 200 → 1 items — and the loss is written into the record
+  itself: `data.truncation = {"truncated": true, "kept": 200, "omitted":
+  {"nodes": 400}}`. Edge and relation endpoints are filtered to the nodes that
+  survived, so a pruned DAG has no dangling edges. A graph that lost nodes is
+  downgraded from `COMPLETE` to `INCOMPLETE`; it is never reported complete.
+* A record is serialized once, measured in UTF-8 bytes, and re-serialized
+  after each pruning step. Serialized JSON is never cut by character offset, so
+  every line in `events.jsonl` parses. If even a pruned payload cannot fit,
+  the envelope survives with `data = {"truncated": true, "reason": "..."}` —
+  the event stays visible in replay and in the activity log.
+* The emit-side scrub also caps collections at 200 items and records the same
+  `data.truncation` marker, so nothing is dropped silently.
 * A run without a terminal event whose process is gone reads `INTERRUPTED` —
   never `COMPLETED`.
 
@@ -180,7 +202,12 @@ events), never rebuilt per event.
   leaves the run `INTERRUPTED` by absence of a terminal event.
 * CodeGraph events depend on the graph cache being assembled in that run
   (`asha_run_spec` does; a bare internal call that skips the cache will show
-  "no CodeGraph event").
+  "no CodeGraph event"). The dashboard's own projection is only attempted for
+  a validated Git root and is labelled `dashboard:<mode>`.
+* A pruned DAG or CodeGraph is shown with a `TRUNCATED` marker next to the
+  node/relation counts; the node cap is 200 per event, so very wide DAGs
+  (>200 workers) are visible as a partial graph with explicit counts rather
+  than as a complete one.
 * No authentication beyond loopback binding. On a shared host, treat the
   dashboard as readable by any local user and set `--port` accordingly.
 * Retention is manual; each run's `events.jsonl` grows with the event count
