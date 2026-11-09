@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -185,9 +185,15 @@ def snapshot(root: Path, run_id: str) -> dict[str, Any]:
                            'worker_id': wid,
                            'at': event['timestamp']})
         elif etype.startswith('evidence.'):
+            # A run-level seal re-states the seal without repeating the digest.
+            # Carry the digest forward, but never across a non-success state: a
+            # rejected seal must not inherit a previous successful hash.
+            prev = evidence or {}
+            carry = prev if prev.get('event') == 'evidence.sealed' \
+                and event.get('status') == 'SEALED' else {}
             evidence = {'event': etype, 'status': event.get('status'),
-                        'sha256': data.get('sha256'),
-                        'path': data.get('path'),
+                        'sha256': data.get('sha256') or carry.get('sha256'),
+                        'path': data.get('path') or carry.get('path'),
                         'reason': event.get('message') or data.get('reason')}
         elif etype == 'verdict.computed':
             verdict = {'status': data.get('status', event.get('status')),
@@ -207,6 +213,14 @@ def snapshot(root: Path, run_id: str) -> dict[str, Any]:
 
     if ended is None and meta.get('started_at'):
         status = 'RUNNING' if _alive(meta) else 'INTERRUPTED'
+    # A running worker has no terminal event yet: its duration is "so far",
+    # computed from the same clock the terminal path uses.
+    if status == 'RUNNING':
+        now = datetime.now(UTC).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+        for node in workers.values():
+            if node.get('duration_ms') is None and node.get('started_at'):
+                node['duration_ms'] = _dur(node['started_at'], now)
+
     return {
         'run_id': run_id,
         'meta': meta,

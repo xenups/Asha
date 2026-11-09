@@ -26,6 +26,10 @@ const state = {
   selectedStage: null,
   selectedGraph: null,
   refetchTimer: null,
+  runListTimer: null,
+  discoveryTimer: null,
+  gFitKey: null,
+  streamDone: false,
   gFilter: '',
   gRel: '',
   view: { x: 0, y: 0, k: 1 },
@@ -177,7 +181,29 @@ function ingest(ev) {
   state.cursor = Math.max(state.cursor, seq);
   if (state.events.length > 5000) state.events = state.events.slice(-4000);
   appendLogRow(payload);
+  if (TERMINAL.includes(payload.event_type)) {
+    // a terminal event ends the run now, not when the SSE 'end' frame lands
+    state.streamDone = true;
+    setConn('ENDED');
+    refreshRunList();
+  }
   scheduleRefetch();
+}
+
+// A finished run stops being RUNNING in three places: the header, the run
+// selector labels and the history list. Refetch the list, then restore the
+// selection so the refresh cannot hijack the run the user is reading.
+const TERMINAL = ['run.completed', 'run.failed', 'run.cancelled', 'run.interrupted'];
+
+function refreshRunList() {
+  if (state.runListTimer) return;
+  state.runListTimer = setTimeout(async () => {
+    state.runListTimer = null;
+    const keep = state.runId;
+    await loadRuns();
+    if (keep) $('runSelect').value = keep;
+    renderHeader();
+  }, 250);
 }
 
 function scheduleRefetch() {
@@ -603,6 +629,27 @@ function graphLayout(cg) {
   return { nodes, rels, pos, mods };
 }
 
+// Fit the viewBox to the real node coordinates. Without this a graph larger
+// than the initial viewport renders as an empty canvas: nodes exist, the view
+// simply points elsewhere. Padding covers the node circle and its label.
+function fitGraphView(layout, rect) {
+  let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
+  for (const p of layout.pos.values()) {
+    minx = Math.min(minx, p.x); maxx = Math.max(maxx, p.x);
+    miny = Math.min(miny, p.y); maxy = Math.max(maxy, p.y);
+  }
+  if (!Number.isFinite(minx)) {
+    return { x: 0, y: 0, w: rect.width || 1200, h: rect.height || 520 };
+  }
+  const padX = 170, padY = 90;
+  return {
+    x: minx - padX,
+    y: miny - padY,
+    w: Math.max(320, (maxx - minx) + padX * 2),
+    h: Math.max(240, (maxy - miny) + padY * 2),
+  };
+}
+
 function renderCodeGraph() {
   const s = state.snap || {};
   const cg = s.codegraph || {};
@@ -615,7 +662,13 @@ function renderCodeGraph() {
   }
   const layout = graphLayout(cg);
   const rect = svg.getBoundingClientRect();
-  if (!state.gview.w) state.gview = { x: 0, y: 0, w: rect.width || 1200, h: rect.height || 520 };
+  // Re-fit on first paint, on a different run and whenever the graph geometry
+  // changes; a manual zoom or Fit survives because the key is unchanged.
+  const fitKey = `${state.runId}|${layout.nodes.length}|${layout.rels.length}|${layout.mods.length}`;
+  if (!state.gview.w || state.gFitKey !== fitKey) {
+    state.gFitKey = fitKey;
+    state.gview = fitGraphView(layout, rect);
+  }
   const view = state.gview;
   svg.setAttribute('viewBox', `${view.x} ${view.y} ${view.w} ${view.h}`);
   const counts = layout.nodes.length;
@@ -626,6 +679,9 @@ function renderCodeGraph() {
   const gEdges = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   const gNodes = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   svg.append(gEdges, gNodes);
+  if (!counts) {
+    meta.textContent += ' — no modules in this repository to draw';
+  }
   const needle = state.gFilter.toLowerCase();
   const relFilter = state.gRel;
   const matches = (n) => !needle || `${n.id} ${n.module || ''} ${n.kind || ''}`.toLowerCase().includes(needle);
@@ -910,23 +966,39 @@ $('dagFit').onclick = () => { state.view = {}; renderDag(); };
 $('dagZoomIn').onclick = () => { const v = state.view; v.w /= 1.25; v.h /= 1.25; renderDag(); };
 $('dagZoomOut').onclick = () => { const v = state.view; v.w *= 1.25; v.h *= 1.25; renderDag(); };
 
-/* follow a newly started run: the dashboard can be open first */
-async function followLiveRun() {
-  if (!state.snap || !state.runId) return;
-  if (!['RUNNING', 'INTERRUPTED', 'UNKNOWN'].includes(String(state.snap.status))) return;
+/* Discover a run that starts after the page was opened. The dashboard is
+   usually opened first, so "there is no run yet" must be a waiting state, not
+   a dead end. One self-rescheduling timer: no duplicate pollers, no polling
+   while an SSE stream is live, and a slower cadence once a run has ended. */
+function scheduleDiscovery(delay) {
+  if (state.discoveryTimer) return;
+  state.discoveryTimer = setTimeout(() => {
+    state.discoveryTimer = null;
+    discover();
+  }, delay);
+}
+
+async function discover() {
+  if (document.hidden) return scheduleDiscovery(5000);
+  if (state.conn === 'LIVE') return;          // the stream already reports state
   try {
     const data = await api('/api/runs');
+    if (!state.runId) {
+      if (!data.runs.length) return scheduleDiscovery(1500);
+      await loadRuns();
+      await openRun(data.runs[0].run_id);
+      return;                                  // SSE now owns the page
+    }
     const live = data.runs.find((r) => r.run_id !== state.runId && r.status === 'RUNNING');
     const stillListed = data.runs.some((r) => r.run_id === state.runId);
-    if (live) {
-      $('runSelect').value = live.run_id;
-      await openRun(live.run_id);
-    } else if (!stillListed) {
-      await loadRuns();
-    }
-  } catch { /* server gone: keep the current view */ }
+    if (live) { await loadRuns(); await openRun(live.run_id); return; }
+    if (!stillListed) await loadRuns();
+    scheduleDiscovery(state.streamDone ? 5000 : 2000);
+  } catch {
+    scheduleDiscovery(3000);
+  }
 }
-setInterval(followLiveRun, 3000);
+scheduleDiscovery(1500);
 
 /* elapsed ticks while a run is live */
 setInterval(() => {
@@ -945,6 +1017,6 @@ setInterval(() => {
   if (wanted) await openRun(wanted);
   else {
     $('liveTail').replaceChildren(el('div', 'lvl-warning',
-      'No run recorded yet. Run: ASHA_TELEMETRY=1 asha run --spec <file> (or any asha command) and reload.'));
+      'No run recorded yet. Start one with ASHA_TELEMETRY=1 asha run --spec <file> — it appears here automatically.'));
   }
 })();

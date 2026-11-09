@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
 import threading
 import time
@@ -490,3 +491,98 @@ def test_project_graph_accepts_a_linked_worktree(tmp_path: Path) -> None:
     out = dash._project_graph(str(worktree))
     assert out["available"] is True
     assert out["nodes"]
+
+# ---------------------------------------------------------------- phase 18 --
+DIGEST = 'af189b7f633f1d04279d7a6c2f0568bdb6fd7d937699829e5082193c53f57791'
+EVIDENCE_PATH = '/var/state/orchestrator/task/worker.json'
+
+
+@pytest.fixture(autouse=True)
+def _phase18_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ASHA_STATE_DIR", str(tmp_path / "state18"))
+    monkeypatch.setenv(obs.ENV_ENABLE, "1")
+    obs.reset()
+    yield
+    obs.reset()
+
+
+def _p18_root(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo18"
+    repo.mkdir(exist_ok=True)
+    return repo
+
+
+def _p18_seal(digest: str = DIGEST) -> None:
+    obs.emit("evidence.sealed", "evidence", stage_id="evidence", status="SEALED",
+             worker_id="w1", message="evidence digest computed",
+             data={"sha256": digest, "path": EVIDENCE_PATH})
+
+
+def _p18_events(root: Path, run_id: str) -> list[dict]:
+    path = store.run_path(root, run_id)
+    if path.is_dir():
+        path = path / "events.jsonl"
+    return [json.loads(t) for t in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_snapshot_keeps_the_sealed_digest_across_a_run_level_seal(tmp_path) -> None:
+    root = _p18_root(tmp_path)
+    obs.start_run(root, "run-seal", {"pid": 999999})
+    _p18_seal()
+    # the run-level seal repeats the seal without repeating the digest
+    obs.emit("evidence.sealed", "evidence", stage_id="evidence", status="SEALED",
+             data={"evidence": {"w1": EVIDENCE_PATH}, "worker_states": {}})
+    snap = store.snapshot(root, "run-seal")
+    assert snap["evidence"]["sha256"] == DIGEST
+    assert snap["evidence"]["path"] == EVIDENCE_PATH
+
+
+def test_snapshot_does_not_inherit_a_digest_for_rejected_evidence(tmp_path) -> None:
+    root = _p18_root(tmp_path)
+    obs.start_run(root, "run-reject", {"pid": 999999})
+    _p18_seal()
+    obs.emit("evidence.rejected", "evidence", stage_id="evidence",
+             status="REJECTED", worker_id="w1", message="scope violation",
+             data={"violations": ["b.py"]})
+    snap = store.snapshot(root, "run-reject")
+    assert snap["evidence"]["sha256"] is None
+    assert snap["evidence"]["status"] == "REJECTED"
+
+
+def test_run_endpoint_exposes_the_persisted_digest_byte_for_byte(tmp_path) -> None:
+    root = _p18_root(tmp_path)
+    obs.start_run(root, "run-api", {"pid": 999999})
+    _p18_seal()
+    obs.emit("evidence.sealed", "evidence", stage_id="evidence", status="SEALED",
+             data={"evidence": {"w1": EVIDENCE_PATH}})
+    obs.finish_run("ok")
+    event_digest = next(e["data"]["sha256"] for e in _p18_events(root, "run-api")
+                        if e["event_type"] == "evidence.sealed"
+                        and (e.get("data") or {}).get("sha256"))
+    httpd = dash.make_server(root, "127.0.0.1", 0)
+    thread = threading.Thread(target=httpd.serve_forever,
+                              kwargs={"poll_interval": 0.05}, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+    try:
+        status, _, body = _get(base + "/api/runs/run-api")
+        assert status == 200
+        assert json.loads(body)["evidence"]["sha256"] == event_digest == DIGEST
+        _, _, again = _get(base + "/api/runs/run-api")  # reload keeps the value
+        assert json.loads(again)["evidence"]["sha256"] == event_digest
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_terminal_status_replaces_running_in_the_snapshot(tmp_path) -> None:
+    root = _p18_root(tmp_path)
+    obs.start_run(root, "run-live", {"pid": os.getpid()})
+    obs.emit("worker.started", "dag", stage_id="worker", status="RUNNING",
+             worker_id="w1")
+    assert store.snapshot(root, "run-live")["status"] == "RUNNING"
+    obs.emit("run.completed", "run", stage_id="run", status="ok")
+    obs.finish_run("ok")
+    snap = store.snapshot(root, "run-live")
+    assert snap["status"] == "ok"
+    assert snap["ended_at"]
