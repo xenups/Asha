@@ -36,7 +36,9 @@ engine, and refuses any non-loopback `--host`.
 
 Attaching to an execution that is already running needs nothing from the
 engine: open the dashboard before, during or after a run — the store is
-append-only and the page replays from sequence 0. Share a specific run with
+append-only and the page replays from sequence 0. Opening the page *first*
+works too: a run that starts later is discovered on its own, without a reload
+(see §7a). Share a specific run with
 `http://127.0.0.1:7331/?run_id=<id>`.
 
 ## 3. What is instrumented (real call sites)
@@ -172,6 +174,69 @@ recorded with `ASHA_TELEMETRY=1`):
 * **History** — every run on disk with state, verdict, worker count and
   duration; clicking opens it read-only.
 
+## 7a. Live UX behaviour
+
+Four behaviours make the dashboard usable against a run it did not start. They
+are the only places where the frontend acts on its own; everything it renders
+still comes from `/api/*`.
+
+### Automatic discovery of a newly started run
+
+The page loads the real run list from `/api/runs`. An empty list is not a dead
+end: one self-rescheduling timer keeps asking until a run appears, then loads
+that run's snapshot and connects its SSE stream. No browser reload is involved.
+
+Discovery polling is separate from event streaming:
+
+* while the SSE stream is `LIVE`, discovery does not poll at all;
+* no run on disk: every **1.5 s**;
+* a run selected and idle: every **2 s**, or **5 s** once that run has ended;
+* a failed request: every **3 s**;
+* a hidden tab: every **5 s**.
+
+There is at most one discovery timer (`state.discoveryTimer`), so a slow or
+failed response cannot spawn a second polling loop. Terminal handling is
+unchanged: the stream ends, the connection pill flips to `ENDED` and the run
+stays selected.
+
+### Graph fitting
+
+The CodeGraph view fits the initial `viewBox` to the graph rather than to the
+viewport: it takes the real coordinates of the laid-out nodes, adds 170 px of
+horizontal and 90 px of vertical padding for the node circle and its label, and
+never shrinks below 320×240. It re-fits when another run or another graph is
+selected (fit key `runId|nodes|relations|modules`) and leaves a manual zoom, pan
+or `Fit` untouched.
+
+Fitting changes only the view. It never adds nodes or reconstructs data the
+graph does not have: a truncated graph keeps its `TRUNCATED` marker, a graph with
+zero nodes says `no modules in this repository to draw` instead of showing a
+blank canvas, and UNKNOWN / INCOMPLETE / COMPLETE stay visually distinct.
+
+### Worker task resolution
+
+The worker's task text comes from the run itself, in this order:
+
+1. `data.task` of that worker's own events;
+2. otherwise `task` of the corresponding node in the `dag.created` projection,
+   matched **by worker id**, never by array position.
+
+Nothing is summarised, generated or inferred. A run that recorded no task text
+(older runs, lean specs) shows `—`. An unavailable description is not a failed
+worker: the state pill, the reason column and the check list say what actually
+happened.
+
+### Static assets are served `no-store`
+
+`/`, `/app.js` and `/styles.css` are sent with `Cache-Control: no-store`, so a
+dashboard upgraded under an unchanged URL cannot hand an old frontend bundle to a
+freshly loaded page. The security headers — `Content-Security-Policy`,
+`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+`Referrer-Policy: no-referrer` — are unchanged.
+
+`no-store` governs HTTP caching only: a tab that is already executing the old
+`app.js` keeps running it until that tab is reloaded.
+
 ## 8. Security
 
 Loopback bind by default (non-loopback refused), strict run-id validation, no
@@ -210,8 +275,20 @@ events), never rebuilt per event.
   than as a complete one.
 * No authentication beyond loopback binding. On a shared host, treat the
   dashboard as readable by any local user and set `--port` accordingly.
+* Static assets are served `Cache-Control: no-store`; a tab that is already open
+  still runs the JavaScript it loaded until it is reloaded (§7a).
 * Retention is manual; each run's `events.jsonl` grows with the event count
   of that run only.
+* `worktree.cleanup.started` is not emitted; only the completion is.
+* `context_slice.completed` / `context_slice.incomplete` are not emitted, so
+  per-worker context slicing is not visible on the dashboard.
+* `planning.*` events come from the CLI execution path; a run driven through MCP
+  shows no planning phase.
+* A worker's task text appears only when the engine recorded it (the worker event
+  or the `dag.created` node). Otherwise the panel shows `—` and nothing is
+  inferred.
+* There is no JavaScript test runner in this repository: the frontend has been
+  exercised in a real browser (DOM assertions plus captures), not by `pytest`.
 * Telemetry is optional and must not be treated as evidence: the governance
   verdict comes from the sealed evidence documents, which are written whether
   or not the dashboard is enabled.
