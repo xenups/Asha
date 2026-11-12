@@ -1,0 +1,33 @@
+{
+ "breaking_change": {
+  "run_id": "rv-20261101T112341Z-8f2164d9",
+  "head": "d350553d10d37d8b364b7075b12733c727c4bfc9",
+  "state": "BLOCKED",
+  "decision": "BLOCKED",
+  "gate_state": "EXECUTION_FAILED",
+  "authorized_to_ship": false,
+  "reason": "ship gate refused: EXECUTION_FAILED checks failed: pytest",
+  "snapshot_id": "e5567630f3fad71139e1fb156c55015d80fd57117f08f9c4cdfe14f2e697688c"
+ },
+ "tampered_evidence": {
+  "run_id": "rv-20261101T112349Z-db2d80e4",
+  "head": "4a4797969a20ecb4b7cbf4483c601245914da3c4",
+  "stage_files": [
+   "CODE_REVIEW.json",
+   "CODE_REVIEW.packet.json",
+   "SEMANTIC_REVIEW.json",
+   "SEMANTIC_REVIEW.packet.json",
+   "SENIOR_REVIEW.json",
+   "SENIOR_REVIEW.packet.json"
+  ],
+  "original_verdict": "APPROVE",
+  "original_digest": null,
+  "tampered_file": "CODE_REVIEW.json",
+  "state": "FINALIZED",
+  "decision": "APPROVED",
+  "gate_state": "COMPLETED_CLEAN",
+  "authorized_to_ship": true,
+  "reason": "all 4 mandatory stages validated; no CRITICAL/HIGH finding; independence UNKNOWN meets UNKNOWN",
+  "snapshot_id": "496e4223986707f8d995ad591e0947fb7f23919d374d9d3c7f7626d3e5d6cd6d"
+ }
+}

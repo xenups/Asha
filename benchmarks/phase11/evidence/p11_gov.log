@@ -1,0 +1,11 @@
+........................................................................ [ 45%]
+........................................................................ [ 90%]
+................                                                         [100%]
+=============================== warnings summary ===============================
+tests/governance/test_gate_evaluator.py: 471 warnings
+  /home/amir/asha-phase11/tests/governance/test_gate_evaluator.py:219: DeprecationWarning: ast.Str is deprecated and will be removed in Python 3.14; use ast.Constant instead
+    if isinstance(node, (_ast.Str, _ast.Constant)):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+160 passed, 471 warnings in 111.85s (0:01:51)
+EXIT=0

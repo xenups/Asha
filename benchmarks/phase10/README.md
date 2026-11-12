@@ -387,3 +387,8 @@ fail-closed outcome were correct. Remediated on a separate branch, not here.
 The count stays **0 of 3 authorized**. F1 does not change it (none of the three
 benchmark runs was SHA-pinned). F3 explains it fully: every run's tree held an
 untracked file written by the target's own test suite.
+
+---
+
+See [benchmarks/phase11/README.md](../phase11/README.md) for the dated post-merge
+verification addendum (F1, F2, F3, F4) written after this benchmark was merged.
