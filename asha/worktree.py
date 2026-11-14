@@ -5,6 +5,7 @@ import os
 import re
 import signal
 import subprocess
+import time
 import uuid
 from pathlib import Path
 
@@ -38,10 +39,57 @@ def _git(cwd: Path, *args: str, timeout: int = 60,
 def _commit_all(path: Path, message: str) -> None:
     """Commit the worker's working state so a git tree identity exists.
     Identity flags are explicit: no dependence on repo/user config."""
-    _git(path, 'add', '-A')
+    _add_with_lock_guard(path)
     _git(path, '-c', 'user.name=Asha Orchestrator',
          '-c', 'user.email=orchestrator@asha.local',
          'commit', '-q', '-m', message)
+
+
+#: How long `git add` waits for a transient index lock before refusing.
+INDEX_LOCK_WAIT_S = 3.0
+_INDEX_LOCK_POLL_S = 0.2
+
+
+def _index_lock_path(path: Path) -> Path:
+    """The lock file git would create for this worktree's index."""
+    raw = _git(path, 'rev-parse', '--git-path', 'index.lock')
+    lock = Path(raw)
+    return lock if lock.is_absolute() else (path / lock)
+
+
+def _locked_error(path: Path, lock: Path,
+                  cause: BaseException | None = None) -> OrchestratorError:
+    return OrchestratorError(
+        f'git index is locked: {lock} (Asha never deletes a lock file, '
+        f'because the process that created it may still hold it). If no git '
+        f'process is running in {path}, the lock is stale from a killed '
+        f'process: verify with `git -C "{path}" status`, then remove '
+        f'"{lock}" and retry.')
+
+
+def _add_with_lock_guard(path: Path) -> None:
+    """`git add -A`, waiting out a transient lock and naming a stale one.
+
+    A worker's own git command can hold the index for a moment, so a short
+    bounded wait turns a spurious failure into success. Beyond that wait the
+    lock has an owner Asha cannot prove is gone: it is reported with the
+    exact file and a safe recovery instead of git's generic message.
+    """
+    deadline = time.monotonic() + INDEX_LOCK_WAIT_S
+    while True:
+        lock = _index_lock_path(path)
+        if not lock.exists():
+            try:
+                _git(path, 'add', '-A')
+                return
+            except OrchestratorError as exc:
+                if 'index.lock' not in str(exc):
+                    raise
+                if time.monotonic() >= deadline:
+                    raise _locked_error(path, lock) from exc
+        elif time.monotonic() >= deadline:
+            raise _locked_error(path, lock)
+        time.sleep(_INDEX_LOCK_POLL_S)
 
 
 def _safe_id(value: str) -> str:
