@@ -67,6 +67,26 @@ from asha.worktree import (
 
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 
+#: Skill-preload facts a runner reports, carried into sealed evidence verbatim.
+SKILL_FACT_KEYS = (
+    "task_kind", "skill_policy_source", "skill_name", "skill_version",
+    "skill_path", "skill_source_sha256", "skill_preload_enabled",
+    "skill_preloaded", "skill_preload_added", "worker_command",
+    "policy_overlay_applied", "policy_overlay_path", "policy_overlay_sha256",
+)
+
+
+def skill_facts(audit: dict[str, Any] | None) -> dict[str, Any]:
+    """The subset of a runner audit that describes Skill preload.
+
+    Empty when no policy applied, so evidence never claims a preload that
+    did not happen. ``skill_preloaded`` means the argv carried the agent's
+    documented flag and the Skill file was readable and hashed -- not that
+    the model applied it.
+    """
+    meta = audit or {}
+    return {key: meta[key] for key in SKILL_FACT_KEYS if meta.get(key) is not None}
+
 
 def execute_with_audit(worker: dict[str, Any], worktree: Path, *,
                        deadline: timeouts.Deadline | None = None
@@ -202,6 +222,22 @@ def acceptance_failed(acceptance: dict[str, Any] | None) -> bool:
     if not acceptance:
         return False
     return str(acceptance.get("outcome")) in ACCEPTANCE_FAILING
+
+
+def refuse_unproven_acceptance(outcome: dict[str, Any]) -> dict[str, Any]:
+    """A declared acceptance that did not demonstrably pass is not DONE.
+
+    The sealed evidence keeps the honest record (``not_executed``,
+    ``inconclusive`` or ``failed`` with the real exit code); only the state
+    changes, because ``DONE`` means the declared acceptance ran and passed.
+    Without this a governed run could report success for a check that never
+    executed -- the acceptance gate would be advisory, not a gate.
+    """
+    if outcome.get("state") != "DONE":
+        return outcome
+    if not acceptance_failed(outcome.get("acceptance")):
+        return outcome
+    return {**outcome, "state": "FAILED", "reason": "acceptance_failed"}
 
 
 COMPARISON_REASONS = ("COMPARED", "NOT_COMPARED", "BASE_EQUALS_TARGET",
@@ -897,12 +933,12 @@ def run_worker_in_worktree(
                 return _report(task_id, states, evidence_paths,
                                authoritative, dispatcher)
             rc, tail, audit = result
-            outcome = collect_worker_evidence(
+            outcome = refuse_unproven_acceptance(collect_worker_evidence(
                 worker, repo, rc, tail, task_id,
                 common_paths.get_orchestrator_dir(repo) / _safe_id(task_id),
                 base=base, base_tree=base_tree,
                 deps_root=_deps_root(repo, repo),
-                audit=audit)
+                audit=audit))
         else:
             path = dispatcher.create(wid)
             created_path = path
@@ -948,14 +984,14 @@ def run_worker_in_worktree(
                                authoritative, dispatcher, created_path,
                                fast_path_classification=fast_path_classification)
             rc, tail, audit = result
-            outcome = collect_worker_evidence(
+            outcome = refuse_unproven_acceptance(collect_worker_evidence(
                 worker, path, rc, tail, task_id,
                 common_paths.get_orchestrator_dir(repo) / _safe_id(task_id),
                 base=base_commit, base_tree=base_tree,
                 deps_root=_deps_root(path, repo),
                 audit=audit,
                 baseline_deferred=True,
-                repo=repo)
+                repo=repo))
         outcome["execution_id"] = execution_id
         states[wid] = outcome
         if outcome.get("evidence"):
@@ -1378,6 +1414,9 @@ def collect_worker_evidence(
             "acceptance": acceptance,
             "comparison": comparison,
         }
+        preload = skill_facts(audit)
+        if preload:
+            payload["skill_preload"] = preload
         if delta_ran:
             payload["verdict"] = verdict
             payload["baseline_failures"] = (

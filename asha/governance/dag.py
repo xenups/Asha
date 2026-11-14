@@ -51,6 +51,7 @@ from asha.governance import worker_execution
 from asha.observability import events as obs
 from asha.router import RuntimeMode, route
 from asha.types import STATES, OrchestratorError
+from asha.worker_policy import MandatorySkillUnavailable
 from asha.worktree import WorktreeDispatcher, _git, _safe_id
 
 _WAVE_OVERLAP_S = 0.5  # legacy completion-coalescing window (kept)
@@ -120,8 +121,11 @@ class DAGCoordinator:
                              / _safe_id(task_id))
         self._fast_lock = threading.Lock()
         # the execution hook is bound to the task deadline so every dispatch
-        # (worktree path, fast path, DAG worker) sees the same budget
-        self.execute = partial(worker_execution.default_execute,
+        # (worktree path, fast path, DAG worker) sees the same budget. The
+        # audited variant is used so a supplied acceptance command reaches
+        # `build_acceptance` with the runner's real verify_* facts instead of
+        # being recorded as never executed.
+        self.execute = partial(worker_execution.execute_with_audit,
                                deadline=deadline)
 
     # -- small state helpers ------------------------------------------------
@@ -321,6 +325,9 @@ class DAGCoordinator:
                       "current_failures", "delta_failures",
                       "comparison", "details",
                       "applied", "writes_observed",
+                      # the acceptance record is a report fact too: a caller
+                      # must be able to see the command's real exit code
+                      "acceptance",
                       # execution facts: what the run observed about the
                       # process, so a timeout survives into the report
                       "verification_status",
@@ -365,6 +372,13 @@ class DAGCoordinator:
                     "evidence": None,
                     **worker_execution.execution_facts(exc.execution),
                     "detail": exc.execution.termination_detail}
+        except MandatorySkillUnavailable as exc:
+            # the mandated coding Skill was not resolvable/readable: nothing
+            # was launched, so this is BLOCKED, never a silent unskilled run
+            return {"state": "BLOCKED",
+                    "reason": "mandatory_skill_unavailable",
+                    "evidence": None,
+                    "detail": str(exc)}
         except subprocess.TimeoutExpired:
             return {"state": "FAILED", "reason": "timeout_exceeded",
                     "evidence": None}
@@ -374,20 +388,24 @@ class DAGCoordinator:
                     "evidence": None}
         if isinstance(result, tuple):
             rc, tail = int(result[0]), str(result[1])
+            audit = dict(result[2]) if len(result) > 2 and result[2] else None
         else:
-            rc, tail = int(result), ""
+            rc, tail = int(result), ''
+            audit = None
         if base is None or base_tree is None:
             base = self.dispatcher.base_commit
             base_tree = self.dispatcher.base_tree
-        return worker_execution.collect_worker_evidence(
+        outcome = worker_execution.collect_worker_evidence(
             worker, path, rc, tail, self.task_id, self.evidence_dir,
             deadline=self.deadline,
+            audit=audit,
             base=base, base_tree=base_tree,
             deps_root=worker_execution._deps_root(path, self.repo),
             uncertain=set(self.worker_graph["uncertain"]),
             by_id=self.by_id, workers=self.workers,
             baseline_deferred=True,
             repo=self.repo)
+        return worker_execution.refuse_unproven_acceptance(outcome)
 
     def _run_one_fast(self, worker: dict[str, Any]) -> dict[str, Any]:
         with self._fast_lock:
