@@ -71,6 +71,10 @@ def _worker(verify: str | None = None) -> dict[str, Any]:
     worker: dict[str, Any] = {
         'id': 'w1', 'deps': [], 'declared_scope': ['tests/test_thing.py'],
         'reads': ['tests/test_thing.py'], 'writes': [],
+        # Fixture task: the tree is meant to stay untouched, which the output
+        # contract only accepts as an explicit disposition.
+        'output_kind': 'no_change',
+        'no_change_reason': 'acceptance fixture: no tree change expected',
         'cmd': [sys.executable, '-c', 'pass']}
     if verify is not None:
         worker['verify_command'] = verify

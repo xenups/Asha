@@ -174,6 +174,10 @@ def test_no_change_run_still_done(tmp_path: Path) -> None:
     """BASE_EQUALS_TARGET is a definite result, not an unknown one."""
     root = _repo(tmp_path, legacy=False, test_calc=TEST_CALC_MUL)
     worker = _worker()
+    # The rewrite is byte-identical on purpose: an explicit no-change
+    # disposition, so the output contract accepts the untouched tree.
+    worker["output_kind"] = "no_change"
+    worker["no_change_reason"] = "idempotent rewrite: tree identical by design"
     worker["cmd"] = [PY, "-c", "".join([
         "import pathlib;pathlib.Path('calc.py').write_text(",
         f"{CALC_BASE!r})"])]

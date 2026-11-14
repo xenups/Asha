@@ -331,6 +331,9 @@ class DAGCoordinator:
                       # execution facts: what the run observed about the
                       # process, so a timeout survives into the report
                       "verification_status",
+                      # the output contract is a report fact: a caller must see
+                      # which declaration was required and why it was refused
+                      "output_contract", "validation_status",
                       "execution_outcome", "launched", "exit_code",
                       "timeout_s", "elapsed_ms", "process_termination",
                       "detail"):

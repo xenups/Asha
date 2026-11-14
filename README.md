@@ -70,6 +70,24 @@ FAILED / NOT_COMPARED / UNKNOWN
 reason: comparison_inconclusive:baseline_failures_unparsed   (no seal)
 ```
 
+**4. The no-op success.** A green suite proves the tree still works; it never
+proves the worker did anything. Asha reads the task's declared output contract
+from the tree before sealing, so a coding task that changed nothing is refused
+instead of coasting on pre-existing tests:
+
+```
+FAILED / output_contract_not_satisfied:no_change_in_declared_writes   (no seal)
+```
+
+The contract comes from the worker's own declaration, defaulted in this order:
+
+| declaration | requirement |
+| --- | --- |
+| `writes: [...]` or `output_kind: changes` | at least one declared write changed (temporary noise does not count) |
+| `required_artifacts: [...]` or `output_kind: artifact` | each path exists, is non-empty, and was created/modified in this run |
+| `no_change_reason: "..."` or `output_kind: no_change` | nothing changed, and the recorded reason says why that is correct |
+| nothing declared (`uncontracted`) | same rule as `changes` over an empty write set — silence is never success |
+
 A baseline that never produced checks at all is `NOT_COMPARED` and keeps the
 historical `DONE` contract: there is nothing to attribute.
 
@@ -196,8 +214,9 @@ Real output from exactly this spec (paths and hashes abbreviated):
 ```
 
 `DONE` here means: the worker's own checks passed, its diff stayed inside
-`declared_scope`, the baseline comparison ran and found no new failures, and the
-evidence document was sealed. Exit codes: `0` validation completed / no changes,
+`declared_scope`, its declared output contract was satisfied, the baseline
+comparison ran and found no new failures, and the evidence document was sealed.
+Exit codes: `0` validation completed / no changes,
 `1` validation failed, `2` operational or engine error, `130` interrupted.
 `--json` writes exactly one JSON document to stdout; diagnostics go to stderr.
 

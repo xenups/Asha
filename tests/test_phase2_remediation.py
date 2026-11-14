@@ -237,7 +237,9 @@ def test_deadline_with_an_injected_hook_is_refused(tmp_path: Path) -> None:
 def test_hook_still_works_without_a_deadline(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     report = dag.run_workers_dag(
-        repo, [_worker(['true'])], task_id='t-hook-ok',
+        repo, [_worker(['true'], output_kind='no_change',
+                       no_change_reason='hook fixture: the tree stays clean')],
+        task_id='t-hook-ok',
         execute_hook=lambda worker, path: (0, ''))
     assert report['status'] == 'ok'
 
