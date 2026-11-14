@@ -142,8 +142,12 @@ def test_forward_slice_semantics_unchanged(graph_env) -> None:
     # grew 376 -> 491 signature stubs (target body 751 unchanged). Measured
     # 97427; bound kept at ~3.7% headroom so stub degradation toward full
     # bodies still fails loudly.
+    # 104000 (0.7.1): worker_execution now imports asha.governance.
+    # check_diagnosis, whose signatures join the same stub closure. Measured
+    # 101280 (+285 bytes, +0.3%); the bound keeps ~2.7% headroom and
+    # _assert_stub_dominated still fails loudly on full-body emission.
     body_len = len(sl.target_source) + sum(len(st.text) for st in sl.stubs)
-    assert body_len < 101000, body_len
+    assert body_len < 104000, body_len
 
 
 def test_stub_emission_reduces_t1_context(graph_env) -> None:

@@ -337,10 +337,15 @@ def test_memory_failure_non_fatal(tmp_path: Path) -> None:
     resolved = scope_resolver.resolve(repo)
     assert resolved["scope"] in scope_resolver.LEVELS
     # the gate runs to its own verdict independent of memory state — on this
-    # clean baseline repo it authorizes; the failure reason must never
-    # mention memory (was: control.py check --stage work refusal)
+    # clean baseline repo it authorizes; the refusal reason must never
+    # mention memory (was: control.py check --stage work refusal). The sweep
+    # is over the reason, not the whole payload: check entries legitimately
+    # carry a service_root path, and pytest's tmpdir for this test is named
+    # after the test, so a substring sweep would read "memory" out of a path.
     payload = gate_ship.gate_ship(repo, reviewer=_clean_reviewer)
-    assert "memory" not in str(payload).lower()
+    assert "memory" not in str(payload.get("gate_reasons")).lower()
+    assert "memory" not in str(payload.get("reason") or "").lower()
+    assert "memory" not in {str(key).lower() for key in payload}
 
     # (d) real resolve_backend never raises (Mem0 or Null):
     resolved = memory.resolve_backend(tmp_path / "fresh")

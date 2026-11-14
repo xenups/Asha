@@ -51,10 +51,20 @@ _INDEX_LOCK_POLL_S = 0.2
 
 
 def _index_lock_path(path: Path) -> Path:
-    """The lock file git would create for this worktree's index."""
-    raw = _git(path, 'rev-parse', '--git-path', 'index.lock')
-    lock = Path(raw)
-    return lock if lock.is_absolute() else (path / lock)
+    """The lock file git would create for this worktree's index.
+
+    Read from the filesystem only: a lock check must not add a git
+    subprocess to every run (the evidence budget counts them).
+    """
+    dot_git = path / '.git'
+    if dot_git.is_file():
+        # worktree or submodule: `.git` is a file pointing at the gitdir
+        for line in dot_git.read_text(encoding='utf-8').splitlines():
+            if line.startswith('gitdir:'):
+                raw = Path(line.split(':', 1)[1].strip())
+                gitdir = raw if raw.is_absolute() else (path / raw).resolve()
+                return gitdir / 'index.lock'
+    return dot_git / 'index.lock'
 
 
 def _locked_error(path: Path, lock: Path,
