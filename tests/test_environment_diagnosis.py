@@ -95,6 +95,27 @@ def test_two_interpreters_are_not_a_comparison() -> None:
     assert comparison["interpreter_drift"] == ["pytest"]
 
 
+def test_every_check_entry_records_its_environment(tmp_path: Path) -> None:
+    """Both check paths must carry identity: the scoped path builds its own
+    entries, and a comparison cannot attribute a gap without them."""
+    from asha import check_runner
+
+    repo = _repo(tmp_path)
+    entries = check_runner.run_scoped(
+        repo, changed_files=["tests/test_calc.py"],
+        targeted_tests=["tests/test_calc.py"], mypy_targets=[])
+    assert entries
+    for entry in entries:
+        assert entry["interpreter"], entry
+        assert entry["service_root"], entry
+        assert isinstance(entry["hermetic"], bool)
+    failed = [e for e in entries if e["status"] == "failed"]
+    assert failed, entries
+    pytest_entry = next(e for e in failed if e["name"] == "pytest")
+    assert pytest_entry["failure_mode"] == check_diagnosis.MISSING_DEPENDENCY
+    assert pytest_entry["failure_module"] == MISSING
+
+
 def _repo(tmp_path: Path) -> Path:
     """Base revision whose tests import a dependency nobody installed."""
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "fx"\n')
