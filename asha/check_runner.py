@@ -408,6 +408,30 @@ def _tool_unavailable(name: str, output: str) -> str | None:
             return name
     return None
 
+def _annotate(entry: dict, env: ServiceEnvironment | None,
+              root: Path) -> dict:
+    """Attach environment identity and the failure diagnosis to one entry.
+
+    Both check paths build entries independently, and a comparison needs
+    the same identity fields from each: which interpreter ran the check,
+    whether it was the project's own environment, and -- when it failed --
+    why. Additive only: the verdict the runner reached is never changed.
+    """
+    entry.setdefault('interpreter',
+                     str(env.python_bin) if env is not None
+                     else sys.executable)
+    entry.setdefault('hermetic',
+                     env.is_hermetic if env is not None else False)
+    entry.setdefault('service_root',
+                     str(env.service_root) if env is not None else str(root))
+    diagnosis = check_diagnosis.classify(entry, repo_root=root)
+    if diagnosis is not None:
+        entry['failure_mode'] = diagnosis.kind
+        if diagnosis.module:
+            entry['failure_module'] = diagnosis.module
+    return entry
+
+
 def _run_group(root: Path, names: list[str], changed_py: list[str],
                label: str, timeout_s: float,
                deps_root: Path | None,
@@ -426,13 +450,8 @@ def _run_group(root: Path, names: list[str], changed_py: list[str],
                    else sys.executable)
 
     def record(entry: dict) -> None:
-        """Attach the failure diagnosis, then keep the entry (additive)."""
-        diagnosis = check_diagnosis.classify(entry, repo_root=root)
-        if diagnosis is not None:
-            entry['failure_mode'] = diagnosis.kind
-            if diagnosis.module:
-                entry['failure_module'] = diagnosis.module
-        results.append(entry)
+        """Keep the entry, annotated with its environment."""
+        results.append(_annotate(entry, env, root))
 
     for name, argv in _commands(root, names, changed_py):
         entry: dict = {
@@ -661,4 +680,4 @@ def run_scoped(
         combined = _redact_env((result.stdout or '') + (result.stderr or ''))
         entry['output_tail'] = combined[-TAIL_CHARS:]
         results.append(entry)
-    return results
+    return [_annotate(entry, env, root) for entry in results]
