@@ -23,6 +23,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from . import worker_policy
 from .execution import (
     EXECUTION_DEADLINE_EXCEEDED,
     EXECUTION_EXITED,
@@ -139,7 +140,12 @@ class BaseAgentRunner:
                 worktree_path: Path, timeout: float, *,
                 deadline: Deadline | None = None) -> RunnerResult:
         started = time.monotonic()
-        argv = self.primary_argv(worker_spec, worktree_path)
+        # The persistent coding-Skill policy (if any) rewrites only the
+        # configured agent CLI's argv and hands back provenance metadata;
+        # a mandated-but-missing Skill raises before anything is spawned.
+        argv, skill_facts = worker_policy.prepare(
+            worker_spec, self.primary_argv(worker_spec, worktree_path),
+            self.name)
         code, out, err = _spawn(argv, worktree_path, timeout,
                                 deadline=deadline)
         verify = worker_spec.get('verify_command')
@@ -169,6 +175,9 @@ class BaseAgentRunner:
                 # evidence needs the verify output to tell "passed" from
                 # "ran but collected nothing" (skip/deselect tails)
                 'verify_output_tail': verify_tail,
+                # Skill preload facts: empty when no policy applied, so a
+                # report never invents a preload that did not happen.
+                **skill_facts,
             })
 
 

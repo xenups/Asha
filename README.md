@@ -313,6 +313,9 @@ event schema, storage layout, API and limitations.
 ## Further reading
 
 - [Governance orientation](docs/ORIENTATION.md) — module map and invariants.
+- [Default coding Skill for workers](docs/WORKER-SKILL-POLICY.md) — preload a
+  mandated Skill into Hermes workers, opt out for non-coding work, fail closed
+  when the Skill is missing.
 - [Ladder review](docs/LADDER.md) — review an exact commit range and get a
   fail-closed delivery decision (`asha review`).
 - [Linux server deployment](docs/LINUX_SERVER_DEPLOY.md)
