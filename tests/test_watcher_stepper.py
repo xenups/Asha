@@ -203,7 +203,7 @@ def test_watch_stepper_current_vs_last_sealed(tmp_path: Path) -> None:
 
 # The commit the frozen trio is measured against: every edit made after it
 # must be approved and the anchor advanced in the same review.
-_GOVERNANCE_ANCHOR = '91f5163'  # 0.7.2: one _annotate() for both check paths
+_GOVERNANCE_ANCHOR = 'f177b0c'  # 0.7.4: verification profiles in check_runner.run
 
 
 def test_governance_trio_frozen(tmp_path: Path) -> None:
@@ -267,6 +267,12 @@ def test_governance_trio_frozen(tmp_path: Path) -> None:
     # its own entries, so the identity fields reached only the legacy path.
     # Both builders now end in one _annotate(); still additive, still no
     # verdict change, still scoping.py/scheduler.py untouched.
+    # Anchor f177b0c (0.7.4): the approved verification-profile change edits
+    # check_runner.py -- run() resolves the operator-selected profile, builds
+    # per-service commands from the validated plan, records explicit
+    # NOT_CONFIGURED entries (never a pass) and keeps the scope matrix as the
+    # default when no profile is selected. scoping.py and scheduler.py are
+    # untouched; the anchor advances only for this reviewed change.
     out = sp.run(['git', 'diff', f'{_GOVERNANCE_ANCHOR}..HEAD', '--',
                   'asha/scoping.py', 'asha/check_runner.py',
                   'asha/scheduler.py'],

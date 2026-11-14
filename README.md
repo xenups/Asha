@@ -91,6 +91,24 @@ The contract comes from the worker's own declaration, defaulted in this order:
 A baseline that never produced checks at all is `NOT_COMPARED` and keeps the
 historical `DONE` contract: there is nothing to attribute.
 
+**5. The unconfigured-tool blindness.** The scope matrix is
+repository-agnostic, so S2/S3/S4 demand ruff + pytest + mypy from every
+project; a missing executable is recorded as a skipped required check and a
+skip is never a pass. A project that deliberately gates on none of those tools
+was therefore permanently `BLOCKED`, with no way to say so. A **verification
+profile** states it instead — operator-owned, repository-bound, digest-bound,
+selected by `ASHA_VERIFICATION_PROFILE` (never by a task field):
+
+```
+checks.pytest          -> REQUIRED  (argv executed per service)
+checks.not_configured  -> NOT_CONFIGURED + provenance, never counted as PASS
+```
+
+Profiles change *which checks are required*; they never authorize shipping.
+Worker evidence still seals `authorized_to_ship: false`, and an inventory of
+nothing but `NOT_CONFIGURED` entries is `BLOCKED`, not `PASS`. Schema, trust
+rules and failure modes: `docs/verification-profiles.md`.
+
 ## The five-stage workflow
 
 1. **Freeze scope — `spec.json`.** Each worker declares `reads`, `writes` and

@@ -113,28 +113,44 @@ def validation_status(checks: list[dict]) -> tuple[str, str]:
     Fail-closed and total: an empty inventory is NOT_CONFIGURED; a check that
     never launched is BLOCKED; a launched check that failed is FAIL; a skip is
     BLOCKED; PASS needs at least one passed check and nothing else.
+
+    A verification-profile entry marked NOT_CONFIGURED is not a required
+    check: it is the operator's signed statement that the project does not
+    gate on that tool. It is reported, never counted as a pass -- an inventory
+    of nothing but NOT_CONFIGURED entries verified nothing, so it is BLOCKED.
     """
     if not checks:
         return VALIDATION_NOT_CONFIGURED, 'no required checks recorded'
-    unlaunched = [str(entry.get('name')) for entry in checks
+    declared = [str(entry.get('name')) for entry in checks
+                if entry.get('status') == 'not_configured']
+    required = [entry for entry in checks
+                if entry.get('status') != 'not_configured']
+    if not required:
+        return (VALIDATION_BLOCKED,
+                'no required check: declared not configured: '
+                + ', '.join(declared))
+    unlaunched = [str(entry.get('name')) for entry in required
                   if entry.get('status') == 'failed'
                   and entry.get('launched') is False]
     if unlaunched:
         return (VALIDATION_BLOCKED,
                 'could not be executed: ' + ', '.join(unlaunched))
-    failed = [str(entry.get('name')) for entry in checks
+    failed = [str(entry.get('name')) for entry in required
               if entry.get('status') == 'failed']
     if failed:
         return VALIDATION_FAIL, 'failed: ' + ', '.join(failed)
-    not_run = [str(entry.get('name')) for entry in checks
+    not_run = [str(entry.get('name')) for entry in required
                if entry.get('status') in ('blocked', 'skipped')]
     if not_run:
         return VALIDATION_BLOCKED, 'not executed: ' + ', '.join(not_run)
-    unknown = [str(entry.get('name')) for entry in checks
+    unknown = [str(entry.get('name')) for entry in required
                if entry.get('status') != 'passed']
     if unknown:
         return VALIDATION_BLOCKED, 'unrecognised status: ' + ', '.join(unknown)
-    return VALIDATION_PASS, 'all required checks passed'
+    rule = 'all required checks passed'
+    if declared:
+        rule += ' (not configured: ' + ', '.join(declared) + ')'
+    return VALIDATION_PASS, rule
 
 
 def execution_ok(execution: dict[str, object]) -> bool:

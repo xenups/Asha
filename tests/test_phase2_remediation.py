@@ -173,7 +173,7 @@ def test_collect_evidence_threads_one_deadline_object(
     seen: dict = {}
 
     def fake_checks(decision, path, resolved, timeout_s=None, deps_root=None,
-                    deadline=None):
+                    deadline=None, profile=None):
         seen['checks'] = deadline
         return [{'name': 'pytest', 'scope': 'package', 'status': 'failed',
                  'launched': True, 'exit_code': None,
