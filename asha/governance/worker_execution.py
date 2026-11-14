@@ -58,6 +58,12 @@ from asha.types import (
     WORKER_EVIDENCE_FIELDS,
     OrchestratorError,
 )
+from asha.verification_profile import (
+    Profile,
+    load_selected,
+    statement,
+    verify_unchanged,
+)
 from asha.worktree import (
     WorktreeDispatcher,
     _commit_all,
@@ -783,6 +789,7 @@ def deferred_baseline_checks(
     deps_root: Path | None = None,
     *,
     deadline: timeouts.Deadline | None = None,
+    profile: Profile | None = None,
 ) -> dict[str, Any] | None:
     """Baseline pass that reuses the CANDIDATE's authoritative decision.
 
@@ -835,7 +842,7 @@ def deferred_baseline_checks(
         checks = _run_checks(
             base_decision, wt, base_resolved,
             timeout_s=check_runner.BASELINE_TIMEOUT_S, deps_root=deps_root,
-            deadline=deadline)
+            deadline=deadline, profile=profile)
         journal = {
             "checks": checks,
             "resolved": resolved,
@@ -877,14 +884,20 @@ def _deps_root(path: Path, repo: Path) -> Path | None:
 def _run_checks(decision, path: Path, resolved: dict,
                 timeout_s: float = check_runner.CHECK_TIMEOUT_S,
                 deps_root: Path | None = None,
-                deadline: timeouts.Deadline | None = None) -> list[dict]:
+                deadline: timeouts.Deadline | None = None,
+                profile: Profile | None = None) -> list[dict]:
     """Run the check matrix for a resolved scope (shared by baseline and
-    current passes; identical machinery, identical environment)."""
+    current passes; identical machinery, identical environment).
+
+    A selected verification profile is authoritative: its checks are complete
+    by declaration, so a profiled run never narrows itself to changed files.
+    """
+    profile = profile if profile is not None else load_selected(path)
     # Only add the kwarg when it is actually set: unbound runs keep the
     # pre-existing call shape (monkeypatched runners, external callers).
     extra: dict[str, Any] = (
         {'deps_root': deps_root} if deps_root is not None else {})
-    if decision.eligible:
+    if decision.eligible and profile is None:
         # the baseline pass must keep ITS budget on this path too: dropping
         # ``timeout`` here silently substituted the 900s check budget
         return check_runner.run_scoped(
@@ -897,6 +910,8 @@ def _run_checks(decision, path: Path, resolved: dict,
             env_overrides=verification_env.env_overrides(path),
             **extra,
         )
+    if profile is not None:
+        extra['profile'] = profile
     return check_runner.run(path, resolved, timeout_s=timeout_s,
                             deadline=deadline,
                             env_overrides=verification_env.env_overrides(path),
@@ -1286,6 +1301,10 @@ def collect_worker_evidence(
                 str(wid), resolved, set(uncertain), by,
                 workers if workers is not None else [worker])
         decision = scoping_decision(path, resolved, cls)
+        # Snapshot the operator-selected profile BEFORE any check runs: the
+        # matrix a run is verified under is fixed at its start, and its
+        # identity is what the seal records.
+        profile = load_selected(Path(repo) if repo is not None else path)
         if baseline_deferred:
             if repo is None:
                 raise OrchestratorError(
@@ -1298,7 +1317,7 @@ def collect_worker_evidence(
             baseline_journal = deferred_baseline_checks(
                 worker, path, effective_base, effective_base_tree,
                 Path(repo), task_id, resolved, decision, deps_root=deps_root,
-                deadline=deadline)
+                deadline=deadline, profile=profile)
             baseline_checks = (baseline_journal or {}).get("checks")
             baseline_scope = (
                 (baseline_journal or {}).get("resolved") or {}).get("scope")
@@ -1316,7 +1335,7 @@ def collect_worker_evidence(
                  message="candidate checks on the worker tree",
                  data={"mode": getattr(decision, "mode", None)})
         checks = _run_checks(decision, path, resolved, deps_root=deps_root,
-                             deadline=deadline)
+                             deadline=deadline, profile=profile)
         for entry in checks:
             obs.emit("candidate_check.completed", "verification",
                      stage_id="candidate", worker_id=str(wid),
@@ -1449,6 +1468,10 @@ def collect_worker_evidence(
             # only when the comparison above was actually performed; the
             # fall-through below seals that decision either way (DONE when
             # authorised, FAILED when not).
+        if profile is not None:
+            # The matrix a run was verified under cannot be edited mid-flight:
+            # re-read the profile and fail closed on any byte change.
+            verify_unchanged(profile)
         diff = _git(path, "diff", effective_base,
                     target_commit, strip=False)
         payload: dict[str, Any] = {
@@ -1484,6 +1507,10 @@ def collect_worker_evidence(
                                   else validation_state),
             "acceptance": acceptance,
             "comparison": comparison,
+            # Which authoritative matrix verified this tree (None: the
+            # repository-agnostic scope matrix).
+            "verification_profile": (statement(profile)
+                                     if profile is not None else None),
         }
         preload = skill_facts(audit)
         if preload:

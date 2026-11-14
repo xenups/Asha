@@ -146,8 +146,13 @@ def test_forward_slice_semantics_unchanged(graph_env) -> None:
     # check_diagnosis, whose signatures join the same stub closure. Measured
     # 101280 (+285 bytes, +0.3%); the bound keeps ~2.7% headroom and
     # _assert_stub_dominated still fails loudly on full-body emission.
+    # 106000 (0.7.4): worker_execution imports asha.verification_profile
+    # (profile loading/statement helpers), whose signature stubs join this
+    # same closure; measured 104278 (+2878 over the previous bound, target
+    # body unchanged, still stub-dominated). Bound moves by the measured
+    # amount plus ~1.7% headroom, so full-body degradation still fails loudly.
     body_len = len(sl.target_source) + sum(len(st.text) for st in sl.stubs)
-    assert body_len < 104000, body_len
+    assert body_len < 106000, body_len
 
 
 def test_stub_emission_reduces_t1_context(graph_env) -> None:
@@ -194,9 +199,12 @@ def test_stub_emission_reduces_t1_context(graph_env) -> None:
     # its contract block), measured 114572 -- still stub-dominated, target
     # body unchanged; bound rises by the measured 572 + ~1.2% headroom, so a
     # regression toward full-body serialization still fails loudly.
+    # 120000 (0.7.4): the same closure change measured above (verification
+    # profile helpers hanging off worker_execution), measured 117694 -- still
+    # stub-dominated, target body unchanged; ~2.0% headroom.
     _assert_stub_dominated(sl)
     emitted = len(sl.target_source) + sum(len(st.text) for st in sl.stubs)
-    assert emitted < 116000, emitted
+    assert emitted < 120000, emitted
 
 
 def test_reverse_forward_combined_keeps_required_t3_context(graph_env) -> None:

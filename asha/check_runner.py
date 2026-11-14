@@ -30,6 +30,7 @@ from asha.governance.env_resolver import (
     resolve_env_for_file,
 )
 from asha.timeouts import DEFAULT_TIMEOUTS, Deadline
+from asha.verification_profile import NOT_CONFIGURED, Profile, load_selected
 
 TAIL_CHARS = 2000
 
@@ -236,7 +237,7 @@ def _exec_path_args(env: ServiceEnvironment | None, root: Path,
             or env.source_root is not None):
         # Bound runs execute at the source root, so repo-relative paths
         # are already in the execution cwd's coordinate system.
-        return list(repo_relative)
+        return repo_relative.copy()
     # Normalize to forward slashes: on Windows Path.relative_to() yields
     # backslash paths while governance repo-relative paths are always
     # forward-slash. Matching on as_posix() keeps the translation
@@ -432,11 +433,44 @@ def _annotate(entry: dict, env: ServiceEnvironment | None,
     return entry
 
 
+def _profile_commands(plan, root: Path) -> list[tuple[str, list[str]]]:
+    """Profile-declared argv for one service, interpreter-first.
+
+    Declared argv is what follows the interpreter (``['-m', 'pytest', ...]``),
+    so ``_env_argv`` can swap the interpreter without changing the shape.
+    """
+    py = str(plan.python) if plan.python else sys.executable
+    return [(name, [py, *argv]) for name, argv in plan.checks]
+
+
+def _not_configured_entries(plan, label: str,
+                            interpreter: str) -> list[dict]:
+    """Record an explicit NOT_CONFIGURED declaration, unexecuted.
+
+    Distinct by construction from ``skipped`` (a required check that could
+    not run): this entry carries the provenance the operator signed, and the
+    aggregate treats it as not-required rather than as a blocked check.
+    """
+    return [{
+        'name': name,
+        'scope': CHECK_SCOPE.get(name, 'not_configured'),
+        'status': NOT_CONFIGURED,
+        'launched': False,
+        'exit_code': None,
+        'note': 'not configured by project: ' + provenance,
+        'provenance': provenance,
+        'required': False,
+        'service': label,
+        'interpreter': interpreter,
+    } for name, provenance in plan.not_configured]
+
+
 def _run_group(root: Path, names: list[str], changed_py: list[str],
                label: str, timeout_s: float,
                deps_root: Path | None,
                deadline: Deadline | None = None,
-               env_overrides: dict[str, str] | None = None) -> list[dict]:
+               env_overrides: dict[str, str] | None = None,
+               plan=None) -> list[dict]:
     """Run the matrix for one service group in that service's environment."""
     try:
         env = _service_env(root, changed_py, deps_root)
@@ -453,10 +487,13 @@ def _run_group(root: Path, names: list[str], changed_py: list[str],
         """Keep the entry, annotated with its environment."""
         results.append(_annotate(entry, env, root))
 
-    for name, argv in _commands(root, names, changed_py):
+    commands = (_profile_commands(plan, root) if plan is not None
+                else _commands(root, names, changed_py))
+    for name, argv in commands:
         entry: dict = {
             'name': name,
-            'scope': CHECK_SCOPE[name],
+            'scope': CHECK_SCOPE.get(
+                name, (plan.label if plan is not None else 'declared')),
             'status': 'passed',
             'launched': True,
             'exit_code': 0,
@@ -521,6 +558,8 @@ def _run_group(root: Path, names: list[str], changed_py: list[str],
         entry['stdout_sha256'] = validation_digest(result.stdout or '')
         entry['stderr_sha256'] = validation_digest(result.stderr or '')
         record(entry)
+    if plan is not None:
+        results.extend(_not_configured_entries(plan, label, interpreter))
     return results
 
 
@@ -528,7 +567,8 @@ def run(root: Path | str, resolved: dict,
         timeout_s: float = CHECK_TIMEOUT_S,
         *, deps_root: Path | None = None,
         deadline: Deadline | None = None,
-        env_overrides: dict[str, str] | None = None) -> list[dict]:
+        env_overrides: dict[str, str] | None = None,
+        profile: Profile | None = None) -> list[dict]:
     """Execute the mandatory checks for a resolved scope.
 
     One group per service root: each runs the full matrix for its own files
@@ -539,15 +579,25 @@ def run(root: Path | str, resolved: dict,
     ``deps_root`` binds the run to the worktree's source while taking
     dependencies from the original checkout; it also enables the
     fail-closed source-identity probe.
+
+    ``profile`` replaces the scope matrix with the operator's declared checks.
+    When it is None the operator-selected profile from the environment is
+    used (never a task-spec field, so a worker cannot widen its own matrix);
+    with no profile selected the historical scope matrix applies unchanged.
     """
     root = Path(root).resolve()
+    if profile is None:
+        profile = load_selected(root)
     names = resolved['checks']
     changed_py = [f for f in resolved['affected_files']
                   if f.endswith(('.py', '.pyi')) and (root / f).is_file()]
     results: list[dict] = []
     for label, paths in _service_groups(root, changed_py):
-        results.extend(_run_group(root, names, paths, label, timeout_s,
-                                  deps_root, deadline, env_overrides))
+        plan = profile.service_for(label) if profile is not None else None
+        results.extend(_run_group(root, names, paths, label,
+                                  plan.timeout_s if plan is not None
+                                  else timeout_s,
+                                  deps_root, deadline, env_overrides, plan))
     return results
 
 
