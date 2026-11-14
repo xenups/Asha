@@ -203,7 +203,7 @@ def test_watch_stepper_current_vs_last_sealed(tmp_path: Path) -> None:
 
 # The commit the frozen trio is measured against: every edit made after it
 # must be approved and the anchor advanced in the same review.
-_GOVERNANCE_ANCHOR = '422c60c'  # 0.7.1: environment diagnosis in check_runner
+_GOVERNANCE_ANCHOR = '91f5163'  # 0.7.2: one _annotate() for both check paths
 
 
 def test_governance_trio_frozen(tmp_path: Path) -> None:
@@ -263,6 +263,10 @@ def test_governance_trio_frozen(tmp_path: Path) -> None:
     # missing module. No check changes verdict: a failed check stays failed,
     # an unattributable baseline still refuses DONE, and scoping.py,
     # scheduler.py are untouched. The anchor advances only for that change.
+    # Anchor 91f5163 (0.7.2): the same change's follow-up -- run_scoped built
+    # its own entries, so the identity fields reached only the legacy path.
+    # Both builders now end in one _annotate(); still additive, still no
+    # verdict change, still scoping.py/scheduler.py untouched.
     out = sp.run(['git', 'diff', f'{_GOVERNANCE_ANCHOR}..HEAD', '--',
                   'asha/scoping.py', 'asha/check_runner.py',
                   'asha/scheduler.py'],
