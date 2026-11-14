@@ -95,7 +95,9 @@ def test_failing_acceptance_is_a_real_nonzero_exit(tmp_path: Path) -> None:
     assert state["reason"] == "acceptance_failed"
     assert state["acceptance"]["ran"] is True
     assert state["acceptance"]["exit_code"] == 3
-    assert state["acceptance"]["outcome"] == "failed"
+    # exit 3 is pytest's INTERNAL ERROR: the runner never produced a verdict,
+    # so the honest outcome is "inconclusive" (still refusing DONE / no seal).
+    assert state["acceptance"]["outcome"] == "inconclusive"
     assert "w1" not in report["evidence"]
 
 
