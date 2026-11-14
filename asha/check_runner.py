@@ -23,6 +23,7 @@ from asha.execution import (
     ExecutionOutcome,
     spawn_capture,
 )
+from asha.governance import check_diagnosis
 from asha.governance.env_resolver import (
     EnvironmentResolver,
     ServiceEnvironment,
@@ -388,6 +389,8 @@ def _blocked_group(reason: str, names: list[str], label: str) -> list[dict]:
         'exit_code': None,
         'note': 'service ' + label + ': ' + reason,
         'service': label,
+        # the environment never resolved: distinct from a check that ran
+        'failure_mode': check_diagnosis.ENVIRONMENT_UNRESOLVED,
     } for name in names]
 
 
@@ -419,6 +422,18 @@ def _run_group(root: Path, names: list[str], changed_py: list[str],
     except (CheckRunnerError, OSError) as exc:
         return _blocked_group(f'{type(exc).__name__}: {exc}', names, label)
     results: list[dict] = []
+    interpreter = (str(env.python_bin) if env is not None
+                   else sys.executable)
+
+    def record(entry: dict) -> None:
+        """Attach the failure diagnosis, then keep the entry (additive)."""
+        diagnosis = check_diagnosis.classify(entry, repo_root=root)
+        if diagnosis is not None:
+            entry['failure_mode'] = diagnosis.kind
+            if diagnosis.module:
+                entry['failure_module'] = diagnosis.module
+        results.append(entry)
+
     for name, argv in _commands(root, names, changed_py):
         entry: dict = {
             'name': name,
@@ -427,12 +442,18 @@ def _run_group(root: Path, names: list[str], changed_py: list[str],
             'launched': True,
             'exit_code': 0,
             'service': label,
+            # Environment identity: a comparison across two interpreters is
+            # not a comparison at all, so each entry records who ran it.
+            'interpreter': interpreter,
+            'hermetic': (env.is_hermetic if env is not None else False),
+            'service_root': (str(env.service_root) if env is not None
+                             else str(root)),
         }
         if not argv:
             entry['status'] = 'skipped'
             entry['launched'] = False
             entry['note'] = 'no applicable target'
-            results.append(entry)
+            record(entry)
             continue
         argv = _env_argv(env, name, argv)
         result = spawn_capture(argv, cwd=cwd, timeout_s=timeout_s,
@@ -447,20 +468,21 @@ def _run_group(root: Path, names: list[str], changed_py: list[str],
             entry['status'] = 'failed'
             entry['note'] = 'launch failed: ' + result.termination_detail
             entry['output_tail'] = redact_secrets(result.stderr[-TAIL_CHARS:])
-            results.append(entry)
+            record(entry)
             continue
         if result.outcome == EXECUTION_FAILED_TO_COLLECT:
             entry['status'] = 'failed'
             entry['note'] = ('output collection failed: '
                              + result.termination_detail)
             entry['output_tail'] = redact_secrets(result.stderr[-TAIL_CHARS:])
-            results.append(entry)
+            record(entry)
             continue
         if result.timed_out:
             entry['status'] = 'failed'
+            entry['timed_out'] = True
             entry['note'] = _budget_note(result)
             entry['output_tail'] = _outcome_tail(result)
-            results.append(entry)
+            record(entry)
             continue
         combined = (result.stdout or '') + (result.stderr or '')
         missing = _tool_unavailable(name, combined)
@@ -479,7 +501,7 @@ def _run_group(root: Path, names: list[str], changed_py: list[str],
         entry['output_tail'] = redact_secrets(combined[-TAIL_CHARS:])
         entry['stdout_sha256'] = validation_digest(result.stdout or '')
         entry['stderr_sha256'] = validation_digest(result.stderr or '')
-        results.append(entry)
+        record(entry)
     return results
 
 

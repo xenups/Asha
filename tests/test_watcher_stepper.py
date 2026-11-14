@@ -203,7 +203,7 @@ def test_watch_stepper_current_vs_last_sealed(tmp_path: Path) -> None:
 
 # The commit the frozen trio is measured against: every edit made after it
 # must be approved and the anchor advanced in the same review.
-_GOVERNANCE_ANCHOR = '82a0ba8'  # Phase 13: observability instrumentation
+_GOVERNANCE_ANCHOR = '422c60c'  # 0.7.1: environment diagnosis in check_runner
 
 
 def test_governance_trio_frozen(tmp_path: Path) -> None:
@@ -257,6 +257,12 @@ def test_governance_trio_frozen(tmp_path: Path) -> None:
     # Phase 13: the approved observability change edits scheduler.py (the
     # worker-state choke point now also emits events), so the anchor advances
     # to that commit. scoping.py and check_runner.py are untouched.
+    # Anchor 422c60c (0.7.1): the approved environment-diagnosis change edits
+    # check_runner.py -- every entry now records its interpreter, hermeticity
+    # and service root, and a failed entry carries its failure mode and
+    # missing module. No check changes verdict: a failed check stays failed,
+    # an unattributable baseline still refuses DONE, and scoping.py,
+    # scheduler.py are untouched. The anchor advances only for that change.
     out = sp.run(['git', 'diff', f'{_GOVERNANCE_ANCHOR}..HEAD', '--',
                   'asha/scoping.py', 'asha/check_runner.py',
                   'asha/scheduler.py'],

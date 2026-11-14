@@ -233,7 +233,7 @@ def test_acceptance_failure_retains_acceptance_and_comparison(
     assert payload is None
     assert outcome['state'] == 'FAILED'
     assert outcome['reason'] == 'acceptance_failed'
-    assert outcome['acceptance']['outcome'] == 'failed'
+    assert outcome['acceptance']['outcome'] == 'inconclusive'
     assert outcome['acceptance']['exit_code'] == 2
     assert outcome['comparison']['reason'] == 'NOT_COMPARED'
     assert outcome['comparison']['performed'] is False

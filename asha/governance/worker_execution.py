@@ -50,7 +50,7 @@ from asha.execution import (
     ExecutionOutcome,
     ExecutionTimeout,
 )
-from asha.governance import delta
+from asha.governance import check_diagnosis, delta
 from asha.observability import events as obs
 from asha.runner import dispatch_runner
 from asha.types import (
@@ -198,8 +198,24 @@ def build_acceptance(worker: dict[str, Any],
     passed = _last_count(tail, _ACCEPTANCE_PASSED_RE)
     skipped = _last_count(tail, _ACCEPTANCE_SKIPPED_RE)
     deselected = _last_count(tail, _ACCEPTANCE_DESELECTED_RE)
-    # pytest's own statuses: 4 = usage/file error, 5 = no tests collected
-    if record["exit_code"] in (4, 5):
+    # pytest's own statuses: 2 = interrupted (collection error / Ctrl-C),
+    # 3 = internal error, 4 = usage error, 5 = no tests collected. None of
+    # them carries a verdict about the code, so none is "failed tests".
+    if record["exit_code"] in (2, 3):
+        record["outcome"] = "inconclusive"
+        gap = check_diagnosis.classify({"name": "pytest", "status": "failed",
+                                        "exit_code": record["exit_code"],
+                                        "launched": True,
+                                        "output_tail": tail})
+        if gap is not None and gap.is_environment:
+            record["detail"] = (f"runner exit {record['exit_code']}: "
+                                f"{gap.kind} {gap.module or ''}; no verdict")
+            record["diagnosis"] = gap.to_dict()
+            record["hint"] = gap.hint()
+        else:
+            record["detail"] = (f"runner exit {record['exit_code']}: "
+                                "no verdict was produced")
+    elif record["exit_code"] in (4, 5):
         record["outcome"] = "inconclusive"
         record["detail"] = (f"runner exit {record['exit_code']}: "
                             "no usable acceptance tests")
@@ -241,7 +257,7 @@ def refuse_unproven_acceptance(outcome: dict[str, Any]) -> dict[str, Any]:
 
 
 COMPARISON_REASONS = ("COMPARED", "NOT_COMPARED", "BASE_EQUALS_TARGET",
-                      "INVENTORY_MISMATCH")
+                      "INVENTORY_MISMATCH", "INTERPRETER_MISMATCH")
 
 
 def failure_digest(failures: Any, limit: int = 3) -> str:
@@ -256,6 +272,28 @@ def failure_digest(failures: Any, limit: int = 3) -> str:
              for item in ordered[:limit]]
     extra = len(ordered) - len(shown)
     return ','.join(shown) + (f',+{extra} more' if extra > 0 else '') or 'none'
+
+
+def _interpreter_map(checks: list[dict] | None) -> dict[str, str]:
+    """Which interpreter actually ran each check (skipped checks excluded)."""
+    out: dict[str, str] = {}
+    for entry in checks or []:
+        if entry.get("launched") is False or not entry.get("interpreter"):
+            continue
+        out[str(entry.get("name"))] = str(entry["interpreter"])
+    return out
+
+
+def _interpreter_drift(baseline: list[dict] | None,
+                       candidate: list[dict] | None) -> list[str]:
+    """Checks whose two runs used different interpreters.
+
+    A delta across two interpreters measures the environments, not the
+    change, so it is not a comparison: the caller records it and stops.
+    """
+    before, after = _interpreter_map(baseline), _interpreter_map(candidate)
+    return sorted(name for name, interp in before.items()
+                  if name in after and after[name] != interp)
 
 
 def _check_inventory(checks: list[dict] | None) -> list[str]:
@@ -290,6 +328,15 @@ def build_comparison(*, base_tree: str | None, candidate_tree: str | None,
         # have to invent them, so the answer is "not compared".
         record["detail"] = "missing_tree_identifier"
         return record
+    gap = check_diagnosis.first_environment_gap(baseline_checks)
+    if gap is not None:
+        # Blame the environment, not the worker: the baseline never
+        # exercised the code (missing dependency / tool / unresolvable
+        # service env), so the run carries an actionable detail and hint.
+        record["detail"] = "baseline_" + gap.kind
+        record["diagnosis"] = gap.to_dict()
+        record["hint"] = gap.hint()
+        return record
     if baseline_checks and delta.unparsed_failures(baseline_checks):
         # The baseline check ran and failed, but produced no identity
         # (pytest collection error, crash, timeout). That is unknown
@@ -307,6 +354,12 @@ def build_comparison(*, base_tree: str | None, candidate_tree: str | None,
     if (baseline_scope is not None and candidate_scope is not None
             and baseline_scope != candidate_scope):
         record["reason"] = "INVENTORY_MISMATCH"
+        return record
+    drifted = _interpreter_drift(baseline_checks, candidate_checks)
+    if drifted:
+        record["reason"] = "INTERPRETER_MISMATCH"
+        record["detail"] = "checks_ran_in_different_interpreters"
+        record["interpreter_drift"] = drifted
         return record
     record.update({"performed": True, "comparable": True,
                    "reason": "COMPARED", "verdict": verdict})
@@ -1322,7 +1375,7 @@ def collect_worker_evidence(
         # failure-identity detail) keeps the documented DONE contract --
         # there is nothing to attribute, and no failed check to misread.
         if (baseline_deferred
-                and comparison["detail"] == "baseline_failures_unparsed"):
+                and str(comparison["detail"] or "").startswith("baseline_")):
             return {
                 # not DONE: an unattributable baseline authorizes nothing
                 "state": "FAILED",
@@ -1331,7 +1384,9 @@ def collect_worker_evidence(
                 "reason": ("comparison_inconclusive:"
                            + str(comparison["detail"] or comparison["reason"])
                            + ";candidate_failures=" + failure_digest(cur_fails)
-                           + f";worker_exit={rc}"),
+                           + f";worker_exit={rc}"
+                           + (f";hint={comparison['hint']}"
+                              if comparison.get("hint") else "")),
                 "evidence": None,
                 "exit_status": rc,
                 "verification_status": "COMPARISON_INCONCLUSIVE",

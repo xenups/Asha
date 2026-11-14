@@ -169,16 +169,30 @@ def test_supplied_but_not_run_never_passes(repo: Path, tmp_path: Path,
 
 
 def test_nonzero_exit_is_acceptance_failure(repo: Path, tmp_path: Path) -> None:
-    body = 'raise SystemExit(3)\n'
+    body = 'raise SystemExit(1)\n'      # exit 1: the tests ran and failed
     worker = _worker(_script(tmp_path, 'acc.py', body))
     rc, _tail, audit = we.execute_with_audit(worker, repo)
-    assert rc == 3
+    assert rc == 1
     outcome, payload = _collect(repo, tmp_path, worker, rc=rc, audit=audit)
     assert payload is None                      # no sealed evidence at rc != 0
     assert outcome['state'] == 'FAILED'
     assert outcome['reason'] == 'acceptance_failed'
-    assert outcome['acceptance']['exit_code'] == 3
+    assert outcome['acceptance']['exit_code'] == 1
     assert outcome['acceptance']['outcome'] == 'failed'
+
+
+@pytest.mark.parametrize('code', [2, 3])
+def test_runner_2_and_3_never_produce_a_verdict(repo: Path, tmp_path: Path,
+                                                code: int) -> None:
+    """Interrupted (2) and internal error (3): no verdict, so no pass."""
+    worker = _worker('pytest whatever')
+    audit = {'verify_ran': True, 'verify_exit': code,
+             'verify_output_tail': 'no verdict'}
+    outcome, _payload = _collect(repo, tmp_path, worker, rc=code, audit=audit)
+    assert outcome['state'] == 'FAILED'
+    assert outcome['acceptance']['outcome'] == 'inconclusive'
+    assert outcome['acceptance']['exit_code'] == code
+    assert we.acceptance_failed(outcome['acceptance']) is True
 
 
 @pytest.mark.parametrize('code', [4, 5])
