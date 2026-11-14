@@ -1686,6 +1686,21 @@ ASHA_DISPATCH_TASK_SPEC: dict[str, Any] = {
             "writes": {"type": "array", "items": {"type": "string"}},
             "deps": {"type": "array", "items": {"type": "string"}},
             "cmd": {"type": "array", "items": {"type": "string"}},
+            "output_kind": {
+                "type": "string",
+                "enum": ["changes", "artifact", "no_change"],
+                "description": "What this task must produce before it can be "
+                               "DONE. Defaults from the other fields: writes "
+                               "-> changes, required_artifacts -> artifact, "
+                               "no_change_reason -> no_change."},
+            "required_artifacts": {
+                "type": "array", "items": {"type": "string"},
+                "description": "Report files that must exist, be non-empty "
+                               "and be written during this run."},
+            "no_change_reason": {
+                "type": "string",
+                "description": "Why no tree change is the correct outcome; "
+                               "required for a no_change task."},
             "prompt": {"type": "string",
                        "description": "Task metadata only: never "
                                       "executed, never logged to "
@@ -2650,6 +2665,8 @@ def asha_dispatch_task(arguments: dict[str, Any], *,
         unknown = sorted(set(arguments) - {
             "id", "declared_scope", "reads", "writes", "deps", "cmd",
             "validation",
+            # output contract: what this task must actually produce
+            "output_kind", "required_artifacts", "no_change_reason",
             "prompt", "execution_mode", "root"})
         if unknown:
             return _tool_error("unknown field(s): " + ", ".join(unknown)
@@ -2789,6 +2806,18 @@ def asha_dispatch_task(arguments: dict[str, Any], *,
             "reads": reads, "writes": writes, "cmd": [str(x) for x in cmd],
             "validation": [shlex.split(entry) for entry in
                            (validation_commands or [])]}
+        # Same contract fields the spec route accepts, so one declaration
+        # vocabulary covers dispatch and run-spec.
+        for field in ("output_kind", "no_change_reason"):
+            if arguments.get(field) is not None:
+                if not isinstance(arguments[field], str):
+                    return _tool_error(f"{field} must be a string")
+                worker[field] = arguments[field]
+        artifacts, error = _str_list(arguments, "required_artifacts")
+        if error:
+            return _tool_error(error)
+        if artifacts:
+            worker["required_artifacts"] = artifacts
         # single authorization point: the fast flag is the ROUTER's
         # own decision (env AND proven-disjoint-coherent), never raw input
         sched_fast = decision.mode is RuntimeMode.FAST_PATH
@@ -2904,6 +2933,10 @@ def asha_dispatch_task(arguments: dict[str, Any], *,
         payload["applied"] = bool(_wstate.get("applied", False))
         payload["writes_observed"] = list(
             _wstate.get("writes_observed") or [])
+        # The output contract the run was judged against, and why it was
+        # refused: a client must not have to infer it from the state alone.
+        if _wstate.get("output_contract") is not None:
+            payload["output_contract"] = _wstate["output_contract"]
         for key in ("head", "tree_hash", "snapshot_id", "wip", "checks"):
             if report.get(key) is not None:
                 payload[key] = report[key]

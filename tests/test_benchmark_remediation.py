@@ -110,16 +110,21 @@ def test_worker_that_writes_its_declared_file_succeeds(tmp_path: Path) -> None:
     assert payload["states"]["w1"]["applied"] is True
 
 
-def test_worker_without_declared_writes_is_not_punished(tmp_path: Path) -> None:
-    """writes=[] stays a legal no-op (conflict-planning only)."""
+def test_worker_without_declared_output_is_refused(tmp_path: Path) -> None:
+    """An undeclared no-op is not a success: nothing changed, so nothing ran."""
     repo = _make_repo(tmp_path)
     spec = _spec(tmp_path, [_worker([PY, "-c", "pass"], [])])
 
     payload = _payload(_call("asha_run_spec", {
         "root": str(repo), "spec_path": str(spec), "apply": True}))
 
-    assert payload["status"] == "ok"
-    assert payload["successful_workers"] == ["w1"]
+    assert payload["status"] == "failed"
+    assert payload["successful_workers"] == []
+    assert payload["failed_workers"] == ["w1"]
+    state = payload["states"]["w1"]
+    assert state["reason"] == (
+        "output_contract_not_satisfied:no_change_in_workspace")
+    assert state["validation_status"] == "FAIL"
 
 
 def test_scope_violation_still_refused(tmp_path: Path) -> None:

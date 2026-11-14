@@ -66,6 +66,11 @@ def _worker(writes: dict[str, str] | None = None) -> dict[str, Any]:
         'declared_scope': sorted(writes) or ['src/mod.py'],
         'reads': ['src/mod.py'], 'writes': sorted(writes),
         'cmd': [sys.executable, '-c', 'pass']}
+    if not writes:
+        # Comparison fixture: identical trees are the point, so the run has to
+        # say that no change is the expected outcome.
+        worker['output_kind'] = 'no_change'
+        worker['no_change_reason'] = 'comparison fixture: identical tree'
     if writes:
         # test-only payload: _collect writes these before evidence is
         # collected (the worker command itself is never spawned here)

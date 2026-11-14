@@ -189,9 +189,14 @@ def test_stub_emission_reduces_t1_context(graph_env) -> None:
     # worker_execution (observability events), measured 110811 -- +311 bytes
     # over the previous 110500 bound, so the bound moves by a measured amount
     # and still fails loudly if stubs degrade toward full bodies.
+    # 116000 (0.7.3): the output-contract guard lives in this very module
+    # (worker_execution imports asha.governance.output_contract and grew by
+    # its contract block), measured 114572 -- still stub-dominated, target
+    # body unchanged; bound rises by the measured 572 + ~1.2% headroom, so a
+    # regression toward full-body serialization still fails loudly.
     _assert_stub_dominated(sl)
     emitted = len(sl.target_source) + sum(len(st.text) for st in sl.stubs)
-    assert emitted < 114000, emitted
+    assert emitted < 116000, emitted
 
 
 def test_reverse_forward_combined_keeps_required_t3_context(graph_env) -> None:

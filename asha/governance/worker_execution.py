@@ -50,7 +50,7 @@ from asha.execution import (
     ExecutionOutcome,
     ExecutionTimeout,
 )
-from asha.governance import check_diagnosis, delta
+from asha.governance import check_diagnosis, delta, output_contract
 from asha.observability import events as obs
 from asha.runner import dispatch_runner
 from asha.types import (
@@ -1265,6 +1265,18 @@ def collect_worker_evidence(
                         candidate_tree=target_tree,
                         baseline_checks=baseline_checks,
                         candidate_checks=None)}
+        # A passing suite is not output: the contract is evaluated on the tree
+        # before any seal exists, so a no-op run can never be DONE.
+        contract = output_contract.evaluate(
+            worker, observed=observed, writes_observed=writes_observed,
+            root=path)
+        if not contract["satisfied"]:
+            obs.emit("output_contract.rejected", "scope", stage_id="scope",
+                     worker_id=str(wid), status="not_satisfied",
+                     message=str(contract["reason"]),
+                     data={"kind": contract["kind"],
+                           "writes_observed": contract["writes_observed"],
+                           "observed_count": contract["observed_count"]})
         resolved = scope_resolver.resolve(
             path, base=effective_base, paths=observed)
         cls = classification
@@ -1462,10 +1474,14 @@ def collect_worker_evidence(
             # the tree shows instead of inventing a verdict.
             "applied": bool(observed),
             "writes_observed": writes_observed,
+            "output_contract": contract,
             "diff": diff,
             "exit_status": rc,
             "execution_ms": (audit or {}).get("duration_ms"),
-            "validation_status": validation_state,
+            # A run that did not produce its declared output may not seal a
+            # PASS verdict, whatever its checks said.
+            "validation_status": ("FAIL" if not contract["satisfied"]
+                                  else validation_state),
             "acceptance": acceptance,
             "comparison": comparison,
         }
@@ -1520,23 +1536,31 @@ def collect_worker_evidence(
                 "reason": f"{type(exc).__name__}: {exc}",
                 "evidence": None, "comparison": comparison}
     done: dict[str, Any] = {
-        "state": "FAILED" if blocked else "DONE",
-        "reason": ("verification_failed:" + ",".join(failed)) if blocked
-        else None,
+        # A sealed record is not a success: the contract decides the state, and
+        # the record still carries the honest facts either way.
+        "state": "FAILED" if (blocked or not contract["satisfied"]) else "DONE",
+        "reason": (("verification_failed:" + ",".join(failed)) if blocked
+                   else ("acceptance_failed" if acceptance_failed(acceptance)
+                         else "output_contract_not_satisfied:"
+                         + str(contract["reason"]))
+                   if not contract["satisfied"] else None),
         "exit_status": rc,
         "verification_status": (
             ("REGRESSION_DETECTED" if new_fails else
              "BASELINE_FAILED" if base_fails else "VERIFICATION_FAILED")
             if blocked else
+            "OUTPUT_CONTRACT_NOT_SATISFIED" if not contract["satisfied"] else
             ("VERIFIED_SUCCESS" if not comparison["performed"]
              else "VERIFIED_NO_REGRESSION")),
         "evidence": str(evi_path),
         "observed": list(observed), "target_tree": target_tree,
         "applied": bool(observed), "writes_observed": writes_observed,
+        "output_contract": contract,
         "execution_ms": (audit or {}).get("duration_ms"),
-        "validation_status": validation_state,
+        "validation_status": ("FAIL" if not contract["satisfied"]
+                              else validation_state),
         "ready_to_push": (validation_state == "PASS" and not blocked
-                          and bool(observed)),
+                          and contract["satisfied"] and bool(observed)),
         "acceptance": acceptance, "comparison": comparison}
     if delta_ran:
         done["verdict"] = verdict

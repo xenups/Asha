@@ -87,11 +87,12 @@ def test_missing_signal_surface_never_reads_as_task_success(
     repo = _repo(tmp_path)
     payload = _payload(_dispatch(repo, "mss", reads=None, writes=None))
 
-    # executed: the command ran; the classification could not prove surface
-    assert payload["state"] == "DONE"
+    # the classification still names the signal gap, but a run that changed
+    # nothing and declared nothing is not a task success
+    assert payload["state"] == "FAILED"
+    assert payload["reason"].startswith("output_contract_not_satisfied:")
     assert payload["executed"] is True
     assert payload["classification_reason"] == "missing_signal_surface"
-    # ...and nothing says the TASK is done
     assert payload["applied"] is False
     assert payload["ready_to_push"] is False
     assert payload["authorized_to_ship"] is False
@@ -113,7 +114,8 @@ def test_missing_signal_other_surface_is_classification_only(
     assert payload["classification"] == "UNKNOWN"
     assert payload["classification_reason"] == "missing_signal_other_surface"
     assert payload["reason_code"] is None
-    assert payload["state"] == "DONE"
+    assert payload["state"] == "FAILED"
+    assert payload["reason"].startswith("output_contract_not_satisfied:")
     assert payload["executed"] is True
     assert payload["ready_to_push"] is False
     _assert_no_contradiction(payload)
@@ -124,7 +126,7 @@ def test_missing_signal_other_surface_is_classification_only(
 def test_success_reports_outcome_and_verdicts_separately(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     payload = _payload(_dispatch(
-        repo, "ok",
+        repo, "ok", writes=["tests/test_new.py"],
         cmd=[PY, "-c", "open('tests/test_new.py','w').write('x = 1\\n')"]))
 
     assert payload["state"] == "DONE"
@@ -137,12 +139,27 @@ def test_success_reports_outcome_and_verdicts_separately(tmp_path: Path) -> None
     _assert_no_contradiction(payload)
 
 
-def test_legitimate_no_op_stays_done_and_not_applied(tmp_path: Path) -> None:
+def test_declared_no_op_stays_done_and_not_applied(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
-    payload = _payload(_dispatch(repo, "noop", reads=[],
-                                 writes=["tests/test_noop.py"]))
+    payload = _payload(_dispatch(
+        repo, "noop", reads=[], writes=["tests/test_noop.py"],
+        output_kind="no_change",
+        no_change_reason="conflict-planning only: nothing to write"))
 
     assert payload["state"] == "DONE"
+    assert payload["executed"] is True
+    assert payload["output_contract"]["kind"] == "no_change"
+    assert payload["ready_to_push"] is False
+
+
+def test_undeclared_no_op_is_refused(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    payload = _payload(_dispatch(repo, "noop-silent", reads=[],
+                                 writes=["tests/test_noop.py"]))
+
+    assert payload["state"] == "FAILED"
+    assert payload["reason"] == (
+        "output_contract_not_satisfied:no_change_in_declared_writes")
     assert payload["executed"] is True
     assert payload["ready_to_push"] is False
 
@@ -236,7 +253,9 @@ def test_mcp_serialization_matches_in_process(tmp_path: Path) -> None:
             "arguments": {"root": str(repo), "id": "ser",
                           "declared_scope": ["tests/"], "reads": [],
                           "writes": ["tests/t_out.py"],
-                          "cmd": [PY, "-c", "pass"]}})
+                          "cmd": [PY, "-c",
+                                  ("open('tests/t_out.py','w')"
+                                   ".write('x = 1\\n')")]}})
     finally:
         assert proc.stdin is not None
         proc.stdin.close()
