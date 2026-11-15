@@ -1,210 +1,162 @@
 # Asha — Project Orientation
 
-Status: describes **actual current behavior** at HEAD `4d71e5b` (K.6.1 frozen).
-Not an architecture proposal.
+Status: describes **actual behavior of v0.7.4** (`asha` 0.7.4, HEAD of `main` at
+the release merge). Not an architecture proposal. Every path below exists in
+this tree; the numbers were taken from the code, not from an older document.
 
-## What Asha actually is
+The K6.1-era snapshot this file replaced is preserved verbatim at
+[`docs/archive/ORIENTATION-K6.1.md`](archive/ORIENTATION-K6.1.md).
 
-Asha is a **governed execution engine for agent-driven repository changes**.
-It is not merely a multi-agent scheduler. The three pillars:
+## What Asha is
 
-1. **Governed execution** — agent tasks run in isolated worktrees, routed
-   through a DAG coordinator with explicit state machine
-   (`DAGCoordinator` in `asha/governance/dag.py`, `run_workers_dag`),
-   scope checking, and environment resolution.
-2. **Scope / evidence / differential validation** — each worker's failures
-   are compared against a baseline; only *new* failures block a change
-   (see `FailureIdentity` below).
-3. **Context reduction** — AST/CodeGraph-based slicing that gives an agent
-   the smallest *sufficient* context for a target symbol (K.6/K.6.1).
+A **governed execution engine for agent-driven repository changes**. Three
+pillars:
 
-Entrypoints (verified): `run_workers_dag` (DAG), `run_worker_in_worktree`
-(CLI + MCP run), `GovernedScheduler` (legacy), MCP server
-(`asha/mcp_server.py`: `asha_status`, `asha_plan_dag`, `asha_run_spec`,
-`asha_get_surgical_context`, `asha_dispatch_task`).
+1. **Governed execution** — workers run in isolated Git worktrees under a DAG
+   coordinator (`asha/governance/dag.py`), with declared scope and an explicit
+   state machine.
+2. **Scope / evidence / differential validation** — the candidate's failures are
+   compared against a baseline; only *new* failures block a change
+   (`asha/governance/delta.py`, `FailureIdentity`).
+3. **Context reduction** — AST/CodeGraph slicing that hands a worker the
+   smallest sufficient context for a target symbol (`asha/ast_indexer.py`,
+   `asha/codegraph.py`, `asha/context_slicer.py`).
+
+## Entry points
+
+| Entry point | Module | Shape |
+| --- | --- | --- |
+| `asha` (bare) / `asha PATH` | `asha/cli.py` (`_unified_cli`) | zero-config status + tip seal |
+| `asha --verify` / `--stack` / `--context` / `--exec` | same | one-command modes, delegating to the MCP handlers |
+| `asha [--root --paths --acceptance --json --no-execute --ui --watch --stepper]` | `asha/cli.py` (`main`) | governance over an explicit change set |
+| `asha status` | `asha/cli.py` (`_status`) | read-only tip facts |
+| `asha run --spec FILE [--apply]` | `asha/scheduler.py` | DAG scheduler over a run-spec |
+| `asha dashboard` | `asha/cli.py` (`_dashboard_cmd`), `asha/observability/` | read-only loopback UI |
+| `asha-mcp` / `python -m asha.mcp_server` | `asha/mcp_server.py` | 14 MCP tools, stdio JSON-RPC `2024-11-05` |
+
+The CLI is a thin adapter: no policy of its own, every semantic field copied
+from the engine.
+
+## Module map (`asha/`)
+
+**Governance core**
+
+| Module | Role |
+| --- | --- |
+| `governance/dag.py` | `DAGCoordinator`, topological scheduling, per-worker state machine |
+| `governance/worker_execution.py` | one worker: worktree, command/agent execution, evidence write |
+| `governance/output_contract.py` | declared output contract read from the tree (writes / artifacts / no-change) |
+| `governance/delta.py` | baseline vs. candidate failure identities and verdicts |
+| `governance/evaluator.py` | worker verdict aggregation |
+| `governance/env_resolver.py`, `verification_env.py` | interpreter and dependency resolution for the target repo |
+| `governance/check_diagnosis.py` | environment-gap classification for a failing mandatory check |
+| `governance/ship_gate.py` | canonical ship gate (extracted from the removed `.jspace/control.py`) |
+| `governance/live_reviewer.py`, `semantic_review.py` | optional LLM-assisted review stages |
+| `scoping.py`, `scope_resolver.py` | scope levels S0–S4 and the required check matrix |
+
+**Execution and isolation**
+
+`worktree.py` (creation/removal, source binding), `execution.py`,
+`check_runner.py` (timeouts and durations), `runner.py`, `adapters/`
+(`native`, `ci`, `agent`), `scheduler.py`, `worker_graph.py`, `router.py`,
+`classifier.py`.
+
+**Evidence and trust**
+
+`evidence.py` (SHA-256 seal), `replay.py` (offline re-verification),
+`contracts/` (`execution.py`, `validation.py`), `gate_states.py`,
+`verification_profile.py` (operator-owned profile, repository binding, digest),
+`commitment.py`, `audit_snapshot.py`.
+
+**Context**
+
+`ast_indexer.py`, `codegraph.py`, `graph_cache.py`, `graph_state.py`,
+`context_slicer.py`, `code_search.py`, `dep_index.py`, `diff_engine.py`,
+`project_map.py`.
+
+**Review ladder**
+
+`ladder/` (`orchestrator.py`, `target.py`, `artifacts.py`, `aggregation.py`,
+`policy.py`, `instructions.py`, `models.py`) — the host LLM reviews, Asha
+validates and decides.
+
+**Surfaces**
+
+`cli.py`, `mcp_server.py`, `presentation.py`, `report_format.py`, `ui.py`,
+`telemetry.py`, `observability/` (events, store, server, static web assets),
+`memory.py`, `metrics.py`, `metrics_cli.py`, `watcher.py`, `timeouts.py`.
+
+## Invariants
+
+1. **A seal is evidence, not a licence.** Worker evidence records
+   `authorized_to_ship: false`; only `governance/ship_gate.py` decides shipping,
+   and it re-runs the matrix against the merged tree.
+2. **Skips are never passes.** A required check that could not run is recorded
+   as skipped/`NOT_CONFIGURED` with provenance; an inventory of only
+   `NOT_CONFIGURED` entries is `BLOCKED`, not `PASS`.
+3. **Unknown is not empty.** An unparseable baseline is
+   `NOT_COMPARED / UNKNOWN`, never `NO_FAILURES`.
+4. **Silence is not success.** A worker that declared output and produced none
+   fails `output_contract_not_satisfied`.
+5. **Scope is closed.** Any observed path outside `declared_scope` is
+   `INVALID_EVIDENCE`; unaccounted changes exit 2 with `SCOPE_INCOMPLETE`.
+6. **Profiles never authorize.** `ASHA_VERIFICATION_PROFILE` (operator-owned,
+   repository-bound, digest-snapshotted) changes *which checks are required*;
+   it cannot grant a ship.
+7. **Fail closed on trust.** An unreadable, unbound, digest-mismatched or
+   unparsable profile aborts the run instead of degrading to a weaker matrix.
+8. **Determinism.** `--json` emits exactly one document with stable field names
+   and explicit `null`s; only `duration_ms` varies between identical runs.
+9. **Observability is passive.** The dashboard records and renders; it cannot
+   approve, reject, modify or seal anything.
+10. **No hidden policy in the CLI.** Presentation lives in `cli.py`; every
+    decision comes from the engine modules above.
+
+## Scope levels and the default matrix
+
+`scope_resolver.SCOPE_CHECKS`:
+
+| Level | Checks |
+| --- | --- |
+| S0, S1 | `pytest` |
+| S2, S3, S4 | `ruff`, `pytest`, `mypy` |
+
+A verification profile replaces this matrix only where it applies, and only for
+the services it names (`docs/verification-profiles.md`).
+
+## State on disk
+
+`asha/common/paths.py` resolves state in two zones:
+
+- transient: the worktree's own temporary directories;
+- persistent: `$ASHA_STATE_DIR`, else `$XDG_STATE_HOME/asha`, else
+  `~/.local/state/asha` — holding `evidence/`, `journal/`, `orchestrator/`,
+  `cache/` and the telemetry store.
+
+`.jspace/` is no longer an execution path: the controller that used to live at
+`.jspace/control.py` was deleted and its gate semantics moved into
+`asha/governance/ship_gate.py`. The directory keeps only
+`.jspace/dependencies.json`, which `asha_status` reports as control-lock state.
 
 ## Why ordinary tests are insufficient for agent-driven changes
 
-An agent's patch is not a test author's patch. The failure modes that
-governance exists to catch:
+- **Scope creep** — a patch that touches files the task never declared is
+  refused, not diff-reviewed.
+- **Mock pollution** — governance compares *failures*, so a test suite edited
+  into passing is part of the change under review, not evidence for it.
+- **Stale bytecode / mtime collisions** — a leftover `__pycache__` can mask a
+  real regression; worktrees and cache isolation keep the two runs apart.
+- **Pre-existing failures** — only new failure identities block, so a red
+  baseline neither excuses nor blames the candidate.
+- **Unconfigured tooling** — a repository-agnostic matrix would block a project
+  that legitimately gates on other tools; a trusted profile is the way to say so
+  without weakening the gate.
 
-- **Scope creep** — the agent modified files outside its declared scope.
-  `scope_resolver.py` computes changed files against a base commit and
-  `scoping_decision` (worker_execution.py:162) fails closed on violations.
-- **Mock pollution** — tests that pass because a mock was inserted, or
-  because the test suite itself was edited, not because the code is correct.
-  Governance compares *failures*, not pass-counts, and treats a modified
-  test as part of the change, not as evidence.
-- **Stale `.pyc` / mtime collision** — a leftover `__pycache__`/`.pyc` from
-  the baseline run can be reused by the *current* verification run, masking
-  a real regression (K.5.3 defect, see cache isolation below).
-- **Incorrect delta attribution** — failures must be attributed to *this*
-  change. A failure that already existed at baseline is pre-existing, not a
-  regression. `FailureIdentity` makes that attribution exact.
+## Where to read next
 
-## Worktree isolation
-
-Each worker executes in its own worktree (`asha/worktree.py`,
-`WorktreeDispatcher`). Baseline and current verification run against
-different trees; the worker's mutations are confined to the worktree, so a
-failing worker cannot corrupt the main tree or another worker's files.
-
-## Cache-Isolated Verification and `_strip_check_caches`
-
-Invariant (audited in K.6, defect fixed in K.5.3):
-
-> Every execution pipeline crossing
-> Baseline Execution → Source Mutation → Current Verification
-> must isolate/strip verification-affecting caches before mutation or
-> before current verification.
-
-`_strip_check_caches(path)` (worker_execution.py:205) removes
-`__pycache__`, `.pytest_cache`, `.ruff_cache`, `.mypy_cache` from the
-worktree at any depth. Verified call sites: `_run_one` in
-`DAGCoordinator` (after baseline, before worker execution) and
-`run_worker_in_worktree`. Without it, untracked cache dirs surface in
-`collect_worker_evidence`'s observed scope as violations, and stale `.pyc`
-bytes can be reused by the current pytest run, producing a false clean
-pass (the K.5.3 stale-pyc race).
-
-## Fail-closed scope / environment behavior
-
-What the code proves (no stronger claim):
-
-- `scoping_decision` blocks execution when declared scope does not cover
-  the changed paths (K.5 T5/T7 evidence).
-- `EnvironmentResolver.resolve_env_for_file` (env_resolver.py:151) resolves
-  the Python executable and environment for a file; resolution failure
-  raises `EnvironmentResolutionError` — the worker does not silently fall
-  back to an arbitrary interpreter. `<sys.executable>`-style hardcoding was
-  eliminated in earlier phases.
-- `verdict_for` returns `UNKNOWN` when the baseline is unavailable and the
-  current run has failures — *unknown is never treated as safe*.
-
-## FailureIdentity and differential failure analysis
-
-`asha/governance/delta.py`:
-
-- `FailureIdentity` — hashable identity of one verification failure
-  (check name, location, code, message). `extract_failures` parses
-  `check_runner` output (pytest nodeids, ruff/mypy diagnostics) into a
-  `frozenset[FailureIdentity]`.
-- `delta_failures(current, baseline)` — new failures introduced by the
-  worker. `baseline is None` returns ALL current failures (unknown is
-  never treated as safe).
-- `verdict_for(current, baseline, has_failed_checks)` —
-  `NO_FAILURES | PRE_EXISTING_ONLY | NEW_FAILURES | UNKNOWN`, fail-closed:
-  unparseable-but-failed checks force `UNKNOWN` via `has_failed_checks`,
-  never a clean `NO_FAILURES`.
-
-## Major subsystems and verified relationships
-
-| Subsystem | File | Responsibility |
-|---|---|---|
-| DAG coordinator | `asha/governance/dag.py` | `DAGCoordinator` FSM, `_run_one` dispatches workers, calls `baseline_checks`, `_strip_check_caches`, `collect_worker_evidence`; `run_workers_dag` entrypoint |
-| Worker execution | `asha/governance/worker_execution.py` | `run_worker_in_worktree`, `baseline_checks`, `_run_checks`, `default_execute`, `collect_worker_evidence`, `persist_failure_evidence`, cache stripping |
-| Delta / verdict | `asha/governance/delta.py` | FailureIdentity, extract/delta/verdict |
-| Scope | `asha/scope_resolver.py` | changed-file computation vs base, scope normalization, fail-closed decision |
-| Environment | `asha/governance/env_resolver.py` | per-file interpreter/env resolution, `EnvironmentResolutionError` |
-| Runner | `asha/runner.py` | `dispatch_runner` → `CommandRunner` / `AntigravityRunner`, primary argv, verify-command splitting |
-| CodeGraph | `asha/codegraph.py` | module/symbol index graph, `closure` forward/reverse, SCC |
-| Slicer | `asha/context_slicer.py` | `slice_context` → target source + dependency stubs + completeness state |
-| Code search | `asha/code_search.py` | tree-sitter outline/pattern/trace |
-| MCP server | `asha/mcp_server.py` | JSON-RPC stdio tools (plan/run/slice/dispatch/status), telemetry |
-| Graph cache | `asha/graph_cache.py` | persistent index+graph build/load |
-
-Verified relationships (test names): `tests/test_delta_check.py`,
-`tests/test_k53_stale_pyc_regression.py` (cache race),
-`tests/test_k61_codegraph.py` (reverse/budget/completeness),
-`tests/test_scoped_evidence.py`, `tests/test_codegraph.py`,
-`tests/test_context_slicer.py`, `tests/governance/test_dag_coordinator_parity.py`.
-
-## K.6 / K.6.1 context-engine evidence
-
-Frozen benchmark artifacts: `benchmarks/k6/` (K.6, frozen at `778e2f9`) and
-`benchmarks/k6_1/` (K.6.1, frozen at `4d71e5b`). Tokenizer: tiktoken
-`cl100k_base` 0.14.0. All claims below are **task-specific observations**,
-not universal superiority claims.
-
-| Task | Grep tokens | CodeGraph fwd | CodeGraph rev |
-|---|---|---|---|
-| T1 collect_worker_evidence | 6968 | 10311 (larger) COMPLETE | 3205 INCOMPLETE (budget) |
-| T2 FailureIdentity | 1413 | 186 COMPLETE (missed consumers) | 791 COMPLETE (consumers found) |
-| T3 default_execute | 9271 | 1248 COMPLETE | 3065 INCOMPLETE |
-| T6 DAGCoordinator.run | 109721 | 10588 COMPLETE | 1608 INCOMPLETE |
-
-Observations:
-
-- **CodeGraph is NOT universally better than Grep.** T1: forward slice was
-  *larger* than Grep (−48%) because the target body is 170 lines and the
-  emitted stub set was large. Large reductions (T3 86.5%, T6 90.4% — the
-  latter only after the qualified-method-name fix) are **task-specific**,
-  not a universal property.
-- **Reverse traversal matters.** T2's forward slice was small (186 tokens)
-  but *incomplete*: it could not see consumers (`extract_failures`,
-  `verdict_for`). The K.6.1 reverse traversal (bounded, `max_nodes`)
-  discovers them.
-- **Bounded traversal is mandatory.** Reverse expansion can explode;
-  `max_nodes` caps it and the result is reported `INCOMPLETE` rather than
-  silently truncated.
-- **Deterministic context-sufficiency ≠ agent success.** Every completeness
-  measurement is a symbol-presence check against manually fixed ground
-  truth. **Agent-in-the-loop validation has NOT been performed** (no LLM
-  API key in the execution environment) — no real-agent correctness,
-  cost, or success claim is made.
-
-## Retrieval workflow: Grep → CodeGraph → slice_context
-
-1. **Grep for candidate discovery** — find which files/symbols matter
-   (`code_search`, plain grep). Cheap, complete, no graph needed.
-2. **CodeGraph for structure** — `closure` walks dependency edges
-   (forward) or caller edges (reverse `edges_to`) with a node budget.
-3. **`slice_context` for the agent payload** — target source + compact
-   signature stubs of reachable dependencies, plus a completeness state
-   the agent must respect.
-
-The K.6 conclusion (hybrid) stands: grep finds candidates, the graph
-compresses, the slicer emits.
-
-## Forward vs reverse traversal
-
-- **Forward** (default): follows `edges_from` — *dependencies* of the
-  target. Good for workflow functions (T3) and leaf data models
-  (forward T2 is small and correct for the model itself).
-- **Reverse** (`reverse=True`): follows `edges_to` → *consumers/callers*.
-  Required when a leaf target's correctness depends on how it is used
-  (T2's `FailureIdentity` needed `extract_failures`/`verdict_for`).
-- Direction is explicit in the API; both honor `max_nodes` and cycle-safe
-  BFS visiting.
-
-## COMPLETE / INCOMPLETE / UNKNOWN semantics
-
-From `ContextSlice.completeness` / `completeness_reasons`
-(context_slicer.py:46), conservative by design:
-
-- **COMPLETE** — the declared slice policy finished within `max_nodes`,
-  no unresolved nodes remained, and at least one dependency resolved.
-  It does **NOT** mean repository-wide semantic completeness; it means
-  complete *under the slicer's declared policy, traversal bounds, and
-  available graph*.
-- **INCOMPLETE** — budget exhausted, unresolved nodes present, or zero
-  dependencies resolved, each with a machine-readable reason. Requires
-  supplementary investigation before acting.
-- **UNKNOWN** — target symbol not found / not indexed (e.g. a bare method
-  name instead of `Class.method`, or an unindexed module). **UNKNOWN is
-  not safe and not COMPLETE**; it must remain unresolved.
-
-## Known limitations
-
-1. `test_env_resolver.py::test_env_no_src_no_pythonpath` fails on clean
-   HEAD — pre-existing, unrelated to K.6/K.6.1, not yet fixed.
-2. Agent-in-the-loop validation not performed (see above).
-3. Methods require qualified symbol names (`FailureIdentity.from_dict`,
-   `DAGCoordinator.run`); bare names do not resolve.
-4. Large-body targets (T1-class) can produce slices larger than grep.
-5. `max_nodes` is a single global cap, not per-depth.
-6. Completeness is per-declared-policy, never repository-wide.
-7. Stub serialization (docstrings + signature heads) still dominates for
-   high-fan-out functions.
-8. Slicer still emits more stubs than strictly necessary for tasks whose
-   required context is a subset of the closure.
+- `docs/verification-profiles.md` — profile schema, trust rules, failure modes.
+- `docs/WORKER-SKILL-POLICY.md` — mandatory Skill preload for workers.
+- `docs/LADDER.md` — commit range to governed delivery decision.
+- `docs/OBSERVABILITY.md` — telemetry schema, storage, dashboard API.
+- `docs/ENVIRONMENT-DIAGNOSIS.md` — environment-gap classification.
+- `docs/archive/INDEX.md` — historical design notes and frozen benchmarks.

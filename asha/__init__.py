@@ -30,8 +30,8 @@ second scope system, no ledger of its own:
                                           and are covered by the digest)
     scope_resolver.resolve/changed_files  observed scope, S0-S4, checks
     check_runner.run                      isolated verification capture
-    .jspace/control.py                    the only ship authorization
-                                          (existing check --stage ship)
+    governance/ship_gate.py               the only ship authorization
+                                          (canonical ship gate)
 
 Merge law: PASS(A) + PASS(B) != PASS(A U B). Worker evidence always seals
 authorized_to_ship=false; integration verification belongs to the existing

@@ -1,5 +1,10 @@
 # Phase 5.0 — Risk-Aware Scoped Evidence: Design (Step 1)
 
+> **HISTORICAL — do not update.** Design document from Phase 5.0. The scoping
+> and evidence code it specifies is now implemented and has since changed
+> (verification profiles, output contracts). Read the current module map in
+> [`docs/ORIENTATION.md`](ORIENTATION.md).
+
 Status: **DESIGN COMPLETE — pending review** (no implementation in this step).
 Baseline under design: Phase 4.3 — `400 passed, 1 skipped`, GATE WORK PASS,
 GATE SHIP PASS, `origin/main` at `4bf1877`.
