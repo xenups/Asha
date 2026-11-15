@@ -14,7 +14,7 @@ today's gate semantics; they are not documentation of current behavior.
 | Nothing loads these files | no reference in `asha/`, `tests/`, `scripts/`, `.github/`; `asha/worker_policy.py` resolves worker Skills from `skills/<name>/SKILL.md`, not from the repository root |
 | The module list is incomplete | `SKILL.md` names `modules/capacity.md`, `modules/broadcast.md` and `modules/orchestration.md`; only `modules/self-monitoring.md` was ever committed, so the read-gate it describes could not be satisfied from this tree |
 | The bootstrap gate was broken by the deletion | `scripts/bootstrap.sh` and `bootstrap.ps1` ran `mypy … .jspace/control.py …`; with the file gone that gate failed. Fixed in the same commit that moved these documents (the gate now covers `asha/` and `tests/` only) |
-| `.jspace/` itself is still reported | `asha_status` and `asha/watcher.py` treat `.jspace` as a state directory; `.jspace/dependencies.json` remains in place and is untouched |
+| `.jspace/` itself is still used | `scripts/update.py` reads `.jspace/dependencies.json`; the control lock the gate used lives in the state dir (`$ASHA_STATE_DIR/lock`), not there. The file remains in place and is untouched |
 
 ## What to read instead
 

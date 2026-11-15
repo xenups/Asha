@@ -7,15 +7,9 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 *.egg-info/
-.jspace/control.json
-.jspace/CONTROL.md
-.jspace/evidence.json
-.jspace/cache/
-.jspace/lock
-.jspace/mcp_live_telemetry.jsonl
-.jspace/dogfood_probe_*
-.jspace/reports/
-.jspace/execution/
+# state lives outside the repo (ASHA_STATE_DIR / XDG); only the bootstrap
+# fallback log lands here, next to the tracked dependencies.json
+.jspace/mcp-bootstrap.log
 *.tmp
 .k6graph-test/
 benchmarks/results/
