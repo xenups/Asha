@@ -136,7 +136,8 @@ the services it names (`docs/verification-profiles.md`).
 `.jspace/` is no longer an execution path: the controller that used to live at
 `.jspace/control.py` was deleted and its gate semantics moved into
 `asha/governance/ship_gate.py`. The directory keeps only
-`.jspace/dependencies.json`, which `asha_status` reports as control-lock state.
+`.jspace/dependencies.json`, which `scripts/update.py` reads for submodule
+updates; the control lock itself lives in the state dir (`lock`), not there.
 
 ## Why ordinary tests are insufficient for agent-driven changes
 

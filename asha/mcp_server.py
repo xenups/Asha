@@ -210,9 +210,9 @@ def _emit_telemetry(repo: Path, tool: str, request_id: Any,
         }
         line = (json.dumps(event, sort_keys=True, ensure_ascii=False)
                         + "\n").encode("utf-8")
-        jspace = common_paths.get_state_dir(repo)
-        jspace.mkdir(parents=True, exist_ok=True)
-        fd = os.open(jspace / TELEMETRY_NAME,
+        state_dir = common_paths.get_state_dir(repo)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        fd = os.open(state_dir / TELEMETRY_NAME,
                      os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
         try:
             os.write(fd, line)
@@ -230,7 +230,7 @@ ASHA_STATUS_SPEC: dict[str, Any] = {
     "name": "asha_status",
     "description": ("Inspect a git root without changing it: HEAD SHA, "
                     "porcelain status, active/orphaned worktrees and "
-                    ".jspace control-lock state."),
+                    "the control-lock state."),
     "inputSchema": {
         "type": "object",
         "properties": {"root": {"type": "string", "default": ".",
@@ -365,7 +365,7 @@ def _tool_error(message: str) -> dict[str, Any]:
 
 
 def _lock_state(root: Path) -> dict[str, Any]:
-    """.jspace control-lock state (exists + recorded pid).
+    """Control lock in the state dir (exists + recorded pid).
 
     ponytail: holder liveness (stale-pid triage via `tasklist /FI`) is
     deliberately out of scope -- add when a caller needs it; never probe
