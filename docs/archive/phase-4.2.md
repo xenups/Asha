@@ -1,5 +1,9 @@
 # Phase 4.2 — Controlled Fast-Path Runtime Wiring & Three-Way Experiment
 
+> **HISTORICAL — do not update.** Written during Phase 4.2; the runtime has
+> moved on since (see [`docs/ORIENTATION.md`](../ORIENTATION.md)). Kept for
+> provenance, including the experiment design and its measured numbers.
+
 ## 1. Architecture change
 
 | Component | Change |
