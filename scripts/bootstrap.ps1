@@ -76,8 +76,8 @@ if ($SkipMcp) {
 # --- 5. Gate assertion -----------------------------------------------------
 Write-Host "[asha] running gates"
 & $Py -m ruff check .;  if ($LASTEXITCODE -ne 0) { throw "GATE FAIL: ruff" }
-& $Py -m mypy asha\ .jspace\control.py tests\; if ($LASTEXITCODE -ne 0) { throw "GATE FAIL: mypy" }
+& $Py -m mypy asha\ tests\; if ($LASTEXITCODE -ne 0) { throw "GATE FAIL: mypy" }
 & $Py -m pytest tests\ -q; if ($LASTEXITCODE -ne 0) { throw "GATE FAIL: pytest" }
 
 Write-Host "[asha] BOOTSTRAP OK: venv=$Venv, pins verified, gates green"
-Write-Host "[asha] next: python .jspace\control.py --transport <ssh|local> init --goal '<G>' --next '<N>'"
+Write-Host "[asha] next: asha --root . status   (read-only tip facts); governed run: asha --root . run --spec spec.json"

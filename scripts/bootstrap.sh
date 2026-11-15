@@ -72,8 +72,8 @@ fi
 # --- 5. Gate assertion ----------------------------------------------------
 echo "[asha] running gates"
 "$PY" -m ruff check . >/dev/null
-"$PY" -m mypy asha/ .jspace/control.py tests/ >/dev/null
+"$PY" -m mypy asha/ tests/ >/dev/null
 "$PY" -m pytest tests/ -q >/dev/null
 
 echo "[asha] BOOTSTRAP OK: venv=$VENV, pins verified, gates green"
-echo "[asha] next: python .jspace/control.py --transport <ssh|local> init --goal '<G>' --next '<N>'"
+echo "[asha] next: asha --root . status   (read-only tip facts); governed run: asha --root . run --spec spec.json"
